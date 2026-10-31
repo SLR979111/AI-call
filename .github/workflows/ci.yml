@@ -14,9 +14,9 @@ concurrency:
 
 jobs:
   test:
-    name: pytest + contract validation
+    name: pytest + contract validation + WS E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       APP_ENV: test
       DEV_NO_AUTH: "1"
@@ -45,3 +45,8 @@ jobs:
 
       - name: Validate contracts
         run: python contracts/validate.py contracts/fixtures
+
+      - name: Headless WebSocket E2E
+        env:
+          PORT: "8081"
+        run: sh scripts/ci_e2e.sh
