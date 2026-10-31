@@ -2,16 +2,24 @@
  * config.js —— 运行期配置（无需构建；可被 URL 参数覆盖）
  *
  * 冻结依据：契约 v0.2.1（C5）
- *   - APP_BASE = http://127.0.0.1:8081（宿主端口统一 8081；容器内 8080，compose 映射 8081:8080）
- *   - POST /sessions 返回**完整 ws_url（含 token）**，前端不再自行拼 query
+ *   - `POST /sessions` 返回**完整 ws_url（含 token）**，前端不再自行拼 query
+ *   - APP_BASE 默认 **同源**（`location.origin`）：
+ *       · 由后端托管（uvicorn 8081 / Docker）→ 自动连真后端，URL 不用带任何参数
+ *       · 由 mock 托管（8099）        → 自动连 mock，同样不用带参数
+ *       · 页面与后端不同源（如 5173 静态服务 + 8081 后端）→ 显式传 `?app=http://HOST:PORT`
+ *     这样"接入真后端"不需要改代码、也不需要改 URL，更不会因为端口/域名变化而错连。
  *
  * 覆盖示例：
- *   http://127.0.0.1:5173/?app=http://192.168.1.20:8081&downlink=speech
+ *   http://127.0.0.1:5173/rtc/?app=http://192.168.1.20:8081&downlink=speech
  */
 (function () {
   var q = new URLSearchParams(location.search);
+  var appFromQuery = q.get('app');
   var cfg = {
-    APP_BASE: q.get('app') || 'http://127.0.0.1:8081',
+    /** 后端基地址：默认同源；不同源时用 ?app= 覆盖 */
+    APP_BASE: appFromQuery || location.origin,
+    /** 便于自检：到底是同源还是覆盖来的（调试面板可显示） */
+    APP_BASE_SOURCE: appFromQuery ? 'query' : 'same-origin',
     SCENARIO_ID: q.get('scenario') || 'service_outbound',
     RELEASE_ID: q.get('release') || null,
 

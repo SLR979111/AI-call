@@ -12,16 +12,20 @@
 node web/rtc/mock/mock-server.mjs          # 默认 8099
 
 # 2) 浏览器打开（必须 127.0.0.1，局域网 IP 会被拒麦克风）
-#    http://127.0.0.1:8099/?app=http://127.0.0.1:8099
+#    http://127.0.0.1:8099/
 
 # 3) 点「开始通话」→ 说一句 / 或点「模拟打断」/ 或底部输入框打字（text 消息）
 ```
 
-接真后端时只换 `app`：
+**入口不会和 mock 绑死**：`config.js` 的 `APP_BASE` 默认 **同源**（`location.origin`）。
 
-```
-http://127.0.0.1:8099/?app=http://127.0.0.1:8081
-```
+| 页面由谁托管 | 打开地址 | 连的是 |
+|---|---|---|
+| `mock-server.mjs` | `http://127.0.0.1:8099/` | mock（假 Agent） |
+| 真后端（uvicorn `:8081`） | `http://127.0.0.1:8081/rtc/` | **真后端**（`app/main.py` 已把 `web/` 挂到 `/`） |
+| 其他静态服务 + 别处后端 | `http://HOST:PORT/rtc/?app=http://HOST:8081` | `?app` 指定的后端 |
+
+也就是说：**接入真后端不需要改任何代码、也不需要改 URL**。`?app=` 只在页面与后端不同源时才用；调试面板会打印 `APP_BASE=…（same-origin|query）`，一眼看出当前连谁。
 
 ## 一点五、自检（不用浏览器，全部零依赖）
 
@@ -67,7 +71,7 @@ node web/rtc/test/uplink-file.mjs
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `app` | `http://127.0.0.1:8081` | `APP_BASE`，`POST /sessions` 与静态资源来源 |
+| `app` | **同源**（`location.origin`） | 后端基地址；只在页面与后端不同源时覆盖，如 `?app=http://192.168.1.20:8081` |
 | `transport` | `auto` | `webrtc` \| `ws_pcm` \| `auto`；`auto` 遇 `MEDIA_NOT_CONFIGURED` 静默回落（C1） |
 | `downlink` | `auto` | `speech`（W1 Fake）\| `pcm`（W2 真 TTS）\| `auto`（400ms 内见 `audio_chunk` 用 pcm） |
 | `mic` | 开 | `mic=0` 无麦模式（只用按钮联调与字幕） |

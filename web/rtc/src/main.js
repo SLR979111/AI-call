@@ -245,4 +245,4 @@ client.playbackFirstFrame = (replyId, turnId, audioCtxTime) => {
   origFirstFrame(replyId, turnId, audioCtxTime);
 };
 
-store.log('前端已就绪（v0.2.1）：点「开始通话」');
+store.log(`前端已就绪（v0.2.1）｜ APP_BASE=${cfg.APP_BASE}（${cfg.APP_BASE_SOURCE}）｜ 点「开始通话」`);
