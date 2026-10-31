@@ -24,6 +24,16 @@ def now_ms() -> float:
     return time.perf_counter() * 1000.0
 
 
+TURN_ABORT_REASONS = {
+    "BARGE_IN", "TIMEOUT", "SESSION_END", "COMPLIANCE_BLOCK",
+    "USER_HANGUP", "INTERNAL",
+}
+
+
+def normalize_abort_reason(reason: str) -> str:
+    return reason if reason in TURN_ABORT_REASONS else "INTERNAL"
+
+
 @dataclass
 class TurnRuntime:
     turn_id: str
@@ -37,6 +47,7 @@ class TurnRuntime:
     tts_started_sent: bool = False
     char_cursor: int = 0
     barge_in_stop_ms: float | None = None
+    played_ms: float | None = None
 
 
 @dataclass
@@ -172,6 +183,8 @@ class Orchestrator:
                 stop_latency = msg.get("stop_latency_ms")
                 if isinstance(stop_latency, (int, float)):
                     turn.barge_in_stop_ms = float(stop_latency)
+                if isinstance(msg.get("played_ms"), (int, float)):
+                    turn.played_ms = float(msg["played_ms"])
             await self.bus.emit(
                 session_id=session_id, type="ClientLocalMuted", module="client",
                 turn_id=msg.get("turn_id"),
@@ -229,6 +242,7 @@ class Orchestrator:
             return False
         if turn.cancel.cancelled():
             return False
+        reason = normalize_abort_reason(reason)
         start = now_ms()
         turn.cancel.cancel(reason)
         await self.bus.emit(
@@ -475,6 +489,7 @@ class Orchestrator:
                         "reply_id": turn.reply_id,
                         "total_ms": round(turn.tts_cursor_ms, 2),
                         "interrupted": True,
+                        "played_ms": turn.played_ms,
                         "estimated": True,
                     })
                 if session.ws:

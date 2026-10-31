@@ -87,9 +87,21 @@ async def main() -> int:
             "type": "local_muted", "turn_id": None, "client_mono_ms": 2.0,
             "reason": "barge_in", "played_ms": 100, "sentence_id": 1,
             "char_idx": 2, "last_frame_played_mono_ms": 2.0, "stop_latency_ms": 20.0,
+            "b0_mono_ms": 1.0,
         }))
-        seen3 = await recv_until(ws, {"turn_aborted"}, timeout=5.0)
-        print("barge-in", "ok" if "turn_aborted" in seen3 else "missing")
+        stopped: dict = {}
+
+        async def watch_stop(message: dict) -> None:
+            if message["type"] == "tts_completed":
+                stopped.update(message)
+            if message["type"] == "turn_aborted":
+                stopped.update(message)
+
+        seen3 = await recv_until(ws, {"turn_aborted"}, timeout=5.0, on_message=watch_stop)
+        assert stopped.get("interrupted") is True, stopped
+        assert stopped.get("played_ms") == 100, stopped
+        assert stopped.get("reason") == "BARGE_IN", stopped
+        print("barge-in", "ok")
 
         await ws.send(json.dumps({"type": "hangup", "reason": "user_click"}))
         ended = None

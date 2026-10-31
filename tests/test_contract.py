@@ -177,6 +177,8 @@ def test_http_api_smoke():
         assert "?token=" in created["ws_url"]
         turn = client.post(f"/sessions/{sid}/text", json={"text": "我想问一下订单"}).json()
         assert turn["result"]["outcome"] in {"rescheduled", "completed", "tool_failed"}
+        refreshed = client.post(f"/sessions/{sid}/token").json()
+        assert "?token=" in refreshed["ws_url"]
         events = client.get(f"/sessions/{sid}/events")
         assert events.status_code == 200
         lines = [line for line in events.text.splitlines() if line.strip()]

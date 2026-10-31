@@ -220,7 +220,7 @@ async def refresh_token(request: Request, session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="session not found")
     session.token = secrets.token_urlsafe(16)
     return {"session_id": session_id, "token": session.token,
-            "ws_url": f"/ws/session/{session_id}"}
+            "ws_url": f"/ws/session/{session_id}?token={session.token}"}
 
 
 @app.get("/healthz")

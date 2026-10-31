@@ -289,3 +289,13 @@ cx 的 D1/D2/D3 建议：**同机 localhost + 文件回灌兜底 + LiveKit 只�
 **代码验证**：20 tests passed；WS 实测 `tts_started → tts_sentence → tts_completed → compliance → turn_result → session_ended`；`transport_degraded → transport_switched`；`client_event` 白名单拒绝未授权事件。
 
 > C2 的“真实 VAD 首帧”仍要 cx 在 W2 接麦克风后实现；当前手动打断按钮只用于联调，不用于官方 `b3-b0` 指标。
+
+### 12.1 P1–P5 字段级澄清（v0.2.1）
+
+| # | 结论 | 落地 |
+|---|---|---|
+| P1 | `b0_mono_ms` / `client_mono_ms` / `last_frame_played_mono_ms` / `stop_latency_ms` 四个字段分开 | ✅ 代码透传；`TurnLatency.barge_in_stop_ms` 记录 client 值 |
+| P2 | `tts_completed.interrupted=true` 时 `total_ms` = reply 音频全长；另加 `played_ms` = 实际播出量 | ✅ 已加 `played_ms`；`total_ms` 保持全长 |
+| P3 | `POST /sessions/{id}/token` 返回完整 `ws_url`；重连=新 WS、事件不重放 | ✅ 返回 `ws_url?token=`；前端按 `name+client_mono_ms` 去重 |
+| P4 | `turn_aborted.reason` 枚举 | ✅ `BARGE_IN/TIMEOUT/SESSION_END/COMPLIANCE_BLOCK/USER_HANGUP/INTERNAL`；未知值→`INTERNAL` |
+| P5 | `contracts/fixtures/ws_session_bargein.jsonl` 记录真实收发顺序 | ✅ 子 agent 抓包（`{"dir":"c2s"|"s2c","frame":{...}}`） |
