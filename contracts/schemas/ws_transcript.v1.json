@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicall.local/schemas/ws_transcript.v1.json",
+  "title": "WS transcript line v1",
+  "description": "一行 = 一个 WS 帧的收发实录：{\"dir\":\"c2s|s2c\",\"frame\":{...}}。用于前端 golden fixture 回放与 E2E，不是事件 envelope（不适用 event.v1.json）。",
+  "type": "object",
+  "required": ["dir", "frame"],
+  "additionalProperties": true,
+  "properties": {
+    "dir": {
+      "description": "方向：c2s=浏览器→服务端，s2c=服务端→浏览器",
+      "type": "string",
+      "enum": ["c2s", "s2c"]
+    },
+    "t_ms": {
+      "description": "可选：相对会话开始的毫秒（抓包时能记就记，便于回放节奏）",
+      "type": ["number", "null"]
+    },
+    "frame": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "description": "契约消息名，如 hello / session_ready / state / tts_started",
+          "type": "string",
+          "minLength": 1
+        },
+        "seq": {
+          "description": "该方向内单调递增序号（服务端/客户端各自计数）",
+          "type": ["integer", "null"]
+        }
+      }
+    }
+  }
+}

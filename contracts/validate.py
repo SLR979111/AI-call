@@ -29,6 +29,9 @@ from typing import Any, Iterable
 CONTRACTS_DIR = Path(__file__).resolve().parent
 SCHEMAS_DIR = CONTRACTS_DIR / "schemas"
 DEFAULT_SCHEMA = SCHEMAS_DIR / "event.v1.json"
+# ws_*.jsonl 是「WS 收发实录」（{"dir","frame"} 逐帧），不是事件 envelope，
+# 用独立 schema 校验，且不做事件 seq 单调检查。
+WS_SCHEMA = SCHEMAS_DIR / "ws_transcript.v1.json"
 
 try:  # preferred path
     import jsonschema  # type: ignore
@@ -294,6 +297,14 @@ def main(argv: list[str] | None = None) -> int:
         errors: list[str] = []
         count = 0
         last_seq: int | None = None
+        is_ws = path.name.startswith("ws_")
+        file_schema = schema
+        if is_ws:
+            try:
+                file_schema = load_schema(WS_SCHEMA)
+            except (OSError, json.JSONDecodeError) as exc:
+                errors.append(f"{WS_SCHEMA.name}: cannot load ws schema: {exc}")
+        saw_session_ready = False
         try:
             for label, doc, parse_error in iter_documents(path):
                 count += 1
@@ -301,8 +312,17 @@ def main(argv: list[str] | None = None) -> int:
                 if parse_error:
                     errors.append(f"{label}: {parse_error}")
                     continue
-                for err in validate(doc, schema):
+                for err in validate(doc, file_schema):
                     errors.append(f"{label}: {err}")
+                if is_ws:
+                    frame = doc.get("frame") if isinstance(doc, dict) else None
+                    if (
+                        isinstance(frame, dict)
+                        and doc.get("dir") == "s2c"
+                        and frame.get("type") == "session_ready"
+                    ):
+                        saw_session_ready = True
+                    continue
                 seq = _seq_of(doc)
                 if seq is not None:
                     if last_seq is not None and seq <= last_seq:
@@ -310,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
                     if last_seq is None and seq != 1:
                         errors.append(f"{label}: seq must start at 1, got {seq}")
                     last_seq = seq
+            if is_ws and count and not saw_session_ready:
+                errors.append("ws transcript must contain a s2c session_ready frame")
         except json.JSONDecodeError as exc:
             errors.append(f"{path.name}: invalid JSON: {exc}")
         except OSError as exc:

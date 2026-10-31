@@ -66,3 +66,17 @@ python -m pytest tests/test_contract.py -q
 | P5 | 把 `e2e-ws` 的收发顺序落成 `contracts/fixtures/ws_session_bargein.jsonl` | ✅ 子 agent 抓包，见文件 |
 
 > 仓库同步说明：当前工作区已包含 `contracts/`、`app/`、`tests/`、`web/`，最新测试 **21 passed**；cx 那份文档里的“18 tests”是 v0.2 时点。
+
+## 7. 机器级确认（cx 于 2026-10-31 在本地分支 `feat/web-rtc-cx` 执行）
+
+| 检查 | 结果 |
+|---|---|
+| `python contracts/validate.py contracts/fixtures` | ✅ **PASS: 5 file(s), 90 document(s)**（修复后，见下） |
+| `python -m pytest tests/test_contract.py -q` | ⛔ 未执行：本机 `pip install` 落盘 Permission denied（PyPI 可达），需有环境的人补跑 |
+
+**修复项**：`contracts/fixtures/ws_session_bargein.jsonl` 是 WS 收发实录（`{"dir","frame"}`），但 `validate.py` 按 `event.v1.json` 校验所有 `*.jsonl`，导致 43 条 `missing required property 'schema_version'`，`make contract-test` 变红。
+
+- 新增 `contracts/schemas/ws_transcript.v1.json`；`validate.py` 在文件名 `ws_*` 时切换 schema、跳过事件 `seq` 检查，并要求至少一条 `s2c session_ready`。
+- 如天命倾向其他处理（例如把抓包移到 `contracts/replays/`），回退这两处即可，前端逻辑不依赖。
+
+细节与前端交付见 [15-cx-w1-frontend-handoff.md](15-cx-w1-frontend-handoff.md)。
