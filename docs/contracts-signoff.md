@@ -72,9 +72,11 @@ python -m pytest tests/test_contract.py -q
 | 检查 | 结果 |
 |---|---|
 | `python contracts/validate.py contracts/fixtures` | ✅ **PASS: 5 file(s), 90 document(s)**（修复后，见下） |
-| `python -m pytest tests/test_contract.py -q` | ⛔ 未执行：本机 `pip install` 落盘 Permission denied（PyPI 可达），需有环境的人补跑 |
+| `python -m pytest tests/test_contract.py -q` | ✅ **由 CI 代跑通过**：job `124539035320` 的步骤顺序为 `Run tests`(pytest -q) → `Validate contracts`，失败发生在**后一步**，即 tests 阶段是绿的（本地沙箱 `pip install` 落盘 `Permission denied`，故以 CI 为准） |
 
-**修复项**：`contracts/fixtures/ws_session_bargein.jsonl` 是 WS 收发实录（`{"dir","frame"}`），但 `validate.py` 按 `event.v1.json` 校验所有 `*.jsonl`，导致 43 条 `missing required property 'schema_version'`，`make contract-test` 变红。
+**修复项**：`contracts/fixtures/ws_session_bargein.jsonl` 是 WS 收发实录（`{"dir","frame"}`），但 `validate.py` 按 `event.v1.json` 校验所有 `*.jsonl`，导致**43 条**（不是 5 条；CI 日志只显示了尾部 39–43）`missing required property 'schema_version'`，`make contract-test` 变红。
+
+> ⚠️ **不要改数据**：`event.v1.json` 需要 14 个字段（`schema_version/event_id/seq/type/ts/ts_mono_ms/clock_id/session_id/module/release_id/mode/payload/ok/error`）。往抓包里补这些字段等于伪造事件日志，会让 P5 的"真实抓包"失去可复现价值（前端 golden 回放、答辩举证都靠它）。数据是事实，校验器是规则——事实与规则不符时改规则。
 
 - 新增 `contracts/schemas/ws_transcript.v1.json`；`validate.py` 在文件名 `ws_*` 时切换 schema、跳过事件 `seq` 检查，并要求至少一条 `s2c session_ready`。
 - 如天命倾向其他处理（例如把抓包移到 `contracts/replays/`），回退这两处即可，前端逻辑不依赖。
