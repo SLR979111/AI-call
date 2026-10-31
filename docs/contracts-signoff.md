@@ -32,8 +32,9 @@ python -m pytest tests/test_contract.py -q
 - `/metrics` 提供 `aicall_up`、`aicall_sessions`。
 - `/registry/*` 支持 candidate → production → previous 与回滚。
 - LLM Router 支持主/备、超时、熔断、预算；无 Key 返回 `LLM_NOT_CONFIGURED`。
+- `AGENT_PROVIDER=llm` 时走 `LLMAgent`（JSON 决策 + ToolClient），默认仍为 Fake。
 - RAG 检索、Flow Pack、LiveKit Token 边界已落地（真实模型/媒体服务待接）。
-- 契约测试：4 个 fixture / 47 条事件通过 schema；16 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow）。
+- 契约测试：4 个 fixture / 47 条事件通过 schema；17 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow、LLMAgent）。
 
 ## 4. 变更记录
 

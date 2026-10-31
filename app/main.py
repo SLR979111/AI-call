@@ -105,7 +105,19 @@ async def lifespan(app: FastAPI):
     bus = EventBus(settings.data_dir, settings.release_id, settings.clock_id)
     mock = MockBusiness()
     tools = ToolGateway(settings.data_dir, mock, bus)
-    agent = FakeAgent()
+    flowpack = FlowPack.load(
+        Path(__file__).resolve().parent.parent / "flowpacks" / "service_outbound.json"
+    )
+    llm = LLMRouter(
+        bus=bus,
+        daily_budget_cny=float(os.getenv("LLM_DAILY_BUDGET_CNY", "100")),
+    )
+    if os.getenv("AGENT_PROVIDER", "fake").strip().lower() == "llm":
+        from .agent.llm_agent import LLMAgent
+        agent: Any = LLMAgent(llm, Path(__file__).resolve().parent.parent / "knowledge" / "faq.json",
+                              flowpack)
+    else:
+        agent = FakeAgent()
     compliance = ComplianceGuard()
     orchestrator = Orchestrator(
         bus=bus,
@@ -120,13 +132,8 @@ async def lifespan(app: FastAPI):
     app.state.mock = mock
     app.state.orchestrator = orchestrator
     app.state.registry = Registry(settings.data_dir)
-    app.state.flowpack = FlowPack.load(
-        Path(__file__).resolve().parent.parent / "flowpacks" / "service_outbound.json"
-    )
-    app.state.llm = LLMRouter(
-        bus=bus,
-        daily_budget_cny=float(os.getenv("LLM_DAILY_BUDGET_CNY", "100")),
-    )
+    app.state.flowpack = flowpack
+    app.state.llm = llm
     app.state.evals = {}
     try:
         yield

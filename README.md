@@ -159,6 +159,7 @@ Override defaults on the command line, for example
 | `RELEASE_ID` | `rel_dev_001` | Release pinned into every session and event |
 | `DATA_DIR` | `./data` | SQLite / JSONL / artifact directory |
 | `DEV_NO_AUTH` | `1` | Dev-only auth bypass flag (reserved; auth is not enforced in the fake skeleton) |
+| `AGENT_PROVIDER` | `fake` | `fake` or `llm` (LLM Router path; needs keys) |
 | `LLM_PRIMARY_BASE_URL` | `https://api.deepseek.com/v1` | Primary OpenAI-compatible endpoint |
 | `LLM_PRIMARY_API_KEY` | `sk-...` | Primary key (server-side only) |
 | `LLM_PRIMARY_MODEL` | `deepseek-chat` | Primary model |

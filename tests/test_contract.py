@@ -11,6 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.agent.fake import FakeAgent
+from app.agent.llm_agent import LLMAgent
 from app.compliance import BLOCK, REWRITE, ComplianceGuard
 from app.events import EventBus
 from app.eval.runner import EvalCase, EvalRunner
@@ -327,3 +328,39 @@ def test_livekit_token_and_voice_status():
     status = voice_status()
     assert status.provider
     assert isinstance(status.to_dict(), dict)
+
+
+@pytest.mark.asyncio
+async def test_llm_agent_tool_path():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "intent": "reschedule",
+                "reply": "可以帮您改约。",
+                "slots": {"order_id": "A12345678"},
+                "tool": "order.query",
+                "tool_args": {"order_id": "A12345678"},
+                "outcome": "rescheduled",
+            }, ensure_ascii=False)}}],
+            "usage": {"total_tokens": 20},
+        })
+
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    router = LLMRouter(
+        ProviderConfig("mock", "https://mock.test/v1", "k", "m"),
+        bus=bus, transport=httpx.MockTransport(handler),
+    )
+    agent = LLMAgent(router, ROOT / "knowledge" / "faq.json")
+    orc = Orchestrator(bus, agent, tools, ComplianceGuard(), "rel_test_001", "service_outbound")
+    session = await orc.create_session("text")
+    result = await orc.handle_text(session.session_id, "帮我改一下订单", None)
+    assert result["result"]["outcome"] == "rescheduled"
+    events = bus.read_events(session.session_id)
+    validate_events(events)
+    types = [e["type"] for e in events]
+    assert "ProviderCalled" in types
+    assert "ToolCalled" in types
+    assert "ToolReturned" in types
