@@ -102,6 +102,8 @@ class Conn {
     this.closed = false;
     this.replyId = null;
     this.turnN = 0;
+    this.scriptTimers = [];          // 脚本推进用的定时器（打断时必须全部取消）
+    this.scriptAborted = false;      // 当前 reply 已被打断：后续脚本步骤一律空转
 
     socket.on('data', (chunk) => { this.buf = Buffer.concat([this.buf, chunk]); this.drain(); });
     socket.on('close', () => { this.closed = true; });
@@ -149,6 +151,10 @@ class Conn {
       case 'speech_ended': this.scriptTurn(++this.turnN); break;
 
       case 'local_muted':
+        // 打断：**先停脚本**（否则被"打断"的这一轮还会继续下发 tts_*/agent_text，
+        // 前端会以为服务端没取消，看起来像"打断之后继续播报原内容"）
+        this.clearScript();
+        this.scriptAborted = true;
         this.send('cancel', { turn_id: m.turn_id, reason: 'BARGE_IN' });
         this.send('turn_aborted', { turn_id: m.turn_id, reason: 'BARGE_IN' });
         this.send('state', { turn_state: 'LISTENING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} });
@@ -167,6 +173,7 @@ class Conn {
   /* ---------- 脚本：把 03/11 的消息顺序原样演一遍 ---------- */
 
   scriptGreeting() {
+    this.scriptAborted = false;                 // 新一轮脚本开始，解除打断锁
     this.at(250, () => this.send('state', { turn_state: 'GREETING', flow_state: 'OPEN', slots: {} }));
     this.at(500, () => {
       const reply = 'r_greet_1';
@@ -177,6 +184,8 @@ class Conn {
   }
 
   scriptTurn(n) {
+    this.clearScript();                         // 上一轮残留（若被打断）一并清掉
+    this.scriptAborted = false;
     const turnId = 't_' + String(1000 + n);
     this.send('state', { turn_state: 'THINKING', flow_state: this.flow || 'NEED_CONFIRM', slots: this.slots || {} });
     const reply = 'r_' + turnId.slice(2) + '_1';
@@ -229,7 +238,20 @@ class Conn {
     this.at(delay + 120 + t, () => this.send('tts_completed', { turn_id: turnId, reply_id: replyId, total_ms: t, interrupted: false, estimated: true }));
   }
 
-  at(ms, fn) { setTimeout(() => { if (!this.closed) try { fn(); } catch { /* noop */ } }, Math.max(0, Math.round(ms * SCALE))); }
+  at(ms, fn) {
+    const id = setTimeout(() => {
+      if (this.closed) return;
+      if (this.scriptAborted) return;          // 当前 reply 已被打断：旧脚本不得继续推进
+      try { fn(); } catch { /* noop */ }
+    }, Math.max(0, Math.round(ms * SCALE)));
+    this.scriptTimers.push(id);
+  }
+
+  /** 打断时清空所有待执行的脚本步骤（真实后端会在收到 interrupt 时停 TTS 推流） */
+  clearScript() {
+    for (const id of this.scriptTimers) clearTimeout(id);
+    this.scriptTimers = [];
+  }
 
   send(type, data) {
     this.raw(0x1, Buffer.from(JSON.stringify({ type, seq: this.s2cSeq++, ...data }), 'utf8'));

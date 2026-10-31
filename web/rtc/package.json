@@ -6,7 +6,7 @@
   "description": "智语外呼 · 前端通话台（cx / 契约 v0.2.1）—— 零依赖 ESM",
   "scripts": {
     "mock": "node mock/mock-server.mjs",
-    "test": "node test/golden-replay.mjs && node test/pcm-path.mjs && node test/uplink-file.mjs",
+    "test": "node test/golden-replay.mjs && node test/pcm-path.mjs && node test/uplink-file.mjs && node test/barge.mjs",
     "check": "node --check src/protocol.js && node --check src/store.js && node --check src/session.js && node --check src/audio-engine.js && node --check src/capture-worklet.js && node --check src/vad-local.js && node --check src/playback.js && node --check src/uplink-file.js && node --check src/ui.js && node --check src/main.js"
   }
 }

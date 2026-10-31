@@ -165,15 +165,23 @@ function triggerBarge(source, b0Hint) {
   });
   store.log(`打断 source=${source} b0=${b0.toFixed(0)} b3=${b3.toFixed(0)} stop=${stopLatency.toFixed(1)}ms cursor=${JSON.stringify(cur)}`);
 
-  // C3：300ms 内本地 VAD 未持续 → 视为误打断，本地恢复（不新增消息）
+  // C3：**只有本地 VAD 判定的打断**才允许 300ms 后自恢复（"误打断"）。
+  // 手动按钮没有 VAD 证据 → 一律当真实打断：保持静音，等服务端 cancel/turn_aborted 裁决，
+  // 然后进入 LISTENING 等用户说话（绝不自行恢复播报）。
   clearTimeout(bargeTimer);
-  bargeTimer = window.setTimeout(() => {
-    if (!vad.isStillSpeaking()) {
-      playback.unduck();
-      store.log('误打断：本地恢复播报');
-    }
+  if (source === 'local_vad') {
+    bargeTimer = window.setTimeout(() => {
+      if (playback.aborted) { inBarge = false; return; }      // 服务端已取消：不恢复
+      if (!vad.isStillSpeaking()) {
+        const resumed = playback.unduck();
+        store.log(resumed ? '误打断：从下一句继续（不重播半句）' : '误打断：无未播内容，保持停止');
+      }
+      inBarge = false;
+    }, 300);
+  } else {
     inBarge = false;
-  }, 300);
+    ui.status('已打断（本地静音），等待服务端裁决…');
+  }
 }
 
 /* ============================ 服务端 → 本地 ============================ */
@@ -196,17 +204,22 @@ client.addEventListener('media-ready', () => {
   store.log('media_ready（W2 接 LiveKit）');
 });
 
-client.addEventListener('cancel', () => {
-  playback.duck();                       // 服务端已裁决取消：保持静音
+client.addEventListener('cancel', (ev) => {
+  // 服务端已裁决取消：硬停 + 永久封禁该 reply（此后同 reply 的 tts_*/pcm 全部丢弃）
+  playback.abort('cancel');
   inBarge = false;
+  clearTimeout(bargeTimer);
+  store.log(`cancel reply=${ev.detail.reply_id || '—'} → 停止播报，等待用户说话`);
+  ui.status('已打断，等待您继续说话', 'ok');
 });
 
 client.addEventListener('turn-aborted', (ev) => {
-  // 服务端裁决战断：硬停本 reply，等新的 state 消息（不回退 flow_state）
-  playback.stopNow();
+  // 服务端裁决打断：硬停本 reply，等新的 state 消息（不回退 flow_state）
+  playback.abort(`turn_aborted:${ev.detail.reason}`);
   inBarge = false;
   clearTimeout(bargeTimer);
-  store.log(`turn_aborted reason=${ev.detail.reason}`);
+  store.log(`turn_aborted reason=${ev.detail.reason} → 进入 LISTENING，等待新一轮`);
+  ui.status(`已打断（${ev.detail.reason}），请继续说`, 'ok');
 });
 
 client.addEventListener('transport-switched', () => {

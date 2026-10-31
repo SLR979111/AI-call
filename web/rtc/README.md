@@ -128,9 +128,31 @@ web/
 2. **UI 不 import audio/session**，只读 `store`；业务状态一律来自服务端 `state`。
 3. **打断先本地静音再发消息**，且 `duck()` 不丢缓冲（否则 G11 误打断无法续播）。
 
-## 六、下一步（W1 余下）
+## 六、打断（barge-in）到底怎么走 —— 最容易被误解的一段
 
-- [ ] `playback_first_frame` 接到真实首采样（现在 speech 形态用 `onstart`，pcm 形态用调度时刻）
-- [ ] 无麦演示模式：`FileUplink`（把 wav 灌进采集管线），现场保险 + E2E 基础
-- [ ] 用 `contracts/fixtures/ws_session_*.jsonl` 做 golden 回放（P5，等天命落 fixture）
+期望时序（契约 `03 §3.2` + 附条件 C2/C3）：
+
+```
+T+0      用户开口：本地 VAD 连续 3 帧（60ms）越限 → 记 b0 = **第一帧**的时刻
+T+<80ms  本地静音：speech → speechSynthesis.cancel()；pcm → gain=0
+         记 b3 / played_ms / 第几句第几字 → 发 local_muted{ b0_mono_ms, last_frame_played_mono_ms, stop_latency_ms, played_ms, sentence_id, char_idx }
+         ⚠️ 客户端只说"我静音了"，**不说"取消"**——取消权在服务端
+T+~RTT   服务端：CancelRequested → B 停合成 + 清推流缓冲 → C 取消本轮 LLM → 回 cancel + turn_aborted
+T+?      前端收到 cancel / turn_aborted → **封禁该 reply_id** + 硬停 → 进 LISTENING，提示"请继续说"
+         然后等用户说完 → 服务端 ASR final → 新一轮 LLM → **新的 reply_id** → 才播
+```
+
+三条铁律（`test/barge.mjs` 逐条锁住）：
+
+1. **打断后不自行恢复**。只有"误打断"才允许恢复，且必须同时满足：① 触发源是本地 VAD（手动按钮没有 VAD 证据，一律当真打断）；② 300ms 内没继续说；③ 服务端还没 ack 取消。
+2. **被取消的 reply 永久封禁**（`session.abortedReplies`）：同 reply 的 `tts_started / tts_sentence / audio_chunk` 全部丢弃并计数——这条防的正是"打断之后又把原话播完"。
+3. **恢复不重播半句**：`speechSynthesis.cancel()` 会丢弃当前 utterance，无法"续播半句"，所以恢复点 = 被打断那句的**下一句**（`02 §5.2` 规则 4）。
+
+## 七、下一步（W1 余下）
+
+- [x] 无麦演示模式：`FileUplink`（wav 灌进采集管线），现场保险 + E2E 基础
+- [x] golden 回放：`contracts/fixtures/ws_session_bargein.jsonl`（`test/golden-replay.mjs`）
+- [x] 下行 PCM 路径单测（`test/pcm-path.mjs`，W2 真 TTS 前置）
+- [x] 打断语义单测（`test/barge.mjs`）
+- [ ] `playback_first_frame` 在 speech 形态用 `onstart`（±30ms），接真 TTS 后走 pcm 形态即精确
 - [ ] 网络恢复后加 Vite/TS 构建层（`.ts` 化 + 类型检查），业务代码不动

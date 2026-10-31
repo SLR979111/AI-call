@@ -30,6 +30,8 @@ export class SessionClient extends EventTarget {
     this.clockSuspect = false;
     this.audioFramesSent = 0;
     this.droppedStaleReply = 0;
+    /** 被服务端取消/已打断的 reply：之后同 reply 的 tts_* 与 audio_chunk 一律丢弃（防"打断后又播完"） */
+    this.abortedReplies = new Set();
     this.currentReplyId = '';
     this.transport = 'ws_pcm';
     this.frameSeq = 0;
@@ -263,7 +265,15 @@ export class SessionClient extends EventTarget {
     store.pushAgentSentence(replyId, d.sentence_id ?? null, d.text || '');
   }
 
+  /** 该 reply 是否已被服务端取消（打断后被丢弃的旧播报） */
+  isAborted(replyId) { return !!replyId && this.abortedReplies.has(replyId); }
+
   onTtsStarted(d) {
+    if (this.isAborted(d.reply_id)) {       // 服务端已取消该 reply：不许重新开口
+      this.droppedStaleReply++;
+      store.log(`丢弃已取消 reply 的 tts_started: ${d.reply_id}`);
+      return;
+    }
     this.currentReplyId = d.reply_id;
     store.beginReply(d.reply_id, d.turn_id, d.estimated === true || d.tts_alignment === false);
     store.set({ downlink: d.estimated ? 'speech(估算)' : (d.tts_alignment === false ? 'speech(估算)' : 'pcm') });
@@ -272,6 +282,7 @@ export class SessionClient extends EventTarget {
   }
 
   onTtsSentence(d) {
+    if (this.isAborted(d.reply_id)) { this.droppedStaleReply++; return; }
     store.upsertSentence(d.reply_id, d);
     this.dispatchEvent(new CustomEvent('tts-sentence', { detail: d }));
   }
@@ -282,7 +293,8 @@ export class SessionClient extends EventTarget {
   }
 
   onAudioChunk(d) {
-    // 旧 reply 的残留块一律丢弃（防幽灵音频），并计数以便自检
+    // 旧 reply / 已取消 reply 的残留块一律丢弃（防幽灵音频），并计数以便自检
+    if (this.isAborted(d.reply_id)) { this.droppedStaleReply++; return; }
     if (d.reply_id && d.reply_id !== this.currentReplyId) { this.droppedStaleReply++; return; }
     this.dispatchEvent(new CustomEvent('pcm', { detail: d }));
   }
@@ -292,14 +304,18 @@ export class SessionClient extends EventTarget {
   }
 
   onCancel(d) {
-    store.strikeReplyLines(d.reply_id || this.currentReplyId);
-    this.dispatchEvent(new CustomEvent('cancel', { detail: d }));
+    const rid = d.reply_id || this.currentReplyId;
+    if (rid) this.abortedReplies.add(rid);
+    store.strikeReplyLines(rid);
+    store.log(`cancel turn=${d.turn_id || '—'} reason=${d.reason || '—'} → 封禁 reply=${rid || '—'}`);
+    this.dispatchEvent(new CustomEvent('cancel', { detail: { ...d, reply_id: rid } }));
   }
 
   onTurnAborted(d) {
-    store.log(`turn_aborted turn=${d.turn_id} reason=${d.reason}`);
+    if (this.currentReplyId) this.abortedReplies.add(this.currentReplyId);
+    store.log(`turn_aborted turn=${d.turn_id} reason=${d.reason} → 封禁 reply=${this.currentReplyId || '—'}`);
     // 服务端已裁决：作废旧 reply、停播、回到 listening（不改 turn_id，等 state 消息）
-    this.dispatchEvent(new CustomEvent('turn-aborted', { detail: d }));
+    this.dispatchEvent(new CustomEvent('turn-aborted', { detail: { ...d, reply_id: this.currentReplyId } }));
   }
 
   onCompliance(d) {

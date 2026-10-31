@@ -38,6 +38,7 @@ export class Playback {
     this.playing = false;
     this.ducked = false;
     this.underruns = 0;
+    this.resumeRefused = 0;        // 服务端已取消后仍尝试恢复的次数（排障用）
     this.spoken = new Set();       // speech：已下发的 sentence_id
     this.droppedWhileDucked = 0;
 
@@ -73,6 +74,9 @@ export class Playback {
     this.nextAt = 0;
     this.playing = false;
     this.ducked = false;
+    this.aborted = false;          // 服务端已取消该 reply：此后禁止任何恢复
+    this.currentSentenceId = null; // 正在播的句子（被打断时从下一句续播）
+    this.duckSentenceId = null;
     this.spoken.clear();
 
     if (this.cfg.DOWNLINK === 'speech') this.form = 'speech';
@@ -170,6 +174,7 @@ export class Playback {
     if (this.ducked) { this.droppedWhileDucked++; return; }
     if (!hasSpeech()) return;
     this.spoken.add(s.sentence_id);
+    this.currentSentenceId = s.sentence_id;
 
     const u = new SpeechSynthesisUtterance(s.text);
     u.lang = 'zh-CN';
@@ -194,6 +199,7 @@ export class Playback {
   duck() {
     if (this.ducked) return this.b3Mono || now();
     this.ducked = true;
+    this.duckSentenceId = this.currentSentenceId;
     const ctx = this.engine.ctx;
     if (this.gain) this.gain.gain.value = 0;
     if (this.form === 'speech' && hasSpeech()) window.speechSynthesis.cancel();
@@ -211,17 +217,53 @@ export class Playback {
     return this.b3Mono;
   }
 
-  /** 误打断恢复（C3）：只 unduck，从当前缓冲续播 */
+  /**
+   * 误打断恢复（C3）：**从下一句继续，不重播半句**（02 §5.2 规则 4）。
+   * 两种情况下直接拒绝恢复：
+   *   1. 服务端已裁决取消（abort() 过）——此时必须等新 turn，绝不复活旧 reply
+   *   2. 该 reply 已经播完（playing=false 且无未播句）
+   * 注意：speechSynthesis 的 cancel() 会丢弃当前 utterance，无法"续播半句"，
+   * 所以恢复点 = 被打断那一句的**下一句**；pcm 形态只是解增益，缓冲还在。
+   */
   unduck() {
-    if (!this.ducked) return;
+    if (this.aborted) {                     // 服务端已取消：保持静音，且不弄脏 C4 白名单
+      this.resumeRefused++;
+      return false;
+    }
+    if (!this.ducked) return false;
     this.ducked = false;
     if (this.gain) this.gain.gain.value = 1;
+
     if (this.form === 'speech' && this.sentences.length) {
-      this.spoken.clear();
-      this._flushSpeechQueue();
+      const fromId = this.duckSentenceId == null ? -Infinity : this.duckSentenceId;
+      const rest = this.sentences.filter((s) => s.sentence_id > fromId);
+      if (!rest.length) { this.refDb = -99; return false; }   // 没有未播内容，不复活
+      for (const s of rest) this._speak(s);
     }
     this.refDb = this.playing ? -20 : -99;
-    this.client.clientEvent('BargeInCancelledLocal', { reply_id: this.replyId, resume_ms: Math.round(this.playedMs()) });
+    this.client.clientEvent('BargeInCancelledLocal', {
+      reply_id: this.replyId,
+      resume_ms: Math.round(this.playedMs()),
+      resume_from_sentence: this.duckSentenceId
+    });
+    return true;
+  }
+
+  /**
+   * 服务端裁决取消（收到 `cancel` / `turn_aborted`）：硬停 + 永久封禁该 reply。
+   * 之后任何同 reply_id 的 tts_started / tts_sentence / audio_chunk 都会被丢弃
+   * （见 session 的 abortedReplies），防止"打断后又把原话播完"。
+   */
+  abort(reason = 'server_cancel') {
+    this.aborted = true;
+    this.ducked = false;
+    this.stopNow();
+    // 注意：只能发 C4 白名单里的 name（否则服务端回 CLIENT_EVENT_NOT_ALLOWED 并被丢弃）
+    this.client.clientEvent('PlaybackCancelled', {
+      reply_id: this.replyId,
+      played_ms: Math.round(this.playedMs()),
+      reason: 'server_abort:' + reason
+    });
   }
 
   /** 硬停（挂断/取消确认后） */
