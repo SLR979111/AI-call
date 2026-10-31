@@ -50,8 +50,8 @@ node web/rtc/test/golden-replay.mjs
 | 检查 | 结果 | 备注 |
 |---|---|---|
 | `python contracts/validate.py contracts/fixtures` | ❌→✅ **修复后 PASS：5 file(s), 90 document(s)** | 见下方说明 |
-| `python -m pytest tests/test_contract.py -q` | ⛔ **未执行** | 本机沙箱装不上 pytest（`pip install` 写 site-packages/临时目录被拒，PyPI 可通但落盘 Permission denied）。**请天命或任意有环境的人在 main 上补跑一次**，我不把"21 passed"当自己的结论 |
-| `python contracts/validate.py` 的 `ws_*.jsonl` | 修复前 **FAIL 43 条**（`missing required property 'schema_version'`） | 见下 |
+| `python -m pytest tests/test_contract.py -q` | ✅ **由 CI 代跑通过** | job `124539035320` 的步骤顺序是 `Run tests`(pytest -q) → `Validate contracts`，红在**后一步** ⇒ tests 阶段绿。本地沙箱 `pip install` 落盘 Permission denied，只能以 CI 为准 |
+| `python contracts/validate.py` 的 `ws_*.jsonl` | 修复前 **FAIL 43 条**（`missing required property 'schema_version'`），CI 日志只显示尾部 39–43 | 见下 |
 
 ### 修复说明（`ws_session_bargein.jsonl` 让 `make contract-test` 变红）
 
@@ -61,7 +61,23 @@ node web/rtc/test/golden-replay.mjs
 - `validate.py`：文件名以 `ws_` 开头时改用该 schema、跳过事件 `seq` 单调检查，并**要求至少有一条 `s2c session_ready`**（防止抓到半截）；
 - 结果：`PASS: 5 file(s), 90 document(s) valid`。
 
-> 如果天命更喜欢别的做法（比如把抓包挪到 `contracts/replays/`），删掉这两处改动即可，逻辑不依赖它。
+> ⚠️ **不要往这些记录里补 `schema_version/event_id/payload/ok/error`**。`event.v1.json` 需要 14 个字段，补进去等于伪造事件日志：P5 的"真实抓包"就不成立了，前端 golden 回放和答辩举证都会失去依据。**数据是事实，校验器是规则；不符时改规则。**
+
+**如果天命不希望改 `validate.py`，两个等效备选（任选其一即可，我这边的改动可直接回退）：**
+
+```yaml
+# 备选 B：CI 只校验事件夹具（改 .github/workflows/ci.yml 一行）
+- name: Validate contracts
+  run: python contracts/validate.py contracts/fixtures/session_*.jsonl
+# 代价：WS 抓包不再被任何 schema 覆盖（丢了"抓半截"的防护）
+```
+
+```bash
+# 备选 C：把抓包挪成独立目录（replay 与 event fixture 本来就是两类东西）
+git mv contracts/fixtures/ws_session_bargein.jsonl contracts/replays/
+# 代价：需同步改 docs/11 §P5 的路径 + 我的 test/golden-replay.mjs 里的一行 fixture 路径
+```
+
 
 ---
 
