@@ -96,9 +96,30 @@ make docker-build
 make docker-up
 
 curl -fsS http://localhost:8081/healthz
-docker compose logs -f app
+docker-compose logs -f app
 make docker-down
 ```
+
+`docker compose` (v2 plugin) works too; the Makefile defaults to
+`docker-compose` because that is the standalone binary used in this workspace.
+Override with `make docker-up COMPOSE="docker compose"`.
+
+If Docker Hub is blocked/slow in your network, pull the base image from a
+mirror and pass a PyPI mirror at build time:
+
+```bash
+docker pull docker.m.daocloud.io/library/python:3.12-slim
+docker tag docker.m.daocloud.io/library/python:3.12-slim python:3.12-slim
+
+DOCKER_BUILDKIT=0 docker build \
+  --build-arg PIP_INDEX_URL=http://mirrors.aliyun.com/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=mirrors.aliyun.com \
+  -t aicall-app:local .
+```
+
+Rationale: this workspace's Docker Desktop inherited a stale proxy
+(`127.0.0.1:10808`), so BuildKit could not pull `docker/dockerfile:1`; the
+classic builder + local base image avoids that path.
 
 Equivalent raw commands:
 

@@ -7,6 +7,7 @@ APP    ?= app.main:app
 HOST   ?= 0.0.0.0
 PORT   ?= 8081
 IMAGE  ?= aicall-app:local
+COMPOSE ?= docker-compose
 
 .PHONY: help install run test contract-test smoke e2e report mock-llm docker-build docker-up docker-down
 
@@ -52,7 +53,7 @@ docker-build:
 	docker build -t $(IMAGE) .
 
 docker-up:
-	docker compose up -d --build
+	$(COMPOSE) up -d --build
 
 docker-down:
-	docker compose down
+	$(COMPOSE) down

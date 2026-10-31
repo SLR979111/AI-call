@@ -1,13 +1,16 @@
-# syntax=docker/dockerfile:1
 # CPU-only image for the competition runtime (x86_64, 8C/16GB, no GPU).
 # The fake skeleton has no model weights, so this stays small and builds offline
 # once the Python wheels are cached.
 FROM python:3.12-slim
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=pypi.org
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
     APP_ENV=prod \
     DATA_DIR=/app/data
 
@@ -16,7 +19,9 @@ WORKDIR /app
 # Install dependencies first so source edits do not invalidate this layer.
 # All packages ship manylinux wheels for x86_64; no compiler toolchain needed.
 COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir \
+    --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" \
+    -r requirements.txt
 
 # Only the trees the server needs at runtime. tests/, scripts/ and docs/ are
 # intentionally not copied; CI runs them on the host.
