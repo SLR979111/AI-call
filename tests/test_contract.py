@@ -459,3 +459,20 @@ def test_report_from_fixture():
 
     loaded = load_session_events(ROOT / "data", "s_normal")
     assert loaded == []  # fixture is not a runtime session; helper must be tolerant
+
+
+def test_ws_golden_fixture():
+    fixture = ROOT / "contracts" / "fixtures" / "ws_session_bargein.jsonl"
+    frames = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(frames) >= 20
+    for item in frames:
+        assert item["dir"] in {"c2s", "s2c"}
+        assert isinstance(item["frame"], dict)
+    types = [item["frame"].get("type") for item in frames]
+    for required in ("session_ready", "tts_started", "tts_sentence", "agent_text",
+                     "compliance", "turn_aborted", "turn_result", "session_ended"):
+        assert required in types, required
+    aborted = [item["frame"] for item in frames if item["frame"].get("type") == "turn_aborted"]
+    assert aborted and aborted[0]["reason"] == "BARGE_IN"
+    interrupted = [item["frame"] for item in frames if item["frame"].get("type") == "tts_completed"]
+    assert any(f.get("interrupted") is True and f.get("played_ms") == 100 for f in interrupted)

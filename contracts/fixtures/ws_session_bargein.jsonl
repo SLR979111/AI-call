@@ -1,0 +1,43 @@
+{"dir":"s2c","frame":{"type":"session_ready","session_id":"s_01M68SQV3X9XATKMW5S2S3AA2P","version_set":{"release_id":"rel_dev_001","flow":"service_outbound@1.0.0","prompt":"agent_system@1","knowledge":"faq@dev","model":"fake@dev","config":"runtime@1"},"ice_servers":[],"protocol_version":"0.2","server_version":"0.2.0","transport":"ws_pcm","tts_alignment":false,"timeouts":{"listening_silence_ms":10000,"session_max_ms":600000,"wrapup_ms":3000}}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"IDLE","flow_state":"OPEN","slots":{},"turn_id":null}}
+{"dir":"c2s","frame":{"type":"hello","client_version":"capture@0.1","capabilities":["local_vad","aec"]}}
+{"dir":"s2c","frame":{"type":"hello_ack","session_id":"s_01M68SQV3X9XATKMW5S2S3AA2P","protocol_version":"0.2","server_version":"0.2.0","transport":"ws_pcm"}}
+{"dir":"c2s","frame":{"type":"text","text":"我想改一下订单"}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"THINKING","flow_state":"OPEN","slots":{},"turn_id":"t_0001"}}
+{"dir":"s2c","frame":{"type":"transcript","turn_id":"t_0001","text":"我想改一下订单","final":true}}
+{"dir":"s2c","frame":{"type":"compliance","turn_id":"t_0001","scope":"sentence","decision":"ALLOW","rule_ids":[],"before":"可以的，我先帮您看一下订单。","after":"可以的，我先帮您看一下订单。","severity":"info"}}
+{"dir":"s2c","frame":{"type":"tts_started","turn_id":"t_0001","reply_id":"r_0001_1","sample_rate":24000,"channels":1,"tts_alignment":false,"estimated":true,"cursor":null,"sentences":[]}}
+{"dir":"s2c","frame":{"type":"tts_sentence","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":1,"text":"可以的，我先帮您看一下订单。","start_ms":0.0,"end_ms":2520.0,"char_start":0,"char_end":14,"is_last":false,"estimated":true}}
+{"dir":"s2c","frame":{"type":"agent_text","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":1,"text":"可以的，我先帮您看一下订单。","final":false}}
+{"dir":"c2s","frame":{"type":"playback_first_frame","turn_id":"t_0001","reply_id":"r_0001_1","client_mono_ms":1.0,"audio_ctx_time":0.1}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"SPEAKING","flow_state":"OPEN","slots":{},"turn_id":"t_0001"}}
+{"dir":"s2c","frame":{"type":"compliance","turn_id":"t_0001","scope":"sentence","decision":"ALLOW","rule_ids":[],"before":"订单目前显示2026-11-01T10:00:00+08:00送达。","after":"订单目前显示2026-11-01T10:00:00+08:00送达。","severity":"info"}}
+{"dir":"s2c","frame":{"type":"tts_sentence","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":2,"text":"订单目前显示2026-11-01T10:00:00+08:00送达。","start_ms":2640.0,"end_ms":8760.0,"char_start":14,"char_end":48,"is_last":false,"estimated":true}}
+{"dir":"s2c","frame":{"type":"agent_text","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":2,"text":"订单目前显示2026-11-01T10:00:00+08:00送达。","final":false}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"SPEAKING","flow_state":"OPEN","slots":{},"turn_id":"t_0001"}}
+{"dir":"s2c","frame":{"type":"compliance","turn_id":"t_0001","scope":"sentence","decision":"ALLOW","rule_ids":[],"before":"可以帮您改到明天下午 3 点，您看方便吗？","after":"可以帮您改到明天下午 3 点，您看方便吗？","severity":"info"}}
+{"dir":"s2c","frame":{"type":"tts_sentence","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":3,"text":"可以帮您改到明天下午 3 点，您看方便吗？","start_ms":8880.0,"end_ms":12660.0,"char_start":48,"char_end":69,"is_last":true,"estimated":true}}
+{"dir":"s2c","frame":{"type":"agent_text","turn_id":"t_0001","reply_id":"r_0001_1","sentence_id":3,"text":"可以帮您改到明天下午 3 点，您看方便吗？","final":true}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"SPEAKING","flow_state":"OPEN","slots":{},"turn_id":"t_0001"}}
+{"dir":"s2c","frame":{"type":"tts_completed","turn_id":"t_0001","reply_id":"r_0001_1","total_ms":12780.0,"interrupted":false,"estimated":true}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"LISTENING","flow_state":"CLOSE","slots":{"order_id":"A12345678"},"turn_id":"t_0001"}}
+{"dir":"s2c","frame":{"type":"turn_end","turn_id":"t_0001","result":{"kind":"end","reply_id":"r_0001_1","outcome":"rescheduled","slots":{"order_id":"A12345678"},"result":{"new_time":"2026-11-01T15:00","ticket":"pending"}}}}
+{"dir":"s2c","frame":{"type":"turn_result","turn_id":"t_0001","result":{"kind":"end","reply_id":"r_0001_1","outcome":"rescheduled","slots":{"order_id":"A12345678"},"result":{"new_time":"2026-11-01T15:00","ticket":"pending"}}}}
+{"dir":"c2s","frame":{"type":"text","text":"再帮我改一下订单"}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"THINKING","flow_state":"CLOSE","slots":{"order_id":"A12345678"},"turn_id":"t_0002"}}
+{"dir":"s2c","frame":{"type":"transcript","turn_id":"t_0002","text":"再帮我改一下订单","final":true}}
+{"dir":"s2c","frame":{"type":"compliance","turn_id":"t_0002","scope":"sentence","decision":"ALLOW","rule_ids":[],"before":"可以的，我先帮您看一下订单。","after":"可以的，我先帮您看一下订单。","severity":"info"}}
+{"dir":"s2c","frame":{"type":"tts_started","turn_id":"t_0002","reply_id":"r_0002_1","sample_rate":24000,"channels":1,"tts_alignment":false,"estimated":true,"cursor":null,"sentences":[]}}
+{"dir":"s2c","frame":{"type":"tts_sentence","turn_id":"t_0002","reply_id":"r_0002_1","sentence_id":1,"text":"可以的，我先帮您看一下订单。","start_ms":0.0,"end_ms":2520.0,"char_start":0,"char_end":14,"is_last":false,"estimated":true}}
+{"dir":"s2c","frame":{"type":"agent_text","turn_id":"t_0002","reply_id":"r_0002_1","sentence_id":1,"text":"可以的，我先帮您看一下订单。","final":false}}
+{"dir":"c2s","frame":{"type":"playback_first_frame","turn_id":"t_0002","reply_id":"r_0002_1","client_mono_ms":1.0,"audio_ctx_time":0.1}}
+{"dir":"c2s","frame":{"type":"speech_started","client_ts_ms":1,"client_mono_ms":1.0,"source":"local_vad"}}
+{"dir":"c2s","frame":{"type":"local_muted","turn_id":null,"client_mono_ms":2.0,"reason":"barge_in","played_ms":100,"sentence_id":1,"char_idx":2,"last_frame_played_mono_ms":2.0,"stop_latency_ms":20.0}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"SPEAKING","flow_state":"CLOSE","slots":{"order_id":"A12345678"},"turn_id":"t_0002"}}
+{"dir":"s2c","frame":{"type":"cancel","turn_id":"t_0002","reason":"BARGE_IN"}}
+{"dir":"s2c","frame":{"type":"tts_completed","turn_id":"t_0002","reply_id":"r_0002_1","total_ms":2640.0,"interrupted":true,"played_ms":100.0,"estimated":true}}
+{"dir":"s2c","frame":{"type":"turn_aborted","turn_id":"t_0002","reason":"BARGE_IN"}}
+{"dir":"c2s","frame":{"type":"hangup","reason":"user_click"}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"LISTENING","flow_state":"CLOSE","slots":{"order_id":"A12345678"},"turn_id":"t_0002"}}
+{"dir":"s2c","frame":{"type":"state","turn_state":"ENDED","flow_state":"CLOSE","slots":{"order_id":"A12345678"},"turn_id":null}}
+{"dir":"s2c","frame":{"type":"session_ended","reason":"user_click","duration_ms":1575.17,"turns":2}}
