@@ -383,7 +383,7 @@ Fake 基线 P50 687ms / P95 901ms；真实语音 `[W3实测]`。
 | RAG / Flow Pack / Eval / Report | ✅ |
 | CPU ASR/TTS | 🟡 适配器边界；模型待接 |
 | LiveKit 媒体 | 🟡 Token/消息；服务端待接 |
-| Docker 镜像 | 🟡 文件完成；未 build |
+| Docker 镜像 | ✅ build/run verified；261MB；healthy；E2E PASS |
 
 ---
 
