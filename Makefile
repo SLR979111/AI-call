@@ -8,7 +8,7 @@ HOST   ?= 0.0.0.0
 PORT   ?= 8081
 IMAGE  ?= aicall-app:local
 
-.PHONY: help install run test contract-test smoke report mock-llm docker-build docker-up docker-down
+.PHONY: help install run test contract-test smoke e2e report mock-llm docker-build docker-up docker-down
 
 help:
 	@echo "make install       Install runtime + test dependencies"
@@ -16,6 +16,7 @@ help:
 	@echo "make test          Run the full pytest suite"
 	@echo "make contract-test Validate fixtures and run contract tests"
 	@echo "make smoke         Health check + one text turn (server must be running)"
+	@echo "make e2e           2 turns + barge-in + hangup over WS"
 	@echo "make report        Generate reports/self-test.md from data/sessions"
 	@echo "make mock-llm      Start a local OpenAI-compatible mock on :9000"
 	@echo "make docker-build  Build the image $(IMAGE)"
@@ -37,6 +38,9 @@ contract-test:
 
 smoke:
 	sh scripts/smoke.sh
+
+e2e:
+	$(PYTHON) scripts/e2e_ws.py --base http://127.0.0.1:8081
 
 report:
 	$(PYTHON) scripts/report.py --data-dir data --out reports/self-test.md

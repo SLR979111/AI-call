@@ -477,6 +477,12 @@ class Orchestrator:
                         "interrupted": True,
                         "estimated": True,
                     })
+                if session.ws:
+                    await session.ws.send_json({
+                        "type": "turn_aborted",
+                        "turn_id": turn.turn_id,
+                        "reason": turn.cancel.reason(),
+                    })
                 session.turn_state = "LISTENING"
                 await self._send_state(session)
                 return {"turn_id": turn.turn_id, "aborted": True, "reason": turn.cancel.reason()}

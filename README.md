@@ -164,6 +164,7 @@ milestones.
 | `make test` | `pytest -q` |
 | `make contract-test` | `python contracts/validate.py contracts/fixtures` then `pytest tests/test_contract.py -q` |
 | `make smoke` | `sh scripts/smoke.sh` (server must already be running) |
+| `make e2e` | 2 turns + barge-in + hangup over WS (`scripts/e2e_ws.py`) |
 | `make docker-build` | `docker build -t aicall-app:local .` |
 | `make docker-up` | `docker compose up -d --build` |
 | `make docker-down` | `docker compose down` |
@@ -203,6 +204,7 @@ The human-readable copy with `APP_BASE=http://127.0.0.1:8081` is
 make test            # full pytest suite
 make contract-test   # schema validation + contract tests
 make smoke           # requires `make run` or `make docker-up` in another shell
+make e2e             # 2 turns + barge-in + hangup over WS
 ```
 
 `make contract-test` runs exactly:
