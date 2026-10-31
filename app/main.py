@@ -24,6 +24,7 @@ from .llm.router import LLMRouter
 from .media.livekit import create_livekit_token
 from .orchestrator import Orchestrator, SessionState
 from .registry import Registry, RegistryError
+from .rsi.gate import GateConfig, compare as rsi_compare
 from .tools.gateway import MockBusiness, ToolGateway
 from .voice.factory import voice_status
 
@@ -97,6 +98,19 @@ class EvalRunRequest(BaseModel):
     cases: list[dict[str, Any]] | None = None
     suite_path: str | None = None
     release_id: str | None = None
+
+
+class RSICompareRequest(BaseModel):
+    baseline: dict[str, Any]
+    candidate: dict[str, Any]
+    min_delta: float = 0.03
+
+
+class RSIPromoteRequest(BaseModel):
+    release_id: str
+    baseline: dict[str, Any]
+    candidate: dict[str, Any]
+    min_delta: float = 0.03
 
 
 @asynccontextmanager
@@ -435,6 +449,25 @@ async def llm_complete(request: Request, body: LLMCompleteRequest) -> dict[str, 
         turn_id=body.turn_id,
     )
     return asdict(result)
+
+
+@app.post("/rsi/compare")
+async def rsi_compare_endpoint(body: RSICompareRequest) -> dict[str, Any]:
+    return rsi_compare(body.baseline, body.candidate, GateConfig(min_delta=body.min_delta))
+
+
+@app.post("/rsi/promote")
+async def rsi_promote(request: Request, body: RSIPromoteRequest) -> dict[str, Any]:
+    gate = rsi_compare(body.baseline, body.candidate, GateConfig(min_delta=body.min_delta))
+    if gate["decision"] != "pass":
+        raise HTTPException(status_code=409, detail={"gate": gate})
+    try:
+        release = request.app.state.registry.promote(
+            body.release_id, {"ok": True, "reasons": gate.get("reasons", [])}
+        )
+    except RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"gate": gate, "release": release}
 
 
 @app.get("/registry/production")

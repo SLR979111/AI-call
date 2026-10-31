@@ -22,6 +22,8 @@ from app.media.livekit import create_livekit_token, decode_payload
 from app.rag.knowledge import KnowledgeBase
 from app.orchestrator import Orchestrator
 from app.registry import Registry, RegistryError
+from app.reporting import load_session_events, render_markdown, summarize_events
+from app.rsi.gate import GateConfig, compare as rsi_compare
 from app.tools.gateway import MockBusiness, ToolGateway
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -413,3 +415,36 @@ def test_ws_tts_metadata_turn_result_and_hangup():
                     break
             assert ended is not None
             assert ended["reason"] == "user_click"
+
+
+def test_rsi_gate_pass_and_fail():
+    baseline = {"results": [{"task_success": i < 10} for i in range(20)],
+                "p50_ms": 1000, "p95_ms": 1800, "compliance_pass_rate": 1.0}
+    candidate = {"results": [{"task_success": i < 16} for i in range(20)],
+                 "p50_ms": 1050, "p95_ms": 1850, "compliance_pass_rate": 1.0}
+    result = rsi_compare(baseline, candidate, GateConfig(min_delta=0.03))
+    assert result["decision"] == "pass"
+    assert result["delta"] > 0
+    assert result["ci95"][0] > 0
+
+    worse = {"results": [{"task_success": i < 8} for i in range(20)],
+             "p50_ms": 1400, "p95_ms": 2400, "compliance_pass_rate": 0.9}
+    failed = rsi_compare(baseline, worse, GateConfig(min_delta=0.03))
+    assert failed["decision"] == "fail"
+    assert failed["reasons"]
+
+
+def test_report_from_fixture():
+    fixture = ROOT / "contracts" / "fixtures" / "session_normal.jsonl"
+    events = [json.loads(line) for line in fixture.read_text(encoding="utf-8").splitlines() if line.strip()]
+    summary = summarize_events(events)
+    assert summary["turns"] == 1
+    assert summary["p50_ms"] == 1135
+    assert summary["compliance_checked"] >= 1
+    markdown = render_markdown(ROOT / "data", [("s_normal", events)])
+    assert "# 自测报告" in markdown
+    assert "P50 首字时延" in markdown
+    assert "s_normal" in markdown
+
+    loaded = load_session_events(ROOT / "data", "s_normal")
+    assert loaded == []  # fixture is not a runtime session; helper must be tolerant

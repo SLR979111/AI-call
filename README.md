@@ -128,11 +128,14 @@ Notes:
 | POST | `/eval/run` | Run an eval suite (default `eval/cases/dev.json`) |
 | GET | `/registry/production` / `/registry/releases` | Current/tracked releases |
 | POST | `/registry/candidates` / `/promote` / `/rollback` | Candidate lifecycle |
+| POST | `/rsi/compare` | Compare baseline vs candidate (bootstrap CI + gate) |
+| POST | `/rsi/promote` | Promote only if the regression gate passes |
 
 The source of truth for payloads is
-[docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md) and
+[docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md),
+[docs/11-contract-v0.2-patch.md](docs/11-contract-v0.2-patch.md) and
 [docs/04-event-schema-v0.1.md](docs/04-event-schema-v0.1.md). The fake skeleton
-implements the W1 subset; `/registry/*`, real ASR/TTS and LiveKit are later
+implements the W1/W2 subset; real ASR/TTS and LiveKit servers are later
 milestones.
 
 ## Make targets
@@ -193,11 +196,12 @@ pytest tests/test_contract.py -q
 turn and fetches the event stream. Point it at another host with
 `BASE_URL=http://127.0.0.1:8080 sh scripts/smoke.sh`.
 
-Replay one session's event timeline:
+Replay one session's event timeline and generate a self-test report:
 
 ```bash
 python scripts/replay.py --session s_...
-python scripts/replay.py --file data/sessions/s_.../events.jsonl --json
+python scripts/report.py --data-dir data --out reports/self-test.md
+python scripts/rsi_compare.py --baseline data/baseline.json --candidate data/candidate.json
 ```
 
 CI (`.github/workflows/ci.yml`) runs on `ubuntu-latest` with Python 3.12:
@@ -208,11 +212,15 @@ installs `requirements.txt`, runs `pytest -q`, then validates
 
 ```text
 aicall/
-├── app/                  FastAPI application (entrypoint: app.main:app)
+├── app/                  FastAPI app (orchestrator, agent, llm, rag, flow, rsi)
 ├── web/                  Static demo UI served at /
 ├── contracts/            JSON Schemas, fixtures and validate.py
+├── knowledge/            Local FAQ knowledge base
+├── flowpacks/            Business flow definitions
+├── eval/                 Evaluation case suites
+├── reports/              Generated self-test reports
 ├── tests/                pytest suite (including test_contract.py)
-├── scripts/              smoke.sh and replay.py
+├── scripts/              smoke.sh, replay.py, report.py, rsi_compare.py
 ├── docs/                 Architecture, contract and delivery documents
 ├── data/                 Runtime SQLite/JSONL/artifacts (created, gitignored)
 ├── Dockerfile
