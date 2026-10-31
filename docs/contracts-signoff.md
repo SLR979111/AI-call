@@ -54,7 +54,7 @@ python -m pytest tests/test_contract.py -q
 
 ## 6. v0.2.1 复签与 P1–P5（2026-10-31）
 
-> 依据：`docs/reply_cx_v0.2.1.md`；提交 `cbd31b3` / tag `e2e-ws` / 契约点 `v0.2.1-cx-conditions`。
+> 依据：`docs/reviews/reply-cx-v0.2.1.md`；提交 `cbd31b3` / tag `e2e-ws` / 契约点 `v0.2.1-cx-conditions`。
 > cx：**C1–C6 全部接受；`turn_aborted` 接受；P1–P5 为字段级澄清，不新增消息。**
 
 | # | 澄清 | 落地 |

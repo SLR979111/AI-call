@@ -19,10 +19,12 @@
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [`reference/competition-brief.txt`](reference/competition-brief.txt) | 赛题书全文（PDF 提取） | 已归档 |
+| [`reference/competition-brief.pdf`](reference/competition-brief.pdf) | 赛题书原件 | 已归档 |
+| [`reference/three-week-plan.md`](reference/three-week-plan.md) | 三周开发计划与五人分工 | 已归档 |
 | [`01-requirement-metric-module-matrix.md`](01-requirement-metric-module-matrix.md) | 需求—指标—模块—负责人矩阵；指标字典；门槛覆盖 | v0.1（角色为能力代号） |
 | [`02-architecture-v0.1.md`](02-architecture-v0.1.md) | 模块划分、依赖规则、时序、接口签名、部署、选型、延迟可行性 | v0.1 |
-| [`03-interface-contract-v0.1.md`](03-interface-contract-v0.1.md) | **契约包**：ID/时间/音频/错误/取消、Agent/Tool/Voice/Registry/Eval 接口、Flow Pack、合规、契约测试 | **待会签** |
-| [`04-event-schema-v0.1.md`](04-event-schema-v0.1.md) | Event Envelope、事件字典、`TurnLatency`、客户端埋点、存储与回放、指标映射 | **待会签** |
+| [`03-interface-contract-v0.1.md`](03-interface-contract-v0.1.md) | **契约包**：ID/时间/音频/错误/取消、Agent/Tool/Voice/Registry/Eval 接口、Flow Pack、合规、契约测试 | 基线；v0.2 见 11 |
+| [`04-event-schema-v0.1.md`](04-event-schema-v0.1.md) | Event Envelope、事件字典、`TurnLatency`、客户端埋点、存储与回放、指标映射 | 基线；v0.2 见 11 |
 | [`05-week1-integration-plan.md`](05-week1-integration-plan.md) | D0–D5 集成主线、媒体路径决策、每周 Gate、风险触发器 | 执行中 |
 | [`06-gpu-inference-plan.md`](06-gpu-inference-plan.md) | 6×3090 分配、ASR/TTS 本地服务、远程可达性、容量与降级 | **本地语音主路径** |
 | [`07-cloud-api-plan.md`](07-cloud-api-plan.md) | LLM 云 API + 本地语音：Router、延迟/成本、故障降级 | **当前主路径** |
@@ -30,9 +32,11 @@
 | [`09-delivery-runtime.md`](09-delivery-runtime.md) | 交付 Docker：CPU-only 目标环境、sherpa-onnx 语音、模型打包、Compose、HTTPS/WebRTC、离线降级 | **交付主路径** |
 | [`10-master-summary.md`](10-master-summary.md) | 总汇总：整体架构、API 速查、团队工作清单、天命个人清单、里程碑 | **先看这个** |
 | [`11-contract-v0.2-patch.md`](11-contract-v0.2-patch.md) | 回应 cx 评审：G1–G9 补丁、12 条消息、枚举/鉴权/降级/b3 | **v0.2 生效口径** |
-| [`reply_cx_v0.2.1.md`](reply_cx_v0.2.1.md) | 给 cx 的 C1–C6 回复（可直接转发） | 待发送 |
+| [`reviews/reply-cx-v0.2.1.md`](reviews/reply-cx-v0.2.1.md) | 给 cx 的 C1–C6 回复（可直接转发） | 已发送/待复签 |
+| [`reviews/cx-contract-review-v0.1.md`](reviews/cx-contract-review-v0.1.md) | cx 对 03/04 的评审（G1–G26） | 已处理 |
 | [`12-technical-proposal-draft.md`](12-technical-proposal-draft.md) | 技术方案书初稿：架构/时延/评测/RSI/成本/分工 | **初稿，待 W3 实测替换** |
-| [`contracts-signoff.md`](contracts-signoff.md) | 契约会签表、自动检查命令、已确认事实 | 待四位 owner 签字 |
+| [`13-status-and-file-map.md`](13-status-and-file-map.md) | 项目现状、文件地图、验证证据、阻塞与下一步 | **最新总览** |
+| [`contracts-signoff.md`](contracts-signoff.md) | 契约会签表、自动检查命令、v0.2.1 复签 | cx 已签；其余待签 |
 | [`../README.md`](../README.md) | 代码骨架：本地运行、测试、Docker、端点 | ✅ Fake 骨架可跑 |
 
 > ⚠️ `01/02` 里的 A–E 是「能力角色代号」，与《三周分工》的成员代号不同。**从 03 起一律用姓名**，以 03 的角色映射为准。

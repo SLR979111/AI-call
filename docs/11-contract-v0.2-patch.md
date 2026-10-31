@@ -1,6 +1,6 @@
 # 11 · Interface Contract v0.2 补丁（回应 cx 评审）
 
-> 对象：[`review_cx_契约评审_v0.1.md`](review_cx_契约评审_v0.1.md)
+> 对象：[`reviews/cx-contract-review-v0.1.md`](reviews/cx-contract-review-v0.1.md)
 > 基线：[`03-interface-contract-v0.1.md`](03-interface-contract-v0.1.md) / [`04-event-schema-v0.1.md`](04-event-schema-v0.1.md)
 > 状态：**代码已落地的标 ✅；只冻结协议、实现待 W2 的标 🟡；明确不做的标 ⛔。**
 > 原则：不推翻骨架；用最小消息集把 W1→W2 的换轨缺口补上。
