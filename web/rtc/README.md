@@ -148,6 +148,30 @@ T+?      前端收到 cancel / turn_aborted → **封禁该 reply_id** + 硬停 
 2. **被取消的 reply 永久封禁**（`session.abortedReplies`）：同 reply 的 `tts_started / tts_sentence / audio_chunk` 全部丢弃并计数——这条防的正是"打断之后又把原话播完"。
 3. **恢复不重播半句**：`speechSynthesis.cancel()` 会丢弃当前 utterance，无法"续播半句"，所以恢复点 = 被打断那句的**下一句**（`02 §5.2` 规则 4）。
 
+### 6.1 纯打断、然后什么都不说（"光打断不说话"）
+
+这是最常见的一种：用户抢话但没继续讲。**兜底话术必须由服务端出，前端不硬编码**（契约 `§0` 第 4 条）——原因是"要不要说、说什么、什么时候说"都是业务，只有服务端知道这一轮有没有真的开始。
+
+```
+T+0      local_muted → 服务端 cancel + turn_aborted
+T+N      N 秒内没有 ASR partial / 没有新 turn / 没有 text 消息
+         → 服务端以**正常通道**下发：state(SPEAKING) → agent_text → tts_started/tts_sentence/tts_completed
+         → 前端零改动（任何新 reply 都走同一条播放链路）
+T+?      用户一开口/一打字 → 服务端撤掉计时器，恢复正常对话
+```
+
+实现约定（`mock-server.mjs` 里是可跑的参考实现）：
+
+| 项 | 建议值 | 说明 |
+|---|---|---|
+| 静默阈值 `N` | **2000–3000ms**（mock 默认 2600，可用 `NUDGE_MS` 调） | 太短会打断用户的思考停顿；太长用户以为掉线 |
+| 取消条件 | 收到 `speech_started` / `text` / 新一轮 `TurnStarted` | 只要有任何用户输入就撤 |
+| 话术归属 | Flow Pack 的 `nudge` 模板（`rules.yaml` 同源），随 `configVersion` 版本化 | 方便 D 做 A/B；也便于合规检查（"请问您对刚刚的话有什么疑问吗？"属于追问话术，不是必说项） |
+| 触发次数 | **每轮最多 1 次** | 防止"打扰式追问"循环 |
+| 上报 | 正常 `agent_text` + `tts_*` | 不走私有消息，事件/评测链路自动覆盖 |
+
+前端在这一步只做一件纯 UI 的事：打断后立刻在字幕区插一条灰底虚线提示 `（已打断，正在等您继续说话…）`，收到任何 `transcript` / `agent_text` 就自动消失——**它不出声、也不算业务话术**。
+
 ## 七、下一步（W1 余下）
 
 - [x] 无麦演示模式：`FileUplink`（wav 灌进采集管线），现场保险 + E2E 基础

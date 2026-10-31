@@ -35,6 +35,8 @@ const state = {
   compliance: /** @type {Array<any>} */ ([]),
   tools: /** @type {Record<string, any>} */ ({}),
   result: null,
+  /** 打断后"等待用户说话"的状态提示（纯 UI 文案，不是业务话术；业务话术一律由服务端下发） */
+  hint: '',
 
   // 指标与调试
   db: -99,
@@ -149,7 +151,7 @@ export function resetForNewCall() {
     phase: 'connecting', sessionId: '', releaseId: '', transport: '—', transportNote: '',
     turnId: '', turnState: 'CONNECTING', flowState: '—', slots: {}, flowHighWater: -1,
     lines: [], partialUser: '', replies: {}, currentReplyId: '',
-    compliance: [], tools: {}, result: null,
+    compliance: [], tools: {}, result: null, hint: '',
     db: -99, b0: null, b3: null, stopLatency: null, ttfb: null, downlink: '—', rtt: null
   });
 }

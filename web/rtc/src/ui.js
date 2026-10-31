@@ -69,7 +69,7 @@ function render(s) {
   $('aiBadge').style.display = s.phase === 'connected' ? '' : 'none';
 
   // 字幕（仅在变化时重建，避免打断输入法与滚动跳动）
-  const sig = s.lines.map((l) => `${l.id}:${l.final ? 1 : 0}:${l.struck ? 1 : 0}:${l.text.length}`).join('|');
+  const sig = s.lines.map((l) => `${l.id}:${l.final ? 1 : 0}:${l.struck ? 1 : 0}:${l.text.length}`).join('|') + '#' + (s.hint || '');
   if (sig !== lastLinesSig) {
     lastLinesSig = sig;
     const box = $('transcript');
@@ -78,7 +78,8 @@ function render(s) {
         <div class="who">${l.who === 'user' ? '用户' : '数字员工'}${l.final ? '' : ' · 识别中'}${
           l.struck ? ' · <span class="cut">被打断</span>' : ''}</div>
         <div class="${l.struck ? 'struck' : ''}">${escapeHtml(l.text)}</div>
-      </div>`).join('');
+      </div>`).join('')
+      + (s.hint ? `<div class="line" style="align-self:center;background:transparent;border:1px dashed #2f3d4b;color:var(--dim);font-size:12.5px">${escapeHtml(s.hint)}</div>` : '');
     box.scrollTop = box.scrollHeight;
   }
 

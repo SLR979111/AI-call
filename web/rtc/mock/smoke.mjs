@@ -76,6 +76,17 @@ send({
 await sleep(350);
 check('打断 → cancel + turn_aborted(BARGE_IN)',
   count('cancel') >= 1 && msgs.some((m) => m.type === 'turn_aborted' && m.reason === 'BARGE_IN'));
+check('打断后旧脚本已停（不再下发被打断那轮的新 tts_started）',
+  msgs.filter((m) => m.type === 'tts_started').length === 3, msgs.filter((m) => m.type === 'tts_started').map((m) => m.reply_id));
+
+// 纯打断不说话：服务端应在静音 N 秒后补一句固定话术（NUDGE_MS*SCALE）
+await sleep(700);
+const nudge = msgs.filter((m) => m.type === 'agent_text' && String(m.text || '').includes('疑问'));
+check('纯打断不说话 → 服务端补固定话术', nudge.length >= 1, nudge.map((m) => m.text));
+check('补话术用新 reply_id（不是复活旧 reply）',
+  nudge.length >= 1 && nudge[0].reply_id === 'r_nudge_1', nudge[0] && nudge[0].reply_id);
+check('补话术走正常 tts_* 通道（前端无需新增分支）',
+  msgs.some((m) => m.type === 'tts_started' && m.reply_id === 'r_nudge_1'));
 
 send({ type: 'playback_first_frame', reply_id: 'r_1002_1', title: null, client_mono_ms: 950, audio_ctx_time: 12.3 });
 send({ type: 'client_event', name: 'NetStats', payload: { rtt_ms: 12, loss_pct: 0.2 } });

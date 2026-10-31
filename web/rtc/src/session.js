@@ -253,6 +253,7 @@ export class SessionClient extends EventTarget {
 
   onTranscript(d) {
     store.pushUserLine(d.text || '', !!d.final);
+    store.set({ hint: '' });                        // 用户说话了：撤掉"等待"提示
   }
 
   /**
@@ -263,6 +264,7 @@ export class SessionClient extends EventTarget {
   onAgentText(d) {
     const replyId = d.reply_id || this.currentReplyId || `r_${d.turn_id || 'x'}`;
     store.pushAgentSentence(replyId, d.sentence_id ?? null, d.text || '');
+    store.set({ hint: '' });                        // 服务端又开口了（含"打断后补话术"）：撤掉提示
   }
 
   /** 该 reply 是否已被服务端取消（打断后被丢弃的旧播报） */

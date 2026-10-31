@@ -22,6 +22,9 @@ import { fileURLToPath } from 'node:url';
 const PORT = Number(process.env.PORT || 8099);
 /** FAST=1：把所有脚本延时压到 15%，供 smoke/E2E 快速跑（不影响协议时序形状） */
 const SCALE = process.env.FAST === '1' ? 0.15 : 1;
+/** 纯打断不说话：静音多久后服务端补一句固定话术（真实实现建议 2000–3000ms） */
+const NUDGE_MS = Number(process.env.NUDGE_MS || 2600);
+const NUDGE_TEXT = process.env.NUDGE_TEXT || '请问您对刚刚的话有什么疑问吗？';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MIME = {
@@ -104,6 +107,7 @@ class Conn {
     this.turnN = 0;
     this.scriptTimers = [];          // 脚本推进用的定时器（打断时必须全部取消）
     this.scriptAborted = false;      // 当前 reply 已被打断：后续脚本步骤一律空转
+    this.nudgeTimer = 0;             // "纯打断不说话"兜底提示的计时器
 
     socket.on('data', (chunk) => { this.buf = Buffer.concat([this.buf, chunk]); this.drain(); });
     socket.on('close', () => { this.closed = true; });
@@ -147,8 +151,12 @@ class Conn {
         this.send('error', { error: { code: 'MEDIA_NOT_CONFIGURED', message: 'LiveKit 未配置（Mock）', retryable: false, severity: 'warn', user_message: '当前为兼容模式' } });
         break;
 
-      case 'speech_started': this.send('state', { turn_state: 'USER_SPEAKING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} }); break;
+      case 'speech_started':
+        this.clearNudge();                    // 用户开口了 → 撤销"打断后静默"提示
+        this.send('state', { turn_state: 'USER_SPEAKING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} });
+        break;
       case 'speech_ended': this.scriptTurn(++this.turnN); break;
+      case 'text': this.clearNudge(); this.scriptTurn(++this.turnN); break;
 
       case 'local_muted':
         // 打断：**先停脚本**（否则被"打断"的这一轮还会继续下发 tts_*/agent_text，
@@ -158,6 +166,8 @@ class Conn {
         this.send('cancel', { turn_id: m.turn_id, reason: 'BARGE_IN' });
         this.send('turn_aborted', { turn_id: m.turn_id, reason: 'BARGE_IN' });
         this.send('state', { turn_state: 'LISTENING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} });
+        // 纯打断不说话：服务端在 N 秒静音后主动补一句固定话术（话术归服务端，前端不硬编码）
+        this.scheduleNudge();
         break;
 
       case 'playback_first_frame': this.send('debug_latency', { note: '收到 playback_first_frame', reply_id: m.reply_id }); break;
@@ -251,6 +261,33 @@ class Conn {
   clearScript() {
     for (const id of this.scriptTimers) clearTimeout(id);
     this.scriptTimers = [];
+  }
+
+  /**
+   * 纯打断不说话兜底：N 秒内用户没开口/没打字，服务端主动补一句固定话术。
+   * 为什么放在服务端：话术属业务（契约 §0 第 4 条：前端不做业务兜底话术）；
+   * 而且服务端才知道"新 turn 有没有开始"，前端只知道"我有没有检测到声音"。
+   * 真实实现建议：在 TurnAborted(BARGE_IN) 后启动 MS 计时器，收到 ASR partial /
+   * 新一轮 TurnStarted 就取消；超时则走正常的 agent_text + tts_* 下发。
+   */
+  scheduleNudge() {
+    this.clearNudge();
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = 0;
+      if (this.closed || !this.scriptAborted) return;    // 期间已经开了新 turn
+      this.scriptAborted = false;                        // 这句允许脚本推进
+      const turnId = 't_9001';
+      const reply = 'r_nudge_1';
+      this.replyId = reply;
+      this.send('state', { turn_state: 'SPEAKING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} });
+      this.send('agent_text', { turn_id: turnId, reply_id: reply, sentence_id: 1, text: NUDGE_TEXT, final: true });
+      this.tts(reply, turnId, [NUDGE_TEXT], 0);
+      this.at(NUDGE_MS, () => this.send('state', { turn_state: 'LISTENING', flow_state: this.flow || 'IDENTITY_CONFIRM', slots: this.slots || {} }));
+    }, Math.max(150, Math.round(NUDGE_MS * SCALE)));
+  }
+
+  clearNudge() {
+    if (this.nudgeTimer) { clearTimeout(this.nudgeTimer); this.nudgeTimer = 0; }
   }
 
   send(type, data) {

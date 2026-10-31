@@ -182,6 +182,9 @@ function triggerBarge(source, b0Hint) {
     inBarge = false;
     ui.status('已打断（本地静音），等待服务端裁决…');
   }
+  // 纯 UI 状态提示（不是业务话术）：让用户知道"该你说了"。
+  // 真正的"打断后静默兜底话术"由服务端在 N 秒后以 agent_text + tts_* 下发（契约 §0 第 4 条）。
+  store.set({ hint: '（已打断，正在等您继续说话…）' });
 }
 
 /* ============================ 服务端 → 本地 ============================ */
@@ -211,6 +214,7 @@ client.addEventListener('cancel', (ev) => {
   clearTimeout(bargeTimer);
   store.log(`cancel reply=${ev.detail.reply_id || '—'} → 停止播报，等待用户说话`);
   ui.status('已打断，等待您继续说话', 'ok');
+  store.set({ hint: '（已打断，正在等您继续说话…）' });
 });
 
 client.addEventListener('turn-aborted', (ev) => {
