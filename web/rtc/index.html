@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>智语外呼 · 通话台 (cx / v0.2.1)</title>
+<style>
+  :root{--bg:#0f1216;--panel:#171c22;--line:#242b34;--fg:#e6edf3;--dim:#8b98a5;
+        --ok:#2ea043;--warn:#d29922;--bad:#f85149;--acc:#58a6ff}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.55 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
+  header{display:flex;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);
+    background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .lamp{width:10px;height:10px;border-radius:50%;background:var(--dim);display:inline-block;margin-right:6px}
+  .lamp.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .lamp.busy{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  .lamp.err{background:var(--bad)}
+  .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+  .tag.acc{color:var(--acc);border-color:#1f4a7a}
+  main{display:grid;grid-template-columns:1fr 360px;gap:12px;padding:12px;max-width:1400px;margin:0 auto}
+  @media (max-width:960px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-height:0}
+  h2{font-size:13px;margin:0 0 8px;color:var(--dim);font-weight:600;letter-spacing:.04em}
+  #transcript{height:46vh;overflow:auto;display:flex;flex-direction:column;gap:8px}
+  .line{max-width:88%;padding:7px 11px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
+  .line.user{align-self:flex-end;background:#1f2a37;border:1px solid #2a3a4d}
+  .line.agent{align-self:flex-start;background:#182029;border:1px solid #22303c}
+  .line .who{font-size:11px;color:var(--dim);margin-bottom:2px}
+  .line .meta{font-size:11px;color:var(--dim);margin-top:3px}
+  .struck{text-decoration:line-through;opacity:.55}
+  .cut{color:var(--warn);font-weight:600}
+  footer{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);position:sticky;bottom:0;
+    background:var(--panel);flex-wrap:wrap;align-items:center}
+  button{background:#22303c;color:var(--fg);border:1px solid #2f3d4b;border-radius:6px;padding:7px 14px;
+    cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--acc)} button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:#1f6feb;border-color:#1f6feb} button.danger{background:#40221f;border-color:#6b2b26}
+  #txtInput{flex:1 1 260px;min-width:200px;background:#0b0e12;color:var(--fg);border:1px solid #2f3d4b;
+    border-radius:6px;padding:7px 10px;font-size:13px}
+  #txtInput:disabled{opacity:.45}
+  .stages{list-style:none;margin:0;padding:0}
+  .stages li{display:flex;align-items:center;gap:8px;padding:5px 0;color:var(--dim);font-size:13px}
+  .stages li.done{color:var(--ok)} .stages li.now{color:var(--acc);font-weight:600}
+  .stages li .dot{width:16px;height:16px;border-radius:50%;border:1px solid currentColor;
+    display:grid;place-items:center;font-size:10px;flex:0 0 auto}
+  .kv{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:3px 0;
+    border-bottom:1px dashed #1d242c;color:var(--dim)}
+  .kv b{color:var(--fg);font-weight:500}
+  #log{height:150px;overflow:auto;font:11.5px/1.5 ui-monospace,Consolas,monospace;color:var(--dim);
+    background:#0b0e12;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap}
+  .meter{height:6px;background:#0b0e12;border-radius:3px;overflow:hidden;margin-top:6px}
+  .meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .06s linear}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .hint{font-size:11.5px;color:var(--dim)}
+  details{margin-top:8px} summary{cursor:pointer;color:var(--dim);font-size:12.5px}
+  .pill{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+  .pill.warn{color:var(--warn);border-color:#4a3a12}
+</style>
+</head>
+<body>
+<header>
+  <span><span id="lamp" class="lamp"></span><b id="turnState">IDLE</b></span>
+  <span class="tag" id="flowState">flow: —</span>
+  <span class="tag acc" id="transport">transport: —</span>
+  <span class="tag" id="rtt">rtt: —</span>
+  <span class="tag" id="ids">session: —</span>
+  <span class="tag" id="version">release: —</span>
+  <span class="tag" id="aiBadge">AI 语音</span>
+</header>
+
+<main>
+  <section>
+    <h2>实时字幕 <span class="hint" id="estimateBadge"></span></h2>
+    <div id="transcript"></div>
+  </section>
+
+  <aside style="display:flex;flex-direction:column;gap:12px;min-width:0">
+    <section>
+      <h2>任务进度（六阶段）</h2>
+      <ul class="stages" id="stages"></ul>
+    </section>
+    <section>
+      <h2>槽位 / 状态</h2>
+      <div id="slots"></div>
+    </section>
+    <section>
+      <h2>合规 / 工具</h2>
+      <div id="compliance"></div>
+      <div id="tools"></div>
+    </section>
+    <section>
+      <h2>结果</h2>
+      <div id="result"><span class="hint">未回写</span></div>
+    </section>
+    <section>
+      <h2>调试</h2>
+      <div class="kv"><span>麦克风电平</span><b id="db">—</b></div>
+      <div class="meter"><i id="dbBar"></i></div>
+      <div class="kv"><span>b0（VAD 首帧）</span><b id="b0">—</b></div>
+      <div class="kv"><span>b3（末帧播出）</span><b id="b3">—</b></div>
+      <div class="kv"><span>打断停止时延</span><b id="stopLat">—</b></div>
+      <div class="kv"><span>首字时延（playback_first_frame）</span><b id="ttfb">—</b></div>
+      <div class="kv"><span>downlink</span><b id="downlink">—</b></div>
+      <details><summary>事件日志</summary><div id="log"></div></details>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <button id="btnStart" class="primary">开始通话</button>
+  <button id="btnHangup" class="danger" disabled>挂断</button>
+  <button id="btnMute" disabled>静音</button>
+  <button id="btnBarge" disabled>模拟打断</button>
+  <button id="btnDemo" disabled>无麦回放</button>
+  <input id="txtInput" placeholder="无麦模式：输入一句话，回车发送（契约消息 text）" disabled />
+  <button id="btnSend" disabled>发送</button>
+  <span class="hint" id="status">未连接</span>
+</footer>
+
+<script src="./config.js"></script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
