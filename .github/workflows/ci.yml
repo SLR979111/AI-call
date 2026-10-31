@@ -46,6 +46,13 @@ jobs:
       - name: Validate contracts
         run: python contracts/validate.py contracts/fixtures
 
+      - name: Frontend protocol tests
+        working-directory: web/rtc
+        run: |
+          node test/golden-replay.mjs
+          node test/pcm-path.mjs
+          node test/uplink-file.mjs
+
       - name: Headless WebSocket E2E
         env:
           PORT: "8081"

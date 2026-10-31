@@ -36,6 +36,8 @@
 | [`reviews/cx-contract-review-v0.1.md`](reviews/cx-contract-review-v0.1.md) | cx 对 03/04 的评审（G1–G26） | 已处理 |
 | [`12-technical-proposal-draft.md`](12-technical-proposal-draft.md) | 技术方案书初稿：架构/时延/评测/RSI/成本/分工 | **初稿，待 W3 实测替换** |
 | [`13-status-and-file-map.md`](13-status-and-file-map.md) | 项目现状、文件地图、验证证据、阻塞与下一步 | **最新总览** |
+| [`14-cx-w1-frontend-spec-v0.2.1.md`](14-cx-w1-frontend-spec-v0.2.1.md) | cx W1 前端实现规格（逐消息处理） | 已合入 |
+| [`15-cx-w1-frontend-handoff.md`](15-cx-w1-frontend-handoff.md) | cx W1 前端交付说明与验证命令 | 已合入 |
 | [`contracts-signoff.md`](contracts-signoff.md) | 契约会签表、自动检查命令、v0.2.1 复签 | cx 已签；其余待签 |
 | [`../README.md`](../README.md) | 代码骨架：本地运行、测试、Docker、端点 | ✅ Fake 骨架可跑 |
 

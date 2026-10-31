@@ -33,8 +33,11 @@ make run
 启动后打开：
 
 - Demo 页面：<http://localhost:8081/>
+- 新通话台（cx，零依赖 ESM，支持麦克风/文件回灌）：<http://localhost:8081/rtc/>
 - 健康检查：<http://localhost:8081/healthz>
 - OpenAPI：<http://localhost:8081/docs>
+
+`web/rtc/` 的接后端方式：`http://127.0.0.1:8081/rtc/?app=http://127.0.0.1:8081`；无麦克风时用 `uplink=file` 回灌 `fixtures/demo_16k.wav`。细节见 [web/rtc/README.md](web/rtc/README.md)。
 
 ### 常见问题：WebSocket 404
 

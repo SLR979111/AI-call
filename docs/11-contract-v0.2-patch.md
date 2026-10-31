@@ -299,3 +299,25 @@ cx 的 D1/D2/D3 建议：**同机 localhost + 文件回灌兜底 + LiveKit 只�
 | P3 | `POST /sessions/{id}/token` 返回完整 `ws_url`；重连=新 WS、事件不重放 | ✅ 返回 `ws_url?token=`；前端按 `name+client_mono_ms` 去重 |
 | P4 | `turn_aborted.reason` 枚举 | ✅ `BARGE_IN/TIMEOUT/SESSION_END/COMPLIANCE_BLOCK/USER_HANGUP/INTERNAL`；未知值→`INTERNAL` |
 | P5 | `contracts/fixtures/ws_session_bargein.jsonl` 记录真实收发顺序 | ✅ 子 agent 抓包（`{"dir":"c2s"|"s2c","frame":{...}}`） |
+
+### 12.2 真实抓包补出的协议外消息（v0.2.2）
+
+cx 的 `web/rtc` 用真实抓包回放时发现 3 条消息不在 03/11 正文里，但服务端实际会发；已在 `web/rtc/src` 兼容，并补进契约：
+
+| 方向 | 消息 | 真实 payload | 说明 |
+|---|---|---|---|
+| S→C | `hello_ack` | `{session_id, protocol_version:"0.2", server_version:"0.2.0", transport:"ws_pcm"}` | 前端据此确定 `transport` |
+| S→C | `turn_end` | 与 `turn_result` 同 payload | 与 `turn_result` 合并处理，避免重复/未知消息 |
+| C→S | `text` | `{text}` | 无麦/文本模式的唯一输入通道 |
+
+**`turn_result` 真实形状是嵌套的**（03 §4.2 的扁平示意容易误读）：
+
+```json
+{"turn_id":"t_0001","result":{"kind":"end","reply_id":"r_0001_1",
+ "outcome":"rescheduled","slots":{"order_id":"A12345678"},
+ "result":{"new_time":"2026-11-01T15:00","ticket":"pending"}}}
+```
+
+`agent_text` 是按句下发（`sentence_id` 1..n），不是 token 增量；前端按“同 reply 逐句拼接、同句幂等”处理。
+
+> 代码状态：后端 `app/orchestrator.py` 已实际发送 `hello_ack/turn_end/turn_result`；`web/rtc` 已兼容。契约以本节为准。
