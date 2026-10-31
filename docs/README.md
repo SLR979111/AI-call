@@ -31,6 +31,7 @@
 | [`10-master-summary.md`](10-master-summary.md) | 总汇总：整体架构、API 速查、团队工作清单、天命个人清单、里程碑 | **先看这个** |
 | [`11-contract-v0.2-patch.md`](11-contract-v0.2-patch.md) | 回应 cx 评审：G1–G9 补丁、12 条消息、枚举/鉴权/降级/b3 | **v0.2 生效口径** |
 | [`reply_cx_v0.2.1.md`](reply_cx_v0.2.1.md) | 给 cx 的 C1–C6 回复（可直接转发） | 待发送 |
+| [`12-technical-proposal-draft.md`](12-technical-proposal-draft.md) | 技术方案书初稿：架构/时延/评测/RSI/成本/分工 | **初稿，待 W3 实测替换** |
 | [`contracts-signoff.md`](contracts-signoff.md) | 契约会签表、自动检查命令、已确认事实 | 待四位 owner 签字 |
 | [`../README.md`](../README.md) | 代码骨架：本地运行、测试、Docker、端点 | ✅ Fake 骨架可跑 |
 
