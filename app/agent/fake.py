@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from ..cancel import CancelToken
+from ..rag.knowledge import KnowledgeBase
 
 
 class FakeAgent:
@@ -12,6 +14,13 @@ class FakeAgent:
     It exposes the same interface the real Agent will use, so swapping in
     LLM/Flow/RAG later does not change the orchestrator.
     """
+
+    def __init__(self, knowledge_path: Path | None = None, pause_ms: int = 200) -> None:
+        if knowledge_path is None:
+            candidate = Path(__file__).resolve().parents[2] / "knowledge" / "faq.json"
+            knowledge_path = candidate if candidate.exists() else None
+        self.knowledge = KnowledgeBase(knowledge_path)
+        self.pause_s = max(0.0, pause_ms / 1000.0)
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
         return None
@@ -25,7 +34,7 @@ class FakeAgent:
         session_id = req.get("session_id", "s_dev")
 
         async def pause() -> None:
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(self.pause_s)
             cancel.check()
 
         if any(word in text for word in ("转人工", "找人工", "投诉")):
@@ -33,7 +42,20 @@ class FakeAgent:
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
             return
 
-        if any(word in text for word in ("订单", "改约", "改到", "配送")):
+        if any(word in text for word in ("权益", "退款", "多久", "保修", "政策", "录音", "AI")):
+            await pause()
+            chunks = self.knowledge.search(text, top_k=1)
+            if chunks:
+                top = chunks[0]
+                await pause()
+                yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                       "text": f"根据知识库《{top.title}》：{top.content}", "final": True}
+                await pause()
+                yield {"kind": "end", "reply_id": reply_id, "outcome": "answered",
+                       "slots": {}, "result": {"citation": top.citation()}}
+                return
+
+        if any(word in text for word in ("订单", "改约", "改到", "改吧", "配送")):
             await pause()
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
                    "text": "可以的，我先帮您看一下订单。", "final": False}

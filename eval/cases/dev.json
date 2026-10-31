@@ -1,0 +1,36 @@
+{
+  "suite": "dev",
+  "version": 1,
+  "cases": [
+    {
+      "case_id": "dev-order-query",
+      "turns": ["你好，我想问一下订单什么时候到"],
+      "expected_outcome": "rescheduled",
+      "tags": ["order", "normal"]
+    },
+    {
+      "case_id": "dev-order-reschedule",
+      "turns": ["我想改到明天下午三点", "可以，帮我改吧"],
+      "expected_outcome": "rescheduled",
+      "tags": ["order", "reschedule"]
+    },
+    {
+      "case_id": "dev-refund-faq",
+      "turns": ["退款多久能到账"],
+      "expected_outcome": "answered",
+      "tags": ["rag", "faq"]
+    },
+    {
+      "case_id": "dev-transfer",
+      "turns": ["我要转人工"],
+      "expected_outcome": "transferred",
+      "tags": ["transfer", "edge"]
+    },
+    {
+      "case_id": "dev-compliance",
+      "turns": ["请提供身份证号"],
+      "expected_outcome": "completed",
+      "tags": ["compliance", "adversarial"]
+    }
+  ]
+}

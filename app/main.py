@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,8 +18,14 @@ from .agent.fake import FakeAgent
 from .compliance import ComplianceGuard
 from .config import settings
 from .events import EventBus
+from .eval.runner import EvalCase, EvalRunner
+from .flow.pack import FlowPack, FlowPackError
+from .llm.router import LLMRouter
+from .media.livekit import create_livekit_token
 from .orchestrator import Orchestrator, SessionState
+from .registry import Registry, RegistryError
 from .tools.gateway import MockBusiness, ToolGateway
+from .voice.factory import voice_status
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -56,6 +64,41 @@ class ToolInvokeRequest(BaseModel):
     deadline_ms: int = 2000
 
 
+class CandidateRequest(BaseModel):
+    artifacts: dict[str, str]
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+
+
+class PromoteRequest(BaseModel):
+    release_id: str
+    gate: dict[str, Any] | None = None
+
+
+class LLMCompleteRequest(BaseModel):
+    messages: list[dict[str, str]]
+    temperature: float = 0.3
+    max_tokens: int = 512
+    session_id: str = "s_internal"
+    turn_id: str = "t_0000"
+    response_format: dict[str, Any] | None = None
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class FlowSimulateRequest(BaseModel):
+    intents: list[str] = Field(default_factory=list)
+
+
+class EvalRunRequest(BaseModel):
+    cases: list[dict[str, Any]] | None = None
+    suite_path: str | None = None
+    release_id: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.ensure_dirs()
@@ -76,6 +119,14 @@ async def lifespan(app: FastAPI):
     app.state.tools = tools
     app.state.mock = mock
     app.state.orchestrator = orchestrator
+    app.state.registry = Registry(settings.data_dir)
+    app.state.flowpack = FlowPack.load(
+        Path(__file__).resolve().parent.parent / "flowpacks" / "service_outbound.json"
+    )
+    app.state.llm = LLMRouter(
+        bus=bus,
+        daily_budget_cny=float(os.getenv("LLM_DAILY_BUDGET_CNY", "100")),
+    )
     app.state.evals = {}
     try:
         yield
@@ -95,6 +146,37 @@ def _bus(request: Request) -> EventBus:
     return request.app.state.bus
 
 
+@app.get("/voice/status")
+async def voice(request: Request) -> dict[str, Any]:
+    return voice_status().to_dict()
+
+
+@app.get("/media/status")
+async def media_status(request: Request) -> dict[str, Any]:
+    configured = all(os.getenv(key) for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"))
+    return {"provider": "livekit", "configured": configured,
+            "url": os.getenv("LIVEKIT_URL", "") if configured else ""}
+
+
+@app.post("/sessions/{session_id}/rtc")
+async def rtc_token(request: Request, session_id: str) -> dict[str, Any]:
+    try:
+        _orc(request).get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+    url = os.getenv("LIVEKIT_URL", "").strip()
+    key = os.getenv("LIVEKIT_API_KEY", "").strip()
+    secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
+    if not (url and key and secret):
+        raise HTTPException(status_code=503, detail={
+            "code": "MEDIA_NOT_CONFIGURED",
+            "message": "set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET",
+        })
+    room = f"aicall-{session_id}"
+    token = create_livekit_token(key, secret, session_id, room)
+    return {"provider": "livekit", "url": url, "room": room, "token": token}
+
+
 @app.get("/healthz")
 async def healthz(request: Request) -> dict[str, Any]:
     orc = _orc(request)
@@ -103,6 +185,7 @@ async def healthz(request: Request) -> dict[str, Any]:
         "release_id": settings.release_id,
         "mode": "fake",
         "sessions": len(orc.sessions),
+        "llm_configured": request.app.state.llm.configured,
         "clock_id": settings.clock_id,
     }
 
@@ -188,6 +271,30 @@ async def get_events(request: Request, session_id: str,
     return Response(content=body, media_type="application/x-ndjson")
 
 
+@app.post("/eval/run")
+async def eval_run(request: Request, body: EvalRunRequest) -> dict[str, Any]:
+    orc = _orc(request)
+    runner = EvalRunner(orc, _bus(request))
+    if body.cases:
+        cases = [
+            EvalCase(
+                case_id=str(item.get("case_id", f"case-{index}")),
+                turns=list(item.get("turns", [])),
+                expected_outcome=str(item.get("expected_outcome", "any")),
+                tags=list(item.get("tags", [])),
+            )
+            for index, item in enumerate(body.cases, start=1)
+        ]
+    else:
+        path = Path(body.suite_path) if body.suite_path else (
+            Path(__file__).resolve().parent.parent / "eval" / "cases" / "dev.json"
+        )
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"suite not found: {path}")
+        cases = EvalRunner.load_cases(path)
+    return await runner.run(cases, body.release_id)
+
+
 @app.post("/eval/sessions")
 async def eval_session(request: Request, body: EvalRequest) -> dict[str, Any]:
     orc = _orc(request)
@@ -246,6 +353,103 @@ async def invoke_tool(request: Request, tool: str, body: ToolInvokeRequest) -> d
         turn_id=turn_id,
         trace_id=trace_id,
     )
+
+
+@app.get("/flowpacks")
+async def list_flowpacks(request: Request) -> dict[str, Any]:
+    pack: FlowPack = request.app.state.flowpack
+    return {"flowpacks": [{"id": pack.id, "version": pack.version, "entry": pack.entry}]}
+
+
+@app.get("/flowpacks/{pack_id}")
+async def get_flowpack(request: Request, pack_id: str) -> dict[str, Any]:
+    pack: FlowPack = request.app.state.flowpack
+    if pack.id != pack_id:
+        raise HTTPException(status_code=404, detail="flow pack not found")
+    return {"id": pack.id, "version": pack.version, "entry": pack.entry,
+            "states": pack.states, "slots": pack.slots}
+
+
+@app.post("/flowpacks/{pack_id}/simulate")
+async def simulate_flowpack(request: Request, pack_id: str, body: FlowSimulateRequest) -> dict[str, Any]:
+    pack: FlowPack = request.app.state.flowpack
+    if pack.id != pack_id:
+        raise HTTPException(status_code=404, detail="flow pack not found")
+    from .flow.pack import FlowEngine
+    engine = FlowEngine(pack)
+    steps = [engine.start()]
+    for intent in body.intents:
+        steps.append(engine.apply_intent(intent))
+    return {"flow_id": pack.id, "steps": steps, "snapshot": engine.snapshot()}
+
+
+@app.post("/knowledge/search")
+async def knowledge_search(request: Request, body: KnowledgeSearchRequest) -> dict[str, Any]:
+    kb = request.app.state.orchestrator.agent.knowledge
+    chunks = kb.search(body.query, top_k=body.top_k)
+    return {
+        "query": body.query,
+        "chunks": [
+            {
+                "doc_id": c.doc_id,
+                "title": c.title,
+                "content": c.content,
+                "score": round(c.score, 4),
+                "citation": c.citation(),
+            }
+            for c in chunks
+        ],
+    }
+
+
+@app.post("/internal/llm/complete")
+async def llm_complete(request: Request, body: LLMCompleteRequest) -> dict[str, Any]:
+    result = await request.app.state.llm.complete(
+        body.messages,
+        temperature=body.temperature,
+        max_tokens=body.max_tokens,
+        response_format=body.response_format,
+        session_id=body.session_id,
+        turn_id=body.turn_id,
+    )
+    return asdict(result)
+
+
+@app.get("/registry/production")
+async def registry_production(request: Request) -> dict[str, Any]:
+    try:
+        return request.app.state.registry.production()
+    except RegistryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/registry/releases")
+async def registry_releases(request: Request) -> dict[str, Any]:
+    return {"releases": request.app.state.registry.list_releases()}
+
+
+@app.post("/registry/candidates")
+async def registry_candidate(request: Request, body: CandidateRequest) -> dict[str, Any]:
+    try:
+        return request.app.state.registry.create_candidate(body.artifacts, body.metrics, body.notes)
+    except RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/registry/promote")
+async def registry_promote(request: Request, body: PromoteRequest) -> dict[str, Any]:
+    try:
+        return request.app.state.registry.promote(body.release_id, body.gate)
+    except RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/registry/rollback")
+async def registry_rollback(request: Request) -> dict[str, Any]:
+    try:
+        return request.app.state.registry.rollback()
+    except RegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.websocket("/ws/session/{session_id}")

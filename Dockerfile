@@ -23,6 +23,9 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY web ./web
 COPY contracts ./contracts
+COPY knowledge ./knowledge
+COPY flowpacks ./flowpacks
+COPY eval ./eval
 
 RUN mkdir -p /app/data
 

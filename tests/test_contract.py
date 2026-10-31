@@ -7,13 +7,20 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app.agent.fake import FakeAgent
 from app.compliance import BLOCK, REWRITE, ComplianceGuard
 from app.events import EventBus
+from app.eval.runner import EvalCase, EvalRunner
+from app.flow.pack import FlowEngine, FlowPack
+from app.llm.router import LLMRouter, ProviderConfig, parse_json_object
 from app.main import app
+from app.media.livekit import create_livekit_token, decode_payload
+from app.rag.knowledge import KnowledgeBase
 from app.orchestrator import Orchestrator
+from app.registry import Registry, RegistryError
 from app.tools.gateway import MockBusiness, ToolGateway
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -171,3 +178,152 @@ def test_http_api_smoke():
         lines = [line for line in events.text.splitlines() if line.strip()]
         assert len(lines) >= 5
         assert json.loads(lines[0])["type"] == "SessionStarted"
+
+
+def test_registry_candidate_promote_rollback():
+    registry = Registry(temp_dir())
+    production = registry.production()
+    candidate = registry.create_candidate(
+        {
+            "flow": "service_outbound@1.0.1",
+            "prompt": "agent_system@2",
+            "knowledge": "faq@dev",
+            "model": "fake@dev",
+            "config": "runtime@1",
+        },
+        metrics={"task_success": 0.9},
+        notes="test candidate",
+    )
+    assert candidate["status"] == "candidate"
+    promoted = registry.promote(candidate["release_id"], {"ok": True})
+    assert promoted["status"] == "production"
+    assert registry.production()["release_id"] == candidate["release_id"]
+    rolled = registry.rollback()
+    assert rolled["release_id"] == production["release_id"]
+    assert registry.production()["release_id"] == production["release_id"]
+    try:
+        registry.create_candidate({"flow": "only"})
+        raise AssertionError("expected RegistryError")
+    except RegistryError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_llm_failover_and_events():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "primary.test" in str(request.url):
+            return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "{\"reply\":\"好的\"}"}}],
+            "usage": {"total_tokens": 12},
+        })
+
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    router = LLMRouter(
+        ProviderConfig("primary", "https://primary.test/v1", "k1", "m1"),
+        ProviderConfig("secondary", "https://secondary.test/v1", "k2", "m2"),
+        bus=bus, transport=httpx.MockTransport(handler),
+    )
+    result = await router.complete([{"role": "user", "content": "hi"}], session_id="s_llm")
+    assert result.ok is True
+    assert result.provider == "secondary"
+    events = bus.read_events("s_llm")
+    validate_events(events)
+    types = [e["type"] for e in events]
+    assert "ProviderFailed" in types
+    assert "ProviderFailover" in types
+    assert "ProviderReturned" in types
+    assert parse_json_object(result.text) == {"reply": "好的"}
+
+
+@pytest.mark.asyncio
+async def test_llm_budget_and_unconfigured():
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    router = LLMRouter(daily_budget_cny=0.0, bus=bus,
+                       primary=ProviderConfig("p", "https://p.test/v1", "k", "m"))
+    result = await router.complete([{"role": "user", "content": "hi"}], session_id="s_budget")
+    assert result.ok is False
+    assert result.error and result.error["code"] == "BUDGET_EXCEEDED"
+    events = bus.read_events("s_budget")
+    validate_events(events)
+    assert "BudgetExceeded" in [e["type"] for e in events]
+
+    unconfigured = LLMRouter()
+    result = await unconfigured.complete([{"role": "user", "content": "hi"}])
+    assert result.ok is False
+    assert result.error and result.error["code"] == "LLM_NOT_CONFIGURED"
+
+
+def test_knowledge_search():
+    kb = KnowledgeBase(ROOT / "knowledge" / "faq.json")
+    chunks = kb.search("退款多久到账", top_k=2)
+    assert chunks
+    assert chunks[0].doc_id == "faq-refund"
+    assert chunks[0].citation()["title"]
+
+
+@pytest.mark.asyncio
+async def test_agent_uses_knowledge_and_cites():
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    agent = FakeAgent(ROOT / "knowledge" / "faq.json")
+    orc = Orchestrator(bus, agent, tools, ComplianceGuard(), "rel_test_001", "service_outbound")
+    session = await orc.create_session("text")
+    result = await orc.handle_text(session.session_id, "退款多久能到账", None)
+    assert result["result"]["outcome"] == "answered"
+    assert "citation" in result["result"]["result"]
+    events = bus.read_events(session.session_id)
+    validate_events(events)
+
+
+def test_flowpack_load_and_transition():
+    pack = FlowPack.load(ROOT / "flowpacks" / "service_outbound.json")
+    engine = FlowEngine(pack)
+    start = engine.start()
+    assert start["state"] == "OPEN"
+    step = engine.apply_intent("confirm")
+    assert step["state"] == "IDENTITY_CONFIRM"
+    step = engine.apply_intent("confirm")
+    assert step["state"] == "NEED_CONFIRM"
+    engine.set_slot("order_id", "A12345678")
+    step = engine.apply_intent("confirm")
+    assert step["state"] == "OFFER"
+    assert engine.snapshot()["slots"]["order_id"] == "A12345678"
+
+
+@pytest.mark.asyncio
+async def test_eval_runner_metrics():
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    orc = Orchestrator(bus, FakeAgent(ROOT / "knowledge" / "faq.json"), tools,
+                       ComplianceGuard(), "rel_test_001", "service_outbound")
+    runner = EvalRunner(orc, bus)
+    cases = [
+        EvalCase("faq", ["退款多久能到账"], "answered"),
+        EvalCase("transfer", ["我要转人工"], "transferred"),
+    ]
+    report = await runner.run(cases)
+    assert report["cases"] == 2
+    assert report["task_success_rate"] == 1.0
+    assert report["p50_ms"] is not None
+    assert report["failure_counts"] == {}
+
+
+def test_livekit_token_and_voice_status():
+    token = create_livekit_token("key", "secret", "s_test", "aicall-s_test", ttl_seconds=60)
+    payload = decode_payload(token)
+    assert payload["iss"] == "key"
+    assert payload["sub"] == "s_test"
+    assert payload["video"]["room"] == "aicall-s_test"
+    assert len(token.split(".")) == 3
+
+    from app.voice.factory import voice_status
+    status = voice_status()
+    assert status.provider
+    assert isinstance(status.to_dict(), dict)

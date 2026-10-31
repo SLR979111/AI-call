@@ -1,0 +1,55 @@
+{
+  "id": "service_outbound",
+  "version": "1.0.0",
+  "entry": "OPEN",
+  "states": {
+    "OPEN": {
+      "say": "您好，我是京东智能客服小语，本次通话会录音。请问是本人吗？",
+      "must_say": ["ai_identity", "recording_notice"],
+      "next": "IDENTITY_CONFIRM"
+    },
+    "IDENTITY_CONFIRM": {
+      "say": "想跟您确认一下身份，方便吗？",
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "NEED_CONFIRM"},
+        {"when": {"intent": "deny"}, "to": "END"},
+        {"when": {"intent": "unclear"}, "to": "IDENTITY_CONFIRM"}
+      ]
+    },
+    "NEED_CONFIRM": {
+      "say": "想跟您确认一下，您今天方便收货吗？",
+      "slots": ["order_id"],
+      "next": "OFFER"
+    },
+    "OFFER": {
+      "say": "可以帮您改到明天下午 3 点，您看方便吗？",
+      "next": "RESULT_CONFIRM"
+    },
+    "RESULT_CONFIRM": {
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "WRITEBACK"},
+        {"when": {"intent": "deny"}, "to": "OFFER"},
+        {"when": {"intent": "unclear"}, "to": "RESULT_CONFIRM"}
+      ]
+    },
+    "WRITEBACK": {
+      "say": "正在为您提交改约。",
+      "tool": "order.reschedule",
+      "next": "CLOSE"
+    },
+    "CLOSE": {
+      "say": "已为您改约成功，稍后会收到短信。祝您生活愉快。",
+      "next": "END"
+    },
+    "END": {
+      "say": "感谢您的接听，再见。"
+    }
+  },
+  "slots": {
+    "order_id": {
+      "required": true,
+      "ask": "方便提供一下订单号吗？",
+      "pattern": "^[A-Z0-9]{8,20}$"
+    }
+  }
+}

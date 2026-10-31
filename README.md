@@ -118,6 +118,16 @@ Notes:
 | POST | `/eval/sessions` | Run a headless text evaluation session |
 | GET | `/eval/sessions/{eval_session_id}` | Read a stored evaluation record |
 | POST | `/internal/tools/{tool}/invoke` | Invoke a tool through the gateway |
+| POST | `/internal/llm/complete` | Debug: call the LLM router (503-like error if unconfigured) |
+| GET | `/voice/status` | Active voice provider / readiness |
+| GET | `/media/status` | LiveKit configuration status |
+| POST | `/sessions/{session_id}/rtc` | Mint a LiveKit token (503 if unconfigured) |
+| POST | `/knowledge/search` | Local RAG search with citations |
+| GET | `/flowpacks` / `/flowpacks/{id}` | List/read Flow Packs |
+| POST | `/flowpacks/{id}/simulate` | Apply intent sequence to a Flow Pack |
+| POST | `/eval/run` | Run an eval suite (default `eval/cases/dev.json`) |
+| GET | `/registry/production` / `/registry/releases` | Current/tracked releases |
+| POST | `/registry/candidates` / `/promote` / `/rollback` | Candidate lifecycle |
 
 The source of truth for payloads is
 [docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md) and
@@ -149,6 +159,17 @@ Override defaults on the command line, for example
 | `RELEASE_ID` | `rel_dev_001` | Release pinned into every session and event |
 | `DATA_DIR` | `./data` | SQLite / JSONL / artifact directory |
 | `DEV_NO_AUTH` | `1` | Dev-only auth bypass flag (reserved; auth is not enforced in the fake skeleton) |
+| `LLM_PRIMARY_BASE_URL` | `https://api.deepseek.com/v1` | Primary OpenAI-compatible endpoint |
+| `LLM_PRIMARY_API_KEY` | `sk-...` | Primary key (server-side only) |
+| `LLM_PRIMARY_MODEL` | `deepseek-chat` | Primary model |
+| `LLM_SECONDARY_*` | same keys | Optional secondary provider |
+| `LLM_TIMEOUT_MS` | `3000` | Per-provider timeout |
+| `LLM_DAILY_BUDGET_CNY` | `100` | Budget circuit breaker |
+| `VOICE_PROVIDER` | `fake` | `fake` / `sherpa` / `funasr` / `cosyvoice` |
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | — | Enables `/sessions/{id}/rtc` token |
+
+Without LLM keys, `/internal/llm/complete` returns `LLM_NOT_CONFIGURED` and the
+fake agent continues with rule/template replies.
 
 Copy [.env.example](.env.example) to `.env`; never commit `.env`.
 

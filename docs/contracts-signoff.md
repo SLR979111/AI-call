@@ -28,9 +28,12 @@ python -m pytest tests/test_contract.py -q
 - `EventBus` 写入 `data/sessions/<session_id>/events.jsonl` + SQLite 索引。
 - `TurnLatency` 含 `t0..t9`、`e2e_ms`、`e2e_official_proxy_ms`。
 - `ToolGateway` 支持 schema 校验、幂等、超时、1 次重试、审计事件。
-- `/eval/sessions` 可无浏览器跑文本批次。
+- `/eval/sessions` 与 `/eval/run` 可无浏览器跑文本批次；默认套件 5/5。
 - `/metrics` 提供 `aicall_up`、`aicall_sessions`。
-- 契约测试：4 个 fixture / 47 条事件通过 schema；8 个测试通过（含打断、合规、幂等、超时）。
+- `/registry/*` 支持 candidate → production → previous 与回滚。
+- LLM Router 支持主/备、超时、熔断、预算；无 Key 返回 `LLM_NOT_CONFIGURED`。
+- RAG 检索、Flow Pack、LiveKit Token 边界已落地（真实模型/媒体服务待接）。
+- 契约测试：4 个 fixture / 47 条事件通过 schema；16 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow）。
 
 ## 4. 变更记录
 
