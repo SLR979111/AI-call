@@ -92,7 +92,7 @@ UI 标“估算”；D 侧用 `tts_alignment=false` 过滤游标误差，不把�
 
 ## 验证与版本
 
-- **20 tests passed**。
+- **21 tests passed**。
 - WS 实测：`tts_started → tts_sentence → tts_completed → compliance → turn_result → session_ended`。
 - `make e2e`：2 轮 + 打断 + 挂断 **PASS**。
 - 最新提交 `cbd31b3`（tag `e2e-ws`）。

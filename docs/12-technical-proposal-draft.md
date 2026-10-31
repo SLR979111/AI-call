@@ -281,7 +281,7 @@ ClientSpeechStarted → ClientLocalMuted → BargeInDetected
 | P50 | 687ms | Fake Agent + 浏览器 TTS，非真实语音 |
 | P95 | 901ms | 同上 |
 | 契约事件 | 47/47 | 4 个 fixture |
-| 测试 | 20 passed | 含打断、幂等、RSI、报告 |
+| 测试 | 21 passed | 含打断、幂等、RSI、报告 |
 
 > 这些数字只证明埋点/链路/门禁可用，**不作为真实语音指标**；W3 替换为真机数据。
 

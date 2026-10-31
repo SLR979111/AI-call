@@ -34,7 +34,7 @@ python -m pytest tests/test_contract.py -q
 - LLM Router 支持主/备、超时、熔断、预算；无 Key 返回 `LLM_NOT_CONFIGURED`。
 - `AGENT_PROVIDER=llm` 时走 `LLMAgent`（JSON 决策 + ToolClient），默认仍为 Fake。
 - RAG 检索、Flow Pack、LiveKit Token 边界已落地（真实模型/媒体服务待接）。
-- 契约测试：4 个 fixture / 47 条事件通过 schema；20 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow、LLMAgent、WS 元数据/挂断、RSI 门禁、报告）。
+- 契约测试：4 个 fixture / 47 条事件通过 schema；21 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow、LLMAgent、WS 元数据/挂断、RSI 门禁、报告）。
 - v0.2 补丁（回应 cx 评审）：[11-contract-v0.2-patch.md](11-contract-v0.2-patch.md)；G1–G8 已给协议与代码入口，G9 已解决。
 
 ## 4. 变更记录
@@ -65,4 +65,4 @@ python -m pytest tests/test_contract.py -q
 | P4 | `turn_aborted.reason` 枚举：`BARGE_IN/TIMEOUT/SESSION_END/COMPLIANCE_BLOCK/USER_HANGUP/INTERNAL` | ✅ 代码已归一化，未知值→`INTERNAL` |
 | P5 | 把 `e2e-ws` 的收发顺序落成 `contracts/fixtures/ws_session_bargein.jsonl` | ✅ 子 agent 抓包，见文件 |
 
-> 仓库同步说明：当前工作区已包含 `contracts/`、`app/`、`tests/`、`web/`，最新测试 **20 passed**；cx 那份文档里的“18 tests”是 v0.2 时点。
+> 仓库同步说明：当前工作区已包含 `contracts/`、`app/`、`tests/`、`web/`，最新测试 **21 passed**；cx 那份文档里的“18 tests”是 v0.2 时点。

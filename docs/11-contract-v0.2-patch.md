@@ -286,7 +286,7 @@ cx 的 D1/D2/D3 建议：**同机 localhost + 文件回灌兜底 + LiveKit 只�
 | **C5** `APP_BASE=8081` + 完整 `ws_url` | ✅ 接受 | `POST /sessions` 返回 `ws_url=/ws/session/{id}?token=...`；Makefile/compose/README/02/09 统一宿主 8081（容器内仍 8080，映射 `8081:8080`）。`.env.example` 受当前工作区凭据保护，已提供 `config/app.example` 作为可读副本 |
 | **C6** `tts_started.sentences=[]` 的游标语义 | ✅ 接受 | `tts_started.cursor=null`、`estimated=true`、`tts_alignment=false`；`tts_sentence/tts_completed` 带 `estimated=true`；事件 `TTSStarted` 带 `tts_alignment=false`。UI 标“估算”，D 可据此过滤 RSI 归因 |
 
-**代码验证**：20 tests passed；WS 实测 `tts_started → tts_sentence → tts_completed → compliance → turn_result → session_ended`；`transport_degraded → transport_switched`；`client_event` 白名单拒绝未授权事件。
+**代码验证**：21 tests passed；WS 实测 `tts_started → tts_sentence → tts_completed → compliance → turn_result → session_ended`；`transport_degraded → transport_switched`；`client_event` 白名单拒绝未授权事件。
 
 > C2 的“真实 VAD 首帧”仍要 cx 在 W2 接麦克风后实现；当前手动打断按钮只用于联调，不用于官方 `b3-b0` 指标。
 
