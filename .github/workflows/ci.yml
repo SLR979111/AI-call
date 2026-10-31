@@ -52,6 +52,7 @@ jobs:
           node test/golden-replay.mjs
           node test/pcm-path.mjs
           node test/uplink-file.mjs
+          node test/barge.mjs
 
       - name: Headless WebSocket E2E
         env:
