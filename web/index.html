@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3ede2">
+  <meta name="description" content="智语外呼 Fake 骨架：纯前端文本对话与语音播报演示。">
+  <title>智语外呼 · Fake 骨架</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body data-connection="idle">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="brand-copy">
+          <p class="eyebrow">VOICE AGENT / LOCAL DEMO</p>
+          <h1>智语外呼 <span class="title-dot">·</span> Fake 骨架</h1>
+          <p class="subtitle">文本输入驱动外呼链路，本地语音播报，实时查看会话状态。</p>
+        </div>
+      </div>
+
+      <div class="connection-pill" id="connectionPill" data-state="idle" role="status" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span class="connection-copy">
+          <span class="connection-label">连接状态</span>
+          <strong id="connectionText">未连接</strong>
+        </span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel conversation" aria-labelledby="conversationTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="section-kicker">DIALOGUE</p>
+            <h2 id="conversationTitle">对话区</h2>
+          </div>
+          <div class="session-meta" id="sessionMeta" hidden>
+            <span class="session-label">SESSION</span>
+            <code id="sessionShort">—</code>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button class="btn btn-primary" id="startBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6.9 3.6 9.2 3l1.9 4.3-2 1.4a12.6 12.6 0 0 0 5.2 5.2l1.4-2L20 13.8l-.6 2.3a2.2 2.2 0 0 1-2.4 1.6A16.5 16.5 0 0 1 5.3 6a2.2 2.2 0 0 1 1.6-2.4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+              <path d="M15.5 4.5c1.1.4 2 1.3 2.4 2.4M16 8c.4.2.8.6 1 1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+            <span id="startBtnText">发起会话</span>
+          </button>
+
+          <button class="btn btn-barge" id="bargeBtn" type="button" disabled>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="8.3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+              <rect x="9" y="9" width="6" height="6" rx="1.2" fill="currentColor"/>
+            </svg>
+            <span>打断</span>
+          </button>
+
+          <div class="mute-badge" id="muteBadge" hidden role="status">
+            <span class="mute-dot" aria-hidden="true"></span>
+            已本地静音
+          </div>
+        </div>
+
+        <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="对话记录">
+          <div class="empty-state" id="emptyState">
+            <div class="empty-wave" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <p class="empty-title">准备开始一通演示</p>
+            <p class="empty-copy">点击「发起会话」创建文本模式会话，<br>然后在下方输入用户话术。</p>
+          </div>
+        </div>
+
+        <form class="composer" id="composer" novalidate>
+          <label class="sr-only" for="messageInput">用户话术</label>
+          <input
+            class="message-input"
+            id="messageInput"
+            name="message"
+            type="text"
+            maxlength="500"
+            autocomplete="off"
+            placeholder="输入用户要说的话，按 Enter 发送…"
+            disabled
+          >
+          <button class="btn btn-send" id="sendBtn" type="submit" disabled>
+            <span>发送</span>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m4 12 15-7-4.8 14-2.9-5.2L4 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+              <path d="m11.3 13.7 3.8-4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </form>
+      </section>
+
+      <aside class="rail" aria-label="会话状态与事件">
+        <section class="panel state-panel" aria-labelledby="stateTitle">
+          <div class="panel-heading panel-heading--compact">
+            <div>
+              <p class="section-kicker">RUN STATE</p>
+              <h2 id="stateTitle">状态面板</h2>
+            </div>
+            <span class="live-tag" id="liveTag">IDLE</span>
+          </div>
+
+          <div class="state-grid">
+            <div class="state-cell">
+              <span class="state-key">turn_state</span>
+              <strong class="state-value" id="turnState">—</strong>
+            </div>
+            <div class="state-cell">
+              <span class="state-key">flow_state</span>
+              <strong class="state-value" id="flowState">—</strong>
+            </div>
+          </div>
+
+          <div class="turn-row">
+            <span class="state-key">turn_id</span>
+            <code id="turnId">—</code>
+          </div>
+
+          <div class="slots-block">
+            <div class="slots-heading">
+              <span class="state-key">slots</span>
+              <span id="slotCount">0 项</span>
+            </div>
+            <div class="slot-list" id="slotsList">
+              <p class="slot-empty">暂无槽位</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel events-panel" aria-labelledby="eventsTitle">
+          <details class="event-details" id="eventDetails" open>
+            <summary class="event-summary">
+              <span class="summary-heading">
+                <span class="section-kicker">EVENT STREAM</span>
+                <span class="summary-title" id="eventsTitle">事件日志</span>
+              </span>
+              <span class="summary-meta">
+                <span class="event-count" id="eventCount">0 / 50</span>
+                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+            </summary>
+
+            <div class="events-toolbar">
+              <span>入站 ↓ · 出站 ↑ · 最近 50 条</span>
+              <button class="text-button" id="clearLogBtn" type="button">清空</button>
+            </div>
+
+            <div class="event-log" id="eventLog" aria-live="polite">
+              <p class="event-empty" id="eventEmpty">等待连接事件…</p>
+            </div>
+          </details>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span>Fake 骨架 · 纯 HTML / CSS / JS · 无外部依赖</span>
+      <span>本地语音合成 · 自动重连 2 次</span>
+    </footer>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="assertive" aria-atomic="true"></div>
+
+  <noscript>
+    <p class="noscript">此演示需要启用 JavaScript。</p>
+  </noscript>
+</body>
+</html>

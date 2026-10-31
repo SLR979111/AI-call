@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicall.local/contracts/schemas/agent_chunk.v1.json",
+  "title": "AgentChunk v1.0",
+  "description": "Union type produced by Agent.handle(): sentence | transfer | end | error.",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "kind": { "type": "string", "enum": ["sentence", "transfer", "end", "error"] }
+  },
+  "oneOf": [
+    {
+      "title": "sentence",
+      "properties": {
+        "kind": { "const": "sentence" },
+        "reply_id": { "type": "string", "minLength": 1 },
+        "sentence_id": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" },
+        "final": { "type": "boolean" }
+      },
+      "required": ["kind", "reply_id", "sentence_id", "text", "final"]
+    },
+    {
+      "title": "transfer",
+      "properties": {
+        "kind": { "const": "transfer" },
+        "reply_id": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string" },
+        "queue": { "type": "string" },
+        "summary": { "type": "string" }
+      },
+      "required": ["kind", "reply_id", "reason", "queue"]
+    },
+    {
+      "title": "end",
+      "properties": {
+        "kind": { "const": "end" },
+        "reply_id": { "type": "string", "minLength": 1 },
+        "outcome": { "type": "string" },
+        "result": { "type": "object" },
+        "slots": { "type": "object" }
+      },
+      "required": ["kind", "reply_id", "outcome", "result"]
+    },
+    {
+      "title": "error",
+      "properties": {
+        "kind": { "const": "error" },
+        "reply_id": { "type": "string", "minLength": 1 },
+        "error": {
+          "type": "object",
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "retryable": { "type": "boolean" },
+            "severity": { "type": "string", "enum": ["info", "warn", "error", "fatal"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "required": ["kind", "reply_id", "error"]
+    }
+  ],
+  "additionalProperties": true
+}

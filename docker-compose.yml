@@ -1,0 +1,69 @@
+# Fake-skeleton stack for the competition runtime: CPU-only x86_64, 8C/16GB,
+# Docker Compose, no GPU and no external tunnel.
+#
+# Requires Docker Compose v2.24+ for the optional env_file entry. On an older
+# Compose, copy .env.example to .env first and drop `required: false`.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aicall-app:local
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # The bind mount lives at /app/data regardless of DATA_DIR in .env.
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 10s
+
+# ---------------------------------------------------------------------------
+# Placeholders for later milestones. None of these are started by the fake
+# skeleton; uncomment when the integration branch needs them.
+#
+# WebRTC media plane (W2, docs/05 + docs/09):
+#   livekit:
+#     image: livekit/livekit-server:v1.8
+#     command: --dev --bind 0.0.0.0
+#     ports:
+#       - "7880:7880"
+#       - "7881:7881"
+#       - "7882:7882/udp"
+#     restart: unless-stopped
+#
+# CPU ASR/TTS services (docs/09); each image bakes in its own model:
+#   asr:
+#     image: aicall-asr:local
+#     ports:
+#       - "10095:10095"
+#     restart: unless-stopped
+#   tts:
+#     image: aicall-tts:local
+#     ports:
+#       - "9880:9880"
+#     restart: unless-stopped
+#
+# GPU override (development only; the delivery target has no GPU):
+#   deploy:
+#     resources:
+#       reservations:
+#         devices:
+#           - driver: nvidia
+#             count: 1
+#             capabilities: [gpu]

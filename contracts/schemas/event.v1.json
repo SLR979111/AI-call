@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicall.local/contracts/schemas/event.v1.json",
+  "title": "AICall event envelope v1.0",
+  "description": "Append-only session event. Session-level events may omit turn_id/trace_id.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "seq",
+    "type",
+    "ts",
+    "ts_mono_ms",
+    "clock_id",
+    "session_id",
+    "module",
+    "release_id",
+    "mode",
+    "payload",
+    "ok",
+    "error"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "pattern": "^1\\.[0-9]+$" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "minLength": 1, "pattern": "^[A-Z][A-Za-z0-9]*$" },
+    "ts": { "type": "string", "format": "date-time" },
+    "ts_mono_ms": { "type": "number" },
+    "clock_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "turn_id": { "type": ["string", "null"] },
+    "trace_id": { "type": ["string", "null"] },
+    "span_id": { "type": ["string", "null"] },
+    "parent_span_id": { "type": ["string", "null"] },
+    "module": { "type": "string", "minLength": 1 },
+    "release_id": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["voice", "text", "eval"] },
+    "payload": { "type": "object", "additionalProperties": true },
+    "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+    "ok": { "type": "boolean" },
+    "error": { "type": ["object", "null"], "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": { "properties": { "ok": { "const": false } }, "required": ["ok"] },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message", "retryable"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "retryable": { "type": "boolean" },
+              "severity": { "type": "string", "enum": ["info", "warn", "error", "fatal"] },
+              "user_message": { "type": "string" },
+              "fallback": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  ]
+}

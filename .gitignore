@@ -1,0 +1,50 @@
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+ENV/
+.deps/
+.uvcache/
+.uvpython/
+.uvdata/
+.tmp/
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Tooling caches and coverage
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.benchmarks/
+
+# Runtime data and generated artifacts (SQLite, JSONL event logs, reports)
+data/
+logs/
+artifacts/
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+# IDE / OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

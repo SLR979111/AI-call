@@ -1,0 +1,51 @@
+# Version control / CI
+.git
+.gitignore
+.github
+
+# Python environments and caches
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+htmlcov
+build
+dist
+*.egg-info
+*.egg-info/**
+
+# Secrets and local overrides (never bake .env into an image)
+.env
+.env.*
+!.env.example
+
+# Runtime data (bind-mounted in compose) and generated artifacts
+data
+logs
+artifacts
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+# Material that is not needed inside the runtime image
+docs
+tests
+scripts
+Makefile
+docker-compose.yml
+README.md
+*.pdf
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea
+.vscode

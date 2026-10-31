@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicall.local/contracts/schemas/tool_request.v1.json",
+  "title": "ToolRequest v1.0",
+  "description": "Body of POST /internal/tools/{tool}/invoke (interface D).",
+  "type": "object",
+  "required": ["args"],
+  "properties": {
+    "args": { "type": "object", "additionalProperties": true },
+    "idempotency_key": { "type": ["string", "null"] },
+    "deadline_ms": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": true
+}
