@@ -165,12 +165,7 @@ async def media_status(request: Request) -> dict[str, Any]:
             "url": os.getenv("LIVEKIT_URL", "") if configured else ""}
 
 
-@app.post("/sessions/{session_id}/rtc")
-async def rtc_token(request: Request, session_id: str) -> dict[str, Any]:
-    try:
-        _orc(request).get_session(session_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="session not found")
+def _rtc_payload(session_id: str) -> dict[str, Any]:
     url = os.getenv("LIVEKIT_URL", "").strip()
     key = os.getenv("LIVEKIT_API_KEY", "").strip()
     secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
@@ -182,6 +177,26 @@ async def rtc_token(request: Request, session_id: str) -> dict[str, Any]:
     room = f"aicall-{session_id}"
     token = create_livekit_token(key, secret, session_id, room)
     return {"provider": "livekit", "url": url, "room": room, "token": token}
+
+
+@app.post("/sessions/{session_id}/rtc")
+async def rtc_token(request: Request, session_id: str) -> dict[str, Any]:
+    try:
+        _orc(request).get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+    return _rtc_payload(session_id)
+
+
+@app.post("/sessions/{session_id}/token")
+async def refresh_token(request: Request, session_id: str) -> dict[str, Any]:
+    try:
+        session = _orc(request).get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+    session.token = secrets.token_urlsafe(16)
+    return {"session_id": session_id, "token": session.token,
+            "ws_url": f"/ws/session/{session_id}"}
 
 
 @app.get("/healthz")
@@ -459,6 +474,15 @@ async def registry_rollback(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+async def request_bus_emit(websocket: WebSocket, session_id: str, event_type: str,
+                            module: str, payload: dict[str, Any]) -> None:
+    if not event_type or not event_type[0].isupper():
+        event_type = "ClientEvent"
+    await websocket.app.state.bus.emit(
+        session_id=session_id, type=event_type, module=module, payload=payload,
+    )
+
+
 @app.websocket("/ws/session/{session_id}")
 async def ws_session(websocket: WebSocket, session_id: str) -> None:
     orc: Orchestrator = websocket.app.state.orchestrator
@@ -467,6 +491,12 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     except KeyError:
         await websocket.close(code=4404)
         return
+
+    if not settings.dev_no_auth:
+        token = websocket.query_params.get("token", "")
+        if token != session.token:
+            await websocket.close(code=4401)
+            return
 
     await websocket.accept()
     conn = WsConnection(websocket)
@@ -480,14 +510,59 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
 
     try:
         while True:
-            msg = await websocket.receive_json()
+            event = await websocket.receive()
+            if "bytes" in event and event["bytes"] is not None:
+                # WS PCM fallback: frame parsing/ASR is a W2 adapter concern.
+                session.audio_frames += 1
+                continue
+            raw = event.get("text")
+            if raw is None:
+                continue
+            msg = json.loads(raw)
             kind = msg.get("type")
             if kind == "hello":
-                await conn.send_json({"type": "hello_ack", "session_id": session_id})
+                await conn.send_json({
+                    "type": "hello_ack", "session_id": session_id,
+                    "protocol_version": "0.2", "server_version": "0.2.0",
+                    "transport": session.transport,
+                })
             elif kind == "text":
                 spawn(orc.handle_text(session_id, str(msg.get("text", "")), conn))
-            elif kind in {"speech_started", "local_muted", "playback_first_frame", "ping"}:
+            elif kind in {"speech_started", "local_muted", "playback_first_frame",
+                          "playback_ended", "ping"}:
                 await orc.on_client_event(session_id, msg)
+            elif kind == "hangup":
+                await orc.end_session(session_id, str(msg.get("reason", "user_click")))
+                break
+            elif kind == "media_request":
+                try:
+                    payload = _rtc_payload(session_id)
+                    await conn.send_json({"type": "media_ready", **payload})
+                except HTTPException as exc:
+                    await conn.send_json({"type": "error", "error": {
+                        "code": "MEDIA_NOT_CONFIGURED", "message": str(exc.detail),
+                        "retryable": False}})
+            elif kind == "transport_degraded":
+                reason = str(msg.get("reason", "unknown"))
+                target = str(msg.get("to", "ws_pcm"))
+                await request_bus_emit(websocket, session_id, "Degraded", "media", {
+                    "component": "media", "from": msg.get("from", "webrtc"),
+                    "to": target, "reason": reason, "stats": msg.get("stats", {}),
+                })
+                if target == "text_only":
+                    await conn.send_json({"type": "transport_failed", "reason": reason,
+                                          "fallback": "text_only"})
+                else:
+                    session.transport = target
+                    await conn.send_json({"type": "transport_switched", "to": target,
+                                          "audio": {"uplink": "pcm16/16000",
+                                                    "downlink": "pcm16/24000"}})
+            elif kind == "client_event":
+                name = str(msg.get("name", "ClientEvent"))
+                await request_bus_emit(websocket, session_id, name, "client", {
+                    "name": name, "payload": msg.get("payload", {}),
+                    "client_mono_ms": msg.get("client_mono_ms"),
+                })
             else:
                 await conn.send_json({"type": "error", "error": {
                     "code": "UNKNOWN_MESSAGE", "message": f"unknown type {kind}", "retryable": False}})

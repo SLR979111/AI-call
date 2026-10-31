@@ -1,7 +1,7 @@
 # 智语外呼 · 架构工作台
 
 > 语音外呼客服数字员工：实时语音交互 + 任务型 Agent + RSI 自进化
-> 当前阶段：**W1 契约周**。目标不是写功能，是让四个人的代码跑在同一条会话里。
+> 当前阶段：**W2 模块补齐 / 契约 v0.2 待 cx 复签**。目标不是写功能，是让四个人的代码跑在同一条会话里。
 
 ---
 
@@ -29,6 +29,7 @@
 | [`08-submission-package.md`](08-submission-package.md) | 官方提交物拆解、评分证据、W1–W3 生产计划、视频/答辩脚本、合规红线 | **待执行** |
 | [`09-delivery-runtime.md`](09-delivery-runtime.md) | 交付 Docker：CPU-only 目标环境、sherpa-onnx 语音、模型打包、Compose、HTTPS/WebRTC、离线降级 | **交付主路径** |
 | [`10-master-summary.md`](10-master-summary.md) | 总汇总：整体架构、API 速查、团队工作清单、天命个人清单、里程碑 | **先看这个** |
+| [`11-contract-v0.2-patch.md`](11-contract-v0.2-patch.md) | 回应 cx 评审：G1–G9 补丁、12 条消息、枚举/鉴权/降级/b3 | **v0.2 生效口径** |
 | [`contracts-signoff.md`](contracts-signoff.md) | 契约会签表、自动检查命令、已确认事实 | 待四位 owner 签字 |
 | [`../README.md`](../README.md) | 代码骨架：本地运行、测试、Docker、端点 | ✅ Fake 骨架可跑 |
 

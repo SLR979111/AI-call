@@ -364,3 +364,52 @@ async def test_llm_agent_tool_path():
     assert "ProviderCalled" in types
     assert "ToolCalled" in types
     assert "ToolReturned" in types
+
+
+def test_ws_tts_metadata_turn_result_and_hangup():
+    with TestClient(app) as client:
+        created = client.post("/sessions", json={"mode": "text"}).json()
+        sid = created["session_id"]
+        with client.websocket_connect(f"/ws/session/{sid}") as ws:
+            ready = ws.receive_json()
+            assert ready["type"] == "session_ready"
+            assert ready["protocol_version"] == "0.2"
+            assert ready["tts_alignment"] is False
+            assert ws.receive_json()["type"] == "state"
+
+            ws.send_json({"type": "transport_degraded", "from": "webrtc",
+                          "to": "ws_pcm", "reason": "ice_failed"})
+            assert ws.receive_json()["type"] == "transport_switched"
+            ws.send_json({"type": "media_request"})
+            media = ws.receive_json()
+            assert media["type"] == "error"
+            assert media["error"]["code"] == "MEDIA_NOT_CONFIGURED"
+
+            ws.send_json({"type": "text", "text": "退款多久能到账"})
+            seen: list[str] = []
+            sent_first = False
+            for _ in range(40):
+                msg = ws.receive_json()
+                seen.append(msg["type"])
+                if msg["type"] == "agent_text" and not sent_first:
+                    ws.send_json({
+                        "type": "playback_first_frame", "turn_id": msg["turn_id"],
+                        "reply_id": msg["reply_id"], "client_mono_ms": 1.0,
+                        "audio_ctx_time": 0.1,
+                    })
+                    sent_first = True
+                if msg["type"] == "turn_result":
+                    break
+            for expected in ("tts_started", "tts_sentence", "tts_completed",
+                             "compliance", "turn_result"):
+                assert expected in seen, (expected, seen)
+
+            ws.send_json({"type": "hangup", "reason": "user_click"})
+            ended = None
+            for _ in range(10):
+                msg = ws.receive_json()
+                if msg["type"] == "session_ended":
+                    ended = msg
+                    break
+            assert ended is not None
+            assert ended["reason"] == "user_click"

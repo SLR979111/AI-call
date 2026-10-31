@@ -34,10 +34,19 @@ python -m pytest tests/test_contract.py -q
 - LLM Router 支持主/备、超时、熔断、预算；无 Key 返回 `LLM_NOT_CONFIGURED`。
 - `AGENT_PROVIDER=llm` 时走 `LLMAgent`（JSON 决策 + ToolClient），默认仍为 Fake。
 - RAG 检索、Flow Pack、LiveKit Token 边界已落地（真实模型/媒体服务待接）。
-- 契约测试：4 个 fixture / 47 条事件通过 schema；17 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow、LLMAgent）。
+- 契约测试：4 个 fixture / 47 条事件通过 schema；18 个测试通过（含打断、合规、幂等、超时、Registry、LLM、RAG、Flow、LLMAgent、WS 元数据/挂断）。
+- v0.2 补丁（回应 cx 评审）：[11-contract-v0.2-patch.md](11-contract-v0.2-patch.md)；G1–G8 已给协议与代码入口，G9 已解决。
 
 ## 4. 变更记录
 
 | 日期 | 版本 | 变更 | 影响 |
 |---|---|---|---|
 | 2026-10-31 | v0.1 | 初始契约与 Fake 骨架 | 全部模块 |
+| 2026-10-31 | v0.2 | 补 G1–G9：音频帧/媒体信令/TTS 元数据/降级/挂断/鉴权/枚举/b3 | 全部模块 |
+
+## 5. cx 评审结论（v0.2）
+
+> cx：有条件同意会签。
+> 生效条件：v0.2 补齐 G1–G8；G9 已通过最新仓库解决。
+> 未完成但已明确：G3 真实 TTS 时间轴、G11 缓冲恢复、G14 工具进度、G20 AEC 能力 → W2 实现，不阻塞 W1 前端开工。
+> 前端承诺：命名对齐 03/04，不私自定义对方可接受但契约没有的字段。

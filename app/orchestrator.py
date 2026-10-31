@@ -33,6 +33,10 @@ class TurnRuntime:
     t: dict[str, float] = field(default_factory=dict)
     t9: float | None = None
     playback: asyncio.Event = field(default_factory=asyncio.Event)
+    tts_cursor_ms: float = 0.0
+    tts_started_sent: bool = False
+    char_cursor: int = 0
+    barge_in_stop_ms: float | None = None
 
 
 @dataclass
@@ -50,6 +54,9 @@ class SessionState:
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     done: asyncio.Event = field(default_factory=asyncio.Event)
     ws: Connection | None = None
+    transport: str = "ws_pcm"
+    started_mono_ms: float = field(default_factory=now_ms)
+    audio_frames: int = 0
 
     def __post_init__(self) -> None:
         self.done.set()
@@ -115,6 +122,15 @@ class Orchestrator:
             "session_id": session_id,
             "version_set": session.version_set,
             "ice_servers": [],
+            "protocol_version": "0.2",
+            "server_version": "0.2.0",
+            "transport": session.transport,
+            "tts_alignment": False,
+            "timeouts": {
+                "listening_silence_ms": 10000,
+                "session_max_ms": 600000,
+                "wrapup_ms": 3000,
+            },
         })
         await self._send_state(session)
 
@@ -122,12 +138,23 @@ class Orchestrator:
         session = self.get_session(session_id)
         if session.current_turn:
             await self.cancel_current(session_id, "SESSION_END")
+            try:
+                await asyncio.wait_for(session.done.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
         await self.bus.emit(
             session_id=session_id, type="SessionEnded", module="orchestrator",
             payload={"reason": reason, "turns": session.turn_seq},
         )
         session.turn_state = "ENDED"
         await self._send_state(session)
+        if session.ws:
+            await session.ws.send_json({
+                "type": "session_ended",
+                "reason": reason,
+                "duration_ms": round(now_ms() - session.started_mono_ms, 2),
+                "turns": session.turn_seq,
+            })
 
     # ---- client events ----
     async def on_client_event(self, session_id: str, msg: dict[str, Any]) -> None:
@@ -140,10 +167,29 @@ class Orchestrator:
             )
             await self.cancel_current(session_id, "BARGE_IN")
         elif kind == "local_muted":
+            turn = session.current_turn
+            if turn:
+                stop_latency = msg.get("stop_latency_ms")
+                if isinstance(stop_latency, (int, float)):
+                    turn.barge_in_stop_ms = float(stop_latency)
             await self.bus.emit(
                 session_id=session_id, type="ClientLocalMuted", module="client",
-                turn_id=msg.get("turn_id"), payload={k: msg.get(k) for k in ("client_mono_ms", "reason")},
+                turn_id=msg.get("turn_id"),
+                payload={k: msg.get(k) for k in (
+                    "client_mono_ms", "reason", "played_ms", "sentence_id",
+                    "char_idx", "last_frame_played_mono_ms", "stop_latency_ms",
+                )},
             )
+            if turn and isinstance(msg.get("stop_latency_ms"), (int, float)):
+                await self.bus.emit(
+                    session_id=session_id, type="BargeInConfirmed", module="client",
+                    turn_id=turn.turn_id, latency_ms=float(msg["stop_latency_ms"]),
+                    payload={"stop_latency_ms": float(msg["stop_latency_ms"]),
+                             "played_ms": msg.get("played_ms"),
+                             "sentence_id": msg.get("sentence_id"),
+                             "char_idx": msg.get("char_idx"),
+                             "b3_mono_ms": msg.get("last_frame_played_mono_ms")},
+                )
         elif kind == "playback_first_frame":
             turn = session.current_turn
             if turn and (not msg.get("turn_id") or msg["turn_id"] == turn.turn_id):
@@ -158,9 +204,22 @@ class Orchestrator:
                         "reply_id": turn.reply_id,
                     },
                 )
+        elif kind == "playback_ended":
+            await self.bus.emit(
+                session_id=session_id, type="PlaybackEnded", module="client",
+                turn_id=msg.get("turn_id"),
+                payload={"client_mono_ms": msg.get("client_mono_ms"),
+                         "played_ms": msg.get("played_ms")},
+            )
         elif kind == "ping":
             if session.ws:
-                await session.ws.send_json({"type": "pong", "t": msg.get("t"), "server_mono_ms": now_ms()})
+                await session.ws.send_json({
+                    "type": "pong",
+                    "t": msg.get("t"),
+                    "client_mono_ms": msg.get("client_mono_ms"),
+                    "server_rx_mono_ms": now_ms(),
+                    "server_tx_mono_ms": now_ms(),
+                })
 
     async def cancel_current(self, session_id: str, reason: str = "BARGE_IN") -> bool:
         session = self.get_session(session_id)
@@ -265,6 +324,7 @@ class Orchestrator:
                                 latency_ms=round(turn.t["t4"] - turn.t["t3"], 2), payload={},
                             )
                         text_out = str(chunk.get("text", ""))
+                        original_text = text_out
                         if "t5" not in turn.t:
                             turn.t["t5"] = now_ms()
                         guard = await self.compliance.check_sentence(text_out, {"turn_id": turn.turn_id})
@@ -275,6 +335,17 @@ class Orchestrator:
                             payload={"scope": "sentence", "decision": guard.decision,
                                      "rule_ids": guard.rule_ids, "text": text_out},
                         )
+                        if session.ws:
+                            await session.ws.send_json({
+                                "type": "compliance",
+                                "turn_id": turn.turn_id,
+                                "scope": "sentence",
+                                "decision": guard.decision,
+                                "rule_ids": guard.rule_ids,
+                                "before": original_text,
+                                "after": guard.text,
+                                "severity": guard.severity,
+                            })
                         if "t6" not in turn.t:
                             turn.t["t6"] = now_ms()
                         if guard.decision == REWRITE:
@@ -345,6 +416,14 @@ class Orchestrator:
                         session_id=session_id, type="TTSCompleted", module="voice.tts",
                         turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"chunks": len(sentences)},
                     )
+                    if session.ws and turn.tts_started_sent:
+                        await session.ws.send_json({
+                            "type": "tts_completed",
+                            "turn_id": turn.turn_id,
+                            "reply_id": turn.reply_id,
+                            "total_ms": round(turn.tts_cursor_ms, 2),
+                            "interrupted": False,
+                        })
                 if result is None:
                     result = {"outcome": "completed", "slots": session.slots}
 
@@ -387,6 +466,14 @@ class Orchestrator:
                     turn_id=turn.turn_id, trace_id=turn.trace_id,
                     payload={"reason": turn.cancel.reason(), "last_state": session.turn_state},
                 )
+                if session.ws and turn.tts_started_sent:
+                    await session.ws.send_json({
+                        "type": "tts_completed",
+                        "turn_id": turn.turn_id,
+                        "reply_id": turn.reply_id,
+                        "total_ms": round(turn.tts_cursor_ms, 2),
+                        "interrupted": True,
+                    })
                 session.turn_state = "LISTENING"
                 await self._send_state(session)
                 return {"turn_id": turn.turn_id, "aborted": True, "reason": turn.cancel.reason()}
@@ -420,6 +507,35 @@ class Orchestrator:
             )
             turn.t["t7"] = now_ms()
         session.turn_state = "SPEAKING"
+        start_ms = turn.tts_cursor_ms
+        duration_ms = max(600.0, len(text) * 180.0)
+        end_ms = start_ms + duration_ms
+        if session.ws:
+            if not turn.tts_started_sent:
+                await session.ws.send_json({
+                    "type": "tts_started",
+                    "turn_id": turn.turn_id,
+                    "reply_id": turn.reply_id,
+                    "sample_rate": 24000,
+                    "channels": 1,
+                    "tts_alignment": False,
+                    "sentences": [],
+                })
+                turn.tts_started_sent = True
+            await session.ws.send_json({
+                "type": "tts_sentence",
+                "turn_id": turn.turn_id,
+                "reply_id": turn.reply_id,
+                "sentence_id": sentence_no,
+                "text": text,
+                "start_ms": round(start_ms, 2),
+                "end_ms": round(end_ms, 2),
+                "char_start": turn.char_cursor,
+                "char_end": turn.char_cursor + len(text),
+                "is_last": final,
+            })
+        turn.tts_cursor_ms = end_ms + 120.0
+        turn.char_cursor += len(text)
         if session.ws:
             await session.ws.send_json({
                 "type": "agent_text", "turn_id": turn.turn_id, "reply_id": turn.reply_id,
@@ -441,6 +557,7 @@ class Orchestrator:
     async def _send_turn_end(self, session: SessionState, turn: TurnRuntime, result: dict[str, Any]) -> None:
         if session.ws:
             await session.ws.send_json({"type": "turn_end", "turn_id": turn.turn_id, "result": result})
+            await session.ws.send_json({"type": "turn_result", "turn_id": turn.turn_id, "result": result})
 
     async def _emit_turn_latency(self, session: SessionState, turn: TurnRuntime) -> None:
         t = turn.t
@@ -458,6 +575,7 @@ class Orchestrator:
                 "t8_first_downlink_ms": t.get("t8"), "t9_first_playback_ms": t9,
                 "e2e_ms": round(e2e, 2), "e2e_official_proxy_ms": round(official, 2),
                 "vad_to_playback_ms": round(official, 2), "clock_offset_ms": 0.0,
-                "clock_suspect": False, "barge_in_stop_ms": None,
+                "clock_suspect": False, "barge_in_stop_ms": turn.barge_in_stop_ms,
+                "t0_client_ms": None, "t0_vad_ms": t.get("t0"),
             },
         )

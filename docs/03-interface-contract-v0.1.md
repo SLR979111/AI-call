@@ -1,5 +1,7 @@
 # 03 · Interface Contract v0.1（契约包）
 
+> **v0.2 补丁（回应 cx 评审）见 [11-contract-v0.2-patch.md](11-contract-v0.2-patch.md)**；W1/W2 实现以该文为准，本文保留 v0.1 基线。
+>
 > Owner：天命（架构/集成）
 > 会签：SinCircle（语音）、pseudonym（Agent）、湖中日月（评测）、cx（前端）
 > 状态：**待会签**。会签后冻结 2 周；任何破坏性修改需提前 24h 通知并升版本。
