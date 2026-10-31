@@ -396,8 +396,7 @@ class CancelToken:
 
 ```text
 ┌───────────────────────── Docker Compose ─────────────────────────┐
-│  web        Nginx + 静态前端（M10）                  :3000        │
-│  app        FastAPI + asyncio 编排器/Agent/合规      :8080        │
+│  web+app    FastAPI + 静态前端（M10）              :8081        │
 │  livekit    媒体服务器（M1）                    :7880/:7881/udp   │
 │  asr*       FunASR runtime（可选，本地）             :10095       │
 │  tts*       CosyVoice runtime（可选，本地）          :9880        │

@@ -53,8 +53,8 @@
 
 | 服务 | 作用 | 端口 | 内存预算 | 备注 |
 |---|---|---|---|---|
-| `web` | Nginx + 静态前端 | 3000 | <100MB | 也可由 app 托管 |
-| `app` | FastAPI + Orchestrator/Agent/Tool/Compliance | 8080 | 300–500MB | 单进程 asyncio |
+| `web` | 静态前端（由 app 托管） | 8081（宿主） | <100MB | 容器内 app 8080，compose 映射 8081:8080 |
+| `app` | FastAPI + Orchestrator/Agent/Tool/Compliance | 8081（宿主） | 300–500MB | 单进程 asyncio |
 | `livekit` | WebRTC 媒体 | 7880/7881/7882 udp | 200–400MB | 自带 TURN 可选 |
 | `coturn` | TURN 兜底 | 3478/5349 | <100MB | 网络严格时必需 |
 | `asr` | sherpa-onnx 流式 ASR | 10095 | 500MB–1GB | CPU |
@@ -147,14 +147,14 @@ docker compose --profile dev up -d
 
 | 访问方式 | 麦克风 | 结论 |
 |---|---|---|
-| `http://localhost:3000` | ✅ | 浏览器与 Docker 同机时首选 |
-| `http://127.0.0.1:3000` | ✅ | 同上 |
-| `http://192.168.x.x:3000` | ❌ | 局域网另一台会被拒 |
+| `http://localhost:8081` | ✅ | 浏览器与 Docker 同机时首选 |
+| `http://127.0.0.1:8081` | ✅ | 同上 |
+| `http://192.168.x.x:8081` | ❌ | 局域网另一台会被拒 |
 | `https://...`（自签） | ✅（接受警告后） | 评委设备访问时用 |
 
 **建议**：
 
-1. 默认让评委在**运行 Docker 的同一台机器**上打开 `http://localhost:3000`。
+1. 默认让评委在**运行 Docker 的同一台机器**上打开 `http://localhost:8081`。
 2. 若必须用另一台设备：提供 Caddy/Nginx 自签 HTTPS + 一页说明；提前测浏览器是否接受。
 3. WebRTC：同机用 host 候选；跨机用 TURN；`LIVEKIT_URL` 按 `ws://`/`wss://` 配置。
 4. Docker NAT：Linux 可用 host network 简化；Docker Desktop 需端口映射 + TURN。
@@ -189,7 +189,7 @@ cp .env.example .env && vi .env
 docker compose --profile cpu up -d
 ./scripts/healthcheck.sh
 ./scripts/smoke.sh          # 文本 1 轮 + 语音 1 轮（可选）
-open http://localhost:3000
+open http://localhost:8081
 ```
 
 | 验收 | 标准 |

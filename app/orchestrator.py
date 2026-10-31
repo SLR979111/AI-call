@@ -178,6 +178,7 @@ class Orchestrator:
                 payload={k: msg.get(k) for k in (
                     "client_mono_ms", "reason", "played_ms", "sentence_id",
                     "char_idx", "last_frame_played_mono_ms", "stop_latency_ms",
+                    "b0_mono_ms",
                 )},
             )
             if turn and isinstance(msg.get("stop_latency_ms"), (int, float)):
@@ -423,6 +424,7 @@ class Orchestrator:
                             "reply_id": turn.reply_id,
                             "total_ms": round(turn.tts_cursor_ms, 2),
                             "interrupted": False,
+                            "estimated": True,
                         })
                 if result is None:
                     result = {"outcome": "completed", "slots": session.slots}
@@ -473,6 +475,7 @@ class Orchestrator:
                         "reply_id": turn.reply_id,
                         "total_ms": round(turn.tts_cursor_ms, 2),
                         "interrupted": True,
+                        "estimated": True,
                     })
                 session.turn_state = "LISTENING"
                 await self._send_state(session)
@@ -497,7 +500,9 @@ class Orchestrator:
             await self.bus.emit(
                 session_id=session.session_id, type="TTSStarted", module="voice.tts",
                 turn_id=turn.turn_id, trace_id=turn.trace_id,
-                payload={"reply_id": turn.reply_id, "sentence_id": sentence_no, "text_hash": str(hash(text))},
+                payload={"reply_id": turn.reply_id, "sentence_id": sentence_no,
+                         "text_hash": str(hash(text)), "tts_alignment": False,
+                         "estimated": True},
             )
             await self.bus.emit(
                 session_id=session.session_id, type="TTSFirstChunk", module="voice.tts",
@@ -519,6 +524,8 @@ class Orchestrator:
                     "sample_rate": 24000,
                     "channels": 1,
                     "tts_alignment": False,
+                    "estimated": True,
+                    "cursor": None,
                     "sentences": [],
                 })
                 turn.tts_started_sent = True
@@ -533,6 +540,7 @@ class Orchestrator:
                 "char_start": turn.char_cursor,
                 "char_end": turn.char_cursor + len(text),
                 "is_last": final,
+                "estimated": True,
             })
         turn.tts_cursor_ms = end_ms + 120.0
         turn.char_cursor += len(text)

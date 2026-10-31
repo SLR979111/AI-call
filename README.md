@@ -25,7 +25,7 @@ contracts and milestone plans live in [docs/](docs/) (start with
 python -m venv .venv
 source .venv/bin/activate        # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8080
+uvicorn app.main:app --reload --port 8081
 ```
 
 The defaults in `app/config.py` match [.env.example](.env.example), so no
@@ -41,9 +41,9 @@ make run
 
 Then open:
 
-- Demo UI: <http://localhost:8080/>
-- Health: <http://localhost:8080/healthz>
-- OpenAPI: <http://localhost:8080/docs>
+- Demo UI: <http://localhost:8081/>
+- Health: <http://localhost:8081/healthz>
+- OpenAPI: <http://localhost:8081/docs>
 
 ### Troubleshooting: WebSocket 404
 
@@ -51,25 +51,42 @@ If uvicorn logs `No supported WebSocket library detected` (seen with
 `websockets` 16.x), install `requirements.txt` (it pins `<16`) or start with:
 
 ```bash
-uvicorn app.main:app --ws websockets-sansio --port 8080
+uvicorn app.main:app --ws websockets-sansio --port 8081
 ```
 
 ### One text turn with curl
 
 ```bash
-curl -s http://localhost:8080/healthz
+curl -s http://localhost:8081/healthz
 
-SESSION_ID=$(curl -s -X POST http://localhost:8080/sessions \
+SESSION_ID=$(curl -s -X POST http://localhost:8081/sessions \
   -H 'Content-Type: application/json' \
   -d '{"mode":"text"}' \
   | python -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')
 
-curl -s -X POST "http://localhost:8080/sessions/$SESSION_ID/text" \
+curl -s -X POST "http://localhost:8081/sessions/$SESSION_ID/text" \
   -H 'Content-Type: application/json' \
   -d '{"text":"你好，我想查询一下我的订单。"}'
 
-curl -sN "http://localhost:8080/sessions/$SESSION_ID/events?since_seq=0"
+curl -sN "http://localhost:8081/sessions/$SESSION_ID/events?since_seq=0"
 ```
+
+### LLM mode without a cloud key
+
+Run the local OpenAI-compatible mock, then point the app at it:
+
+```bash
+python scripts/mock_llm.py --port 9000
+
+AGENT_PROVIDER=llm \
+LLM_PRIMARY_BASE_URL=http://127.0.0.1:9000/v1 \
+LLM_PRIMARY_API_KEY=mock \
+LLM_PRIMARY_MODEL=mock \
+uvicorn app.main:app --port 8082
+```
+
+This exercises `LLMAgent → LLM Router → Tool Gateway → write-back` without
+spending cloud quota.
 
 ## Docker
 
@@ -78,7 +95,7 @@ cp .env.example .env
 make docker-build
 make docker-up
 
-curl -fsS http://localhost:8080/healthz
+curl -fsS http://localhost:8081/healthz
 docker compose logs -f app
 make docker-down
 ```
@@ -143,7 +160,7 @@ milestones.
 | Target | Command |
 |---|---|
 | `make install` | `python -m pip install -r requirements.txt` |
-| `make run` | uvicorn on `0.0.0.0:8080` with `--reload` |
+| `make run` | uvicorn on `0.0.0.0:8081` with `--reload` |
 | `make test` | `pytest -q` |
 | `make contract-test` | `python contracts/validate.py contracts/fixtures` then `pytest tests/test_contract.py -q` |
 | `make smoke` | `sh scripts/smoke.sh` (server must already be running) |
@@ -159,6 +176,7 @@ Override defaults on the command line, for example
 | Variable | Example | Meaning |
 |---|---|---|
 | `APP_ENV` | `dev` | Runtime profile (`dev` / `staging` / `prod`) |
+| `APP_BASE` | `http://127.0.0.1:8081` | Frontend/dev base URL (see `config/app.example`) |
 | `RELEASE_ID` | `rel_dev_001` | Release pinned into every session and event |
 | `DATA_DIR` | `./data` | SQLite / JSONL / artifact directory |
 | `DEV_NO_AUTH` | `1` | Dev-only auth bypass flag (reserved; auth is not enforced in the fake skeleton) |
@@ -176,6 +194,8 @@ Without LLM keys, `/internal/llm/complete` returns `LLM_NOT_CONFIGURED` and the
 fake agent continues with rule/template replies.
 
 Copy [.env.example](.env.example) to `.env`; never commit `.env`.
+The human-readable copy with `APP_BASE=http://127.0.0.1:8081` is
+[`config/app.example`](config/app.example).
 
 ## Tests
 
@@ -194,7 +214,7 @@ pytest tests/test_contract.py -q
 
 `scripts/smoke.sh` checks `GET /healthz`, creates a text session, posts one text
 turn and fetches the event stream. Point it at another host with
-`BASE_URL=http://127.0.0.1:8080 sh scripts/smoke.sh`.
+`BASE_URL=http://127.0.0.1:8081 sh scripts/smoke.sh`.
 
 Replay one session's event timeline and generate a self-test report:
 

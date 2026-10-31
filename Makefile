@@ -5,10 +5,10 @@
 PYTHON ?= python
 APP    ?= app.main:app
 HOST   ?= 0.0.0.0
-PORT   ?= 8080
+PORT   ?= 8081
 IMAGE  ?= aicall-app:local
 
-.PHONY: help install run test contract-test smoke docker-build docker-up docker-down
+.PHONY: help install run test contract-test smoke report mock-llm docker-build docker-up docker-down
 
 help:
 	@echo "make install       Install runtime + test dependencies"
@@ -16,6 +16,8 @@ help:
 	@echo "make test          Run the full pytest suite"
 	@echo "make contract-test Validate fixtures and run contract tests"
 	@echo "make smoke         Health check + one text turn (server must be running)"
+	@echo "make report        Generate reports/self-test.md from data/sessions"
+	@echo "make mock-llm      Start a local OpenAI-compatible mock on :9000"
 	@echo "make docker-build  Build the image $(IMAGE)"
 	@echo "make docker-up     Build and start the compose stack in the background"
 	@echo "make docker-down   Stop and remove the compose stack"
@@ -35,6 +37,12 @@ contract-test:
 
 smoke:
 	sh scripts/smoke.sh
+
+report:
+	$(PYTHON) scripts/report.py --data-dir data --out reports/self-test.md
+
+mock-llm:
+	$(PYTHON) scripts/mock_llm.py --port 9000
 
 docker-build:
 	docker build -t $(IMAGE) .

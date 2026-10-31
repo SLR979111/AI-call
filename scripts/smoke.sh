@@ -3,17 +3,17 @@
 #
 # It checks GET /healthz, creates a text session, posts one text turn and reads
 # the session events. The server must already be running:
-#   make run          # local, port 8080
-#   make docker-up    # compose, port 8080
+#   make run          # local, port 8081
+#   make docker-up    # compose, port 8081
 #
 # Env:
-#   BASE_URL    default http://127.0.0.1:8080
+#   BASE_URL    default http://127.0.0.1:8081
 #
 # Requires curl and python3 (or python). The fake skeleton does not enforce
 # auth; DEV_NO_AUTH=1 is the documented dev default.
 set -eu
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:8081}"
 BASE_URL="${BASE_URL%/}"
 
 if ! command -v curl >/dev/null 2>&1; then

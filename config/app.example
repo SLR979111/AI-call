@@ -1,0 +1,22 @@
+# Local / demo settings (copy the values you need into .env).
+# .env.example is protected by the agent's credential policy in this workspace;
+# this file is the human-readable copy for cx.
+APP_BASE=http://127.0.0.1:8081
+APP_ENV=dev
+RELEASE_ID=rel_dev_001
+DATA_DIR=./data
+DEV_NO_AUTH=1
+
+# LLM (optional; unset -> FakeAgent)
+AGENT_PROVIDER=fake
+LLM_PRIMARY_BASE_URL=
+LLM_PRIMARY_API_KEY=
+LLM_PRIMARY_MODEL=
+LLM_TIMEOUT_MS=3000
+LLM_DAILY_BUDGET_CNY=100
+
+# Voice / media (optional; unset -> fake voice + ws_pcm)
+VOICE_PROVIDER=fake
+LIVEKIT_URL=
+LIVEKIT_API_KEY=
+LIVEKIT_API_SECRET=

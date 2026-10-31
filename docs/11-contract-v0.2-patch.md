@@ -272,3 +272,20 @@ cx 的 D1/D2/D3 建议：**同机 localhost + 文件回灌兜底 + LiveKit 只�
 > v0.2 已补齐 G1–G8 的协议与代码入口；G3 真实 TTS 时间轴、G11 缓冲恢复、G14 工具进度、G20 AEC 能力仍属 W2 实现项，不阻塞 W1 前端开工。G9 已解决，请以 tag `v0.2-contract-patch` 为准。
 
 **W1 前端可以立即开工**：fixtures、WS 地址、`tts_*`、`compliance`、`turn_result`、`hangup`、`transport_*` 都已具备。
+
+---
+
+## 12. 对 cx C1–C6 的答复（v0.2.1）
+
+| 条件 | 结论 | 落地 |
+|---|---|---|
+| **C1** `/rtc` 503 静默降级 `ws_pcm` | ✅ 接受 | 服务端保留 503；前端不弹错、不阻断，UI 标“媒体未配置”；W1 默认就走 `ws_pcm` |
+| **C2** 钉死 `b0` | ✅ 接受 | `b0 = 本地 VAD 连续 3 帧（60ms）越限的第一帧 client_mono_ms`；`b3 = last_frame_played_mono_ms`；`stop_latency = max(0, b3-b0)`；`speech_started` 与 `local_muted` 同用 `performance.now()` 时间基。代码已透传 `b0_mono_ms`，真实 VAD 由 cx 在 W2 接 |
+| **C3** 误打断客户端本地恢复 | ✅ 接受 | 不新增消息；`duck` 后 300ms 无后续语音则本地 `unduck()` 并从缓冲续播，上报 `client_event{name:"BargeInCancelledLocal"}`；收到服务端 `BargeInConfirmed` 时以服务端为准 |
+| **C4** `client_event` 白名单 | ✅ 接受 | 代码白名单：`PlaybackCancelled / PlaybackUnderrun / NetStats / AecState / ClockSync / BargeInCancelledLocal / VadMetrics`；非白名单返回 `CLIENT_EVENT_NOT_ALLOWED` |
+| **C5** `APP_BASE=8081` + 完整 `ws_url` | ✅ 接受 | `POST /sessions` 返回 `ws_url=/ws/session/{id}?token=...`；Makefile/compose/README/02/09 统一宿主 8081（容器内仍 8080，映射 `8081:8080`）。`.env.example` 受当前工作区凭据保护，已提供 `config/app.example` 作为可读副本 |
+| **C6** `tts_started.sentences=[]` 的游标语义 | ✅ 接受 | `tts_started.cursor=null`、`estimated=true`、`tts_alignment=false`；`tts_sentence/tts_completed` 带 `estimated=true`；事件 `TTSStarted` 带 `tts_alignment=false`。UI 标“估算”，D 可据此过滤 RSI 归因 |
+
+**代码验证**：20 tests passed；WS 实测 `tts_started → tts_sentence → tts_completed → compliance → turn_result → session_ended`；`transport_degraded → transport_switched`；`client_event` 白名单拒绝未授权事件。
+
+> C2 的“真实 VAD 首帧”仍要 cx 在 W2 接麦克风后实现；当前手动打断按钮只用于联调，不用于官方 `b3-b0` 指标。

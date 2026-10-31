@@ -174,6 +174,7 @@ def test_http_api_smoke():
         assert health.status_code == 200
         created = client.post("/sessions", json={"mode": "text"}).json()
         sid = created["session_id"]
+        assert "?token=" in created["ws_url"]
         turn = client.post(f"/sessions/{sid}/text", json={"text": "我想问一下订单"}).json()
         assert turn["result"]["outcome"] in {"rescheduled", "completed", "tool_failed"}
         events = client.get(f"/sessions/{sid}/events")
@@ -378,6 +379,14 @@ def test_ws_tts_metadata_turn_result_and_hangup():
             assert ready["protocol_version"] == "0.2"
             assert ready["tts_alignment"] is False
             assert ws.receive_json()["type"] == "state"
+
+            ws.send_json({"type": "client_event", "name": "NotAllowed", "payload": {}})
+            denied = ws.receive_json()
+            assert denied["type"] == "error"
+            assert denied["error"]["code"] == "CLIENT_EVENT_NOT_ALLOWED"
+
+            ws.send_json({"type": "client_event", "name": "NetStats",
+                          "payload": {"rtt_ms": 12}, "client_mono_ms": 1.0})
 
             ws.send_json({"type": "transport_degraded", "from": "webrtc",
                           "to": "ws_pcm", "reason": "ice_failed"})

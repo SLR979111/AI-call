@@ -30,6 +30,16 @@ from .voice.factory import voice_status
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+CLIENT_EVENT_NAMES = {
+    "PlaybackCancelled",
+    "PlaybackUnderrun",
+    "NetStats",
+    "AecState",
+    "ClockSync",
+    "BargeInCancelledLocal",
+    "VadMetrics",
+}
+
 
 class WsConnection:
     def __init__(self, ws: WebSocket) -> None:
@@ -248,7 +258,7 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     return {
         "session_id": session.session_id,
         "token": session.token,
-        "ws_url": f"/ws/session/{session.session_id}",
+        "ws_url": f"/ws/session/{session.session_id}?token={session.token}",
         "version_set": session.version_set,
     }
 
@@ -591,7 +601,13 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                                           "audio": {"uplink": "pcm16/16000",
                                                     "downlink": "pcm16/24000"}})
             elif kind == "client_event":
-                name = str(msg.get("name", "ClientEvent"))
+                name = str(msg.get("name", ""))
+                if name not in CLIENT_EVENT_NAMES:
+                    await conn.send_json({"type": "error", "error": {
+                        "code": "CLIENT_EVENT_NOT_ALLOWED",
+                        "message": f"allowed: {sorted(CLIENT_EVENT_NAMES)}",
+                        "retryable": False}})
+                    continue
                 await request_bus_emit(websocket, session_id, name, "client", {
                     "name": name, "payload": msg.get("payload", {}),
                     "client_mono_ms": msg.get("client_mono_ms"),
