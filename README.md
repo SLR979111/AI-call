@@ -1,25 +1,18 @@
-# 智语外呼 · Voice Agent Skeleton
+# 智语外呼 · 语音外呼数字员工（Fake 骨架）
 
-FastAPI skeleton for the 智语外呼 voice-agent competition entry. This is the
-**fake skeleton** from the W1 integration plan: it exposes the HTTP control
-plane, serves a static demo UI and records an append-only event log, using
-deterministic fakes for ASR, the agent and TTS.
+这是“智语外呼”竞赛项目的 **Fake 全链路骨架**，对应 W1 集成计划：暴露 HTTP 控制面、提供静态 Demo 页面、记录 append-only 事件日志，ASR / Agent / TTS 先用确定性 Fake 实现。
 
-No model weights, no GPU and no external network calls are needed. Real CPU
-ASR/TTS, the cloud LLM and WebRTC/LiveKit are later milestones; architecture,
-contracts and milestone plans live in [docs/](docs/) (start with
-[docs/05-week1-integration-plan.md](docs/05-week1-integration-plan.md) and
-[docs/09-delivery-runtime.md](docs/09-delivery-runtime.md)).
+当前不需要模型权重、不需要 GPU、不需要外部网络。真实 CPU ASR/TTS、云 LLM、WebRTC/LiveKit 是后续里程碑；架构、契约与计划见 [docs/](docs/)（建议先看 [docs/05-week1-integration-plan.md](docs/05-week1-integration-plan.md) 和 [docs/09-delivery-runtime.md](docs/09-delivery-runtime.md)）。
 
-## Requirements
+## 环境要求
 
-| Tool | Version | Needed for |
+| 工具 | 版本 | 用途 |
 |---|---|---|
-| Python | 3.12 | local run and tests |
-| Docker Engine + Compose | Compose v2.24+ | container run |
-| make | any POSIX make | optional shortcuts |
+| Python | 3.12 | 本地运行与测试 |
+| Docker Engine + Compose | Compose v2.24+ | 容器运行 |
+| make | 任意 POSIX make | 可选快捷命令 |
 
-## Quickstart (local)
+## 本地启动
 
 ```bash
 python -m venv .venv
@@ -28,33 +21,30 @@ python -m pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8081
 ```
 
-The defaults in `app/config.py` match [.env.example](.env.example), so no
-`.env` is needed locally; export a variable in your shell to override one.
-Docker Compose loads `.env` automatically.
+`app/config.py` 的默认值与 [.env.example](.env.example) 对齐，本地不需要 `.env`；需要覆盖时在 shell 里导出变量即可。Docker Compose 会自动读取 `.env`。
 
-Or use the Makefile:
+也可以用 Makefile：
 
 ```bash
 make install
 make run
 ```
 
-Then open:
+启动后打开：
 
-- Demo UI: <http://localhost:8081/>
-- Health: <http://localhost:8081/healthz>
-- OpenAPI: <http://localhost:8081/docs>
+- Demo 页面：<http://localhost:8081/>
+- 健康检查：<http://localhost:8081/healthz>
+- OpenAPI：<http://localhost:8081/docs>
 
-### Troubleshooting: WebSocket 404
+### 常见问题：WebSocket 404
 
-If uvicorn logs `No supported WebSocket library detected` (seen with
-`websockets` 16.x), install `requirements.txt` (it pins `<16`) or start with:
+如果 uvicorn 日志出现 `No supported WebSocket library detected`（`websockets` 16.x 常见），先安装 `requirements.txt`（已把版本钉在 `<16`），或这样启动：
 
 ```bash
 uvicorn app.main:app --ws websockets-sansio --port 8081
 ```
 
-### One text turn with curl
+### 用 curl 跑一轮文本对话
 
 ```bash
 curl -s http://localhost:8081/healthz
@@ -71,9 +61,9 @@ curl -s -X POST "http://localhost:8081/sessions/$SESSION_ID/text" \
 curl -sN "http://localhost:8081/sessions/$SESSION_ID/events?since_seq=0"
 ```
 
-### LLM mode without a cloud key
+### 没有云 Key 时跑 LLM 模式
 
-Run the local OpenAI-compatible mock, then point the app at it:
+先启动本地 OpenAI 兼容 Mock，再把应用指过去：
 
 ```bash
 python scripts/mock_llm.py --port 9000
@@ -85,8 +75,7 @@ LLM_PRIMARY_MODEL=mock \
 uvicorn app.main:app --port 8082
 ```
 
-This exercises `LLMAgent → LLM Router → Tool Gateway → write-back` without
-spending cloud quota.
+这样可以不消耗云额度，验证 `LLMAgent → LLM Router → Tool Gateway → 结构化回写` 整条链路。
 
 ## Docker
 
@@ -100,12 +89,13 @@ docker-compose logs -f app
 make docker-down
 ```
 
-`docker compose` (v2 plugin) works too; the Makefile defaults to
-`docker-compose` because that is the standalone binary used in this workspace.
-Override with `make docker-up COMPOSE="docker compose"`.
+`docker compose`（v2 插件）也可以用；Makefile 默认用 `docker-compose`，因为当前工作区用的是独立二进制。可覆盖：
 
-If Docker Hub is blocked/slow in your network, pull the base image from a
-mirror and pass a PyPI mirror at build time:
+```bash
+make docker-up COMPOSE="docker compose"
+```
+
+如果所在网络访问 Docker Hub 慢或被拦，可以先用镜像加速器拉基础镜像，并在构建时传 PyPI 镜像：
 
 ```bash
 docker pull docker.m.daocloud.io/library/python:3.12-slim
@@ -117,129 +107,117 @@ DOCKER_BUILDKIT=0 docker build \
   -t aicall-app:local .
 ```
 
-Rationale: this workspace's Docker Desktop inherited a stale proxy
-(`127.0.0.1:10808`), so BuildKit could not pull `docker/dockerfile:1`; the
-classic builder + local base image avoids that path.
+原因：当前工作区的 Docker Desktop 继承了残留代理 `127.0.0.1:10808`，BuildKit 拉 `docker/dockerfile:1` 会失败；用 classic builder + 本地基础镜像可以绕开。
 
-Equivalent raw commands:
+等价的原生命令：
 
 ```bash
 docker build -t aicall-app:local .
 docker compose up -d
 ```
 
-Notes:
+说明：
 
-- The image is CPU-only and intended for `linux/amd64` (the competition
-  runtime); there is no GPU profile in the fake skeleton.
-- `docker-compose.yml` starts only `app`. LiveKit, CPU ASR/TTS and a GPU
-  override are commented placeholders for later milestones.
-- `./data` is bind-mounted to `/app/data` for SQLite, JSONL event logs and
-  artifacts; it is gitignored.
-- `.env` is optional with Compose v2.24+; without it the image defaults apply.
-- The competition forbids external tunnels, so none are included.
+- 镜像按 **CPU-only**、`linux/amd64` 设计（比赛现场目标）；Fake 骨架没有 GPU profile。
+- `docker-compose.yml` 目前只启动 `app`；LiveKit、CPU ASR/TTS 和 GPU override 是注释占位，留给后续里程碑。
+- `./data` 绑定到 `/app/data`，存 SQLite、JSONL 事件日志和产物；已在 `.gitignore` 中忽略。
+- Compose v2.24+ 下 `.env` 可选；没有 `.env` 时使用镜像默认值。
+- 赛题禁止外网穿透/代理，仓库不包含任何隧道工具。
 
-## Endpoints
+## 接口清单
 
-| Method | Path | Purpose |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/` | Static demo UI from `web/` |
-| GET | `/healthz` | Liveness plus runtime metadata |
-| GET | `/metrics` | Minimal Prometheus text (`aicall_up`, `aicall_sessions`) |
-| POST | `/sessions` | Create a session (`mode`: `text` or `voice`, optional `scenario_id`) |
-| GET | `/sessions/{session_id}/state` | Current turn/flow state |
-| POST | `/sessions/{session_id}/text` | Run one text turn |
-| POST | `/sessions/{session_id}/cancel` | Cancel the current turn (debug) |
-| POST | `/sessions/{session_id}/end` | End a session |
-| GET | `/sessions/{session_id}/events?since_seq=0` | NDJSON event stream |
-| WS | `/ws/session/{session_id}` | Skeleton media/control socket |
-| POST | `/eval/sessions` | Run a headless text evaluation session |
-| GET | `/eval/sessions/{eval_session_id}` | Read a stored evaluation record |
-| POST | `/internal/tools/{tool}/invoke` | Invoke a tool through the gateway |
-| POST | `/internal/llm/complete` | Debug: call the LLM router (503-like error if unconfigured) |
-| GET | `/voice/status` | Active voice provider / readiness |
-| GET | `/media/status` | LiveKit configuration status |
-| POST | `/sessions/{session_id}/rtc` | Mint a LiveKit token (503 if unconfigured) |
-| POST | `/knowledge/search` | Local RAG search with citations |
-| GET | `/flowpacks` / `/flowpacks/{id}` | List/read Flow Packs |
-| POST | `/flowpacks/{id}/simulate` | Apply intent sequence to a Flow Pack |
-| POST | `/eval/run` | Run an eval suite (default `eval/cases/dev.json`) |
-| GET | `/registry/production` / `/registry/releases` | Current/tracked releases |
-| POST | `/registry/candidates` / `/promote` / `/rollback` | Candidate lifecycle |
-| POST | `/rsi/compare` | Compare baseline vs candidate (bootstrap CI + gate) |
-| POST | `/rsi/promote` | Promote only if the regression gate passes |
+| GET | `/` | `web/` 静态 Demo 页面 |
+| GET | `/healthz` | 存活检查 + 运行时元信息 |
+| GET | `/metrics` | 最小 Prometheus 文本（`aicall_up`、`aicall_sessions`） |
+| POST | `/sessions` | 建会话（`mode`: `text` 或 `voice`，可选 `scenario_id`） |
+| GET | `/sessions/{session_id}/state` | 当前轮次/流程状态 |
+| POST | `/sessions/{session_id}/text` | 跑一轮文本对话 |
+| POST | `/sessions/{session_id}/cancel` | 取消当前轮（调试用） |
+| POST | `/sessions/{session_id}/end` | 结束会话 |
+| GET | `/sessions/{session_id}/events?since_seq=0` | NDJSON 事件流 |
+| WS | `/ws/session/{session_id}` | 骨架媒体/控制通道 |
+| POST | `/eval/sessions` | 跑 headless 文本评测 |
+| GET | `/eval/sessions/{eval_session_id}` | 读评测记录 |
+| POST | `/internal/tools/{tool}/invoke` | 经 Tool Gateway 调工具 |
+| POST | `/internal/llm/complete` | 调试 LLM Router（未配置返回 503 类错误） |
+| GET | `/voice/status` | 当前语音 Provider / 就绪状态 |
+| GET | `/media/status` | LiveKit 配置状态 |
+| POST | `/sessions/{session_id}/rtc` | 生成 LiveKit token（未配置返回 503） |
+| POST | `/knowledge/search` | 本地 RAG 检索 + 引用 |
+| GET | `/flowpacks` / `/flowpacks/{id}` | 列出/读取 Flow Pack |
+| POST | `/flowpacks/{id}/simulate` | 按意图序列模拟流程 |
+| POST | `/eval/run` | 跑评测套件（默认 `eval/cases/dev.json`） |
+| GET | `/registry/production` / `/registry/releases` | 当前/历史版本 |
+| POST | `/registry/candidates` / `/promote` / `/rollback` | 候选版本生命周期 |
+| POST | `/rsi/compare` | 基线 vs 候选（bootstrap CI + 门禁） |
+| POST | `/rsi/promote` | 门禁通过才晋升 |
 
-The source of truth for payloads is
-[docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md),
-[docs/11-contract-v0.2-patch.md](docs/11-contract-v0.2-patch.md) and
-[docs/04-event-schema-v0.1.md](docs/04-event-schema-v0.1.md). The fake skeleton
-implements the W1/W2 subset; real ASR/TTS and LiveKit servers are later
-milestones.
+字段级契约以 [docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md)、[docs/11-contract-v0.2-patch.md](docs/11-contract-v0.2-patch.md) 和 [docs/04-event-schema-v0.1.md](docs/04-event-schema-v0.1.md) 为准。Fake 骨架实现 W1/W2 子集；真实 ASR/TTS 和 LiveKit 服务是后续里程碑。
 
-## Make targets
+## Make 命令
 
-| Target | Command |
+| 目标 | 命令 |
 |---|---|
 | `make install` | `python -m pip install -r requirements.txt` |
-| `make run` | uvicorn on `0.0.0.0:8081` with `--reload` |
+| `make run` | 在 `0.0.0.0:8081` 启动 uvicorn（`--reload`） |
 | `make test` | `pytest -q` |
-| `make contract-test` | `python contracts/validate.py contracts/fixtures` then `pytest tests/test_contract.py -q` |
-| `make smoke` | `sh scripts/smoke.sh` (server must already be running) |
-| `make e2e` | 2 turns + barge-in + hangup over WS (`scripts/e2e_ws.py`) |
+| `make contract-test` | 先校验 `contracts/fixtures`，再跑 `pytest tests/test_contract.py -q` |
+| `make smoke` | `sh scripts/smoke.sh`（服务需已启动） |
+| `make e2e` | 2 轮 + 打断 + 挂断的 WS E2E（`scripts/e2e_ws.py`） |
 | `make docker-build` | `docker build -t aicall-app:local .` |
 | `make docker-up` | `docker compose up -d --build` |
 | `make docker-down` | `docker compose down` |
 
-Override defaults on the command line, for example
-`make run PORT=9000` or `make test PYTHON=python3.12`.
+命令行可覆盖默认值，例如 `make run PORT=9000`、`make test PYTHON=python3.12`。
 
-## Configuration
+## 配置
 
-| Variable | Example | Meaning |
+| 变量 | 示例 | 含义 |
 |---|---|---|
-| `APP_ENV` | `dev` | Runtime profile (`dev` / `staging` / `prod`) |
-| `APP_BASE` | `http://127.0.0.1:8081` | Frontend/dev base URL (see `config/app.example`) |
-| `RELEASE_ID` | `rel_dev_001` | Release pinned into every session and event |
-| `DATA_DIR` | `./data` | SQLite / JSONL / artifact directory |
-| `DEV_NO_AUTH` | `1` | Dev-only auth bypass flag (reserved; auth is not enforced in the fake skeleton) |
-| `AGENT_PROVIDER` | `fake` | `fake` or `llm` (LLM Router path; needs keys) |
-| `LLM_PRIMARY_BASE_URL` | `https://api.deepseek.com/v1` | Primary OpenAI-compatible endpoint |
-| `LLM_PRIMARY_API_KEY` | `sk-...` | Primary key (server-side only) |
-| `LLM_PRIMARY_MODEL` | `deepseek-chat` | Primary model |
-| `LLM_SECONDARY_*` | same keys | Optional secondary provider |
-| `LLM_TIMEOUT_MS` | `3000` | Per-provider timeout |
-| `LLM_DAILY_BUDGET_CNY` | `100` | Budget circuit breaker |
+| `APP_ENV` | `dev` | 运行环境（`dev` / `staging` / `prod`） |
+| `APP_BASE` | `http://127.0.0.1:8081` | 前端/开发基地址（见 `config/app.example`） |
+| `RELEASE_ID` | `rel_dev_001` | 每个 session/事件固定的版本 |
+| `DATA_DIR` | `./data` | SQLite / JSONL / 产物目录 |
+| `DEV_NO_AUTH` | `1` | 开发期跳过鉴权（Fake 骨架默认不强制） |
+| `AGENT_PROVIDER` | `fake` | `fake` 或 `llm`（LLM Router 路径，需要 Key） |
+| `LLM_PRIMARY_BASE_URL` | `https://api.deepseek.com/v1` | 主 OpenAI 兼容接口 |
+| `LLM_PRIMARY_API_KEY` | `sk-...` | 主 Key（仅服务端） |
+| `LLM_PRIMARY_MODEL` | `deepseek-chat` | 主模型 |
+| `LLM_SECONDARY_*` | 同上 | 可选备用供应商 |
+| `LLM_TIMEOUT_MS` | `3000` | 单供应商超时 |
+| `LLM_DAILY_BUDGET_CNY` | `100` | 日预算熔断 |
 | `VOICE_PROVIDER` | `fake` | `fake` / `sherpa` / `funasr` / `cosyvoice` |
-| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | — | Enables `/sessions/{id}/rtc` token |
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | — | 启用 `/sessions/{id}/rtc` token |
 
-Without LLM keys, `/internal/llm/complete` returns `LLM_NOT_CONFIGURED` and the
-fake agent continues with rule/template replies.
+没有 LLM Key 时，`/internal/llm/complete` 返回 `LLM_NOT_CONFIGURED`，Fake Agent 继续用规则/模板回复。
 
-Copy [.env.example](.env.example) to `.env`; never commit `.env`.
-The human-readable copy with `APP_BASE=http://127.0.0.1:8081` is
-[`config/app.example`](config/app.example).
+把 [.env.example](.env.example) 复制成 `.env`；不要提交 `.env`。带 `APP_BASE=http://127.0.0.1:8081` 的可读副本在 [`config/app.example`](config/app.example)。
 
-## Tests
+## 测试
 
 ```bash
-make test            # full pytest suite
-make contract-test   # schema validation + contract tests
-make smoke           # requires `make run` or `make docker-up` in another shell
-make e2e             # 2 turns + barge-in + hangup over WS
+make test            # 全量 pytest
+make contract-test   # Schema 校验 + 契约测试
+make smoke           # 需要另开终端先 make run / make docker-up
+make e2e             # 2 轮 + 打断 + 挂断（WS）
 ```
 
-`make contract-test` runs exactly:
+`make contract-test` 等价于：
 
 ```bash
 python contracts/validate.py contracts/fixtures
 pytest tests/test_contract.py -q
 ```
 
-`scripts/smoke.sh` checks `GET /healthz`, creates a text session, posts one text
-turn and fetches the event stream. Point it at another host with
-`BASE_URL=http://127.0.0.1:8081 sh scripts/smoke.sh`.
+`scripts/smoke.sh` 会检查 `GET /healthz`、创建文本会话、跑一轮并拉取事件流。指向其他地址：
 
-Replay one session's event timeline and generate a self-test report:
+```bash
+BASE_URL=http://127.0.0.1:8081 sh scripts/smoke.sh
+```
+
+回放一轮事件时间线、生成自测报告：
 
 ```bash
 python scripts/replay.py --session s_...
@@ -247,25 +225,23 @@ python scripts/report.py --data-dir data --out reports/self-test.md
 python scripts/rsi_compare.py --baseline data/baseline.json --candidate data/candidate.json
 ```
 
-CI (`.github/workflows/ci.yml`) runs on `ubuntu-latest` with Python 3.12:
-installs `requirements.txt`, runs `pytest -q`, then validates
-`contracts/fixtures` against the JSON Schemas.
+CI（`.github/workflows/ci.yml`）在 `ubuntu-latest` + Python 3.12 上安装 `requirements.txt`，跑 `pytest -q`，校验 `contracts/fixtures`，最后启动服务跑 WS E2E。
 
-## Project structure
+## 项目结构
 
 ```text
 aicall/
-├── app/                  FastAPI app (orchestrator, agent, llm, rag, flow, rsi)
-├── web/                  Static demo UI served at /
-├── contracts/            JSON Schemas, fixtures and validate.py
-├── knowledge/            Local FAQ knowledge base
-├── flowpacks/            Business flow definitions
-├── eval/                 Evaluation case suites
-├── reports/              Generated self-test reports
-├── tests/                pytest suite (including test_contract.py)
-├── scripts/              smoke.sh, replay.py, report.py, rsi_compare.py
-├── docs/                 Architecture, contract and delivery documents
-├── data/                 Runtime SQLite/JSONL/artifacts (created, gitignored)
+├── app/                  FastAPI 应用（orchestrator、agent、llm、rag、flow、rsi）
+├── web/                  静态 Demo 页面
+├── contracts/            JSON Schema、fixtures、validate.py
+├── knowledge/            本地 FAQ 知识库
+├── flowpacks/            业务流程定义
+├── eval/                 评测用例
+├── reports/              生成的自测报告
+├── tests/                pytest 测试
+├── scripts/              smoke / e2e / mock_llm / report / rsi / replay
+├── docs/                 架构、契约、交付文档
+├── data/                 运行时 SQLite/JSONL/产物（gitignore）
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -274,10 +250,8 @@ aicall/
 └── .github/workflows/ci.yml
 ```
 
-## Scope of this skeleton
+## 当前骨架范围
 
-- Deterministic fakes for ASR, agent and TTS; no model files are required.
-- In-memory/JSONL/SQLite event trail with a monotonic `seq`, suitable for the
-  replay and latency work described in [docs/04](docs/04-event-schema-v0.1.md).
-- Out of scope for now: real ASR/TTS, cloud LLM integration, LiveKit/WebRTC,
-  coturn, authentication and multi-scenario Flow Packs.
+- ASR / Agent / TTS 都是确定性 Fake，不需要模型文件。
+- 事件链路为内存 + JSONL + SQLite，`seq` 单调递增，可用于回放和时延分析（见 [docs/04](docs/04-event-schema-v0.1.md)）。
+- 暂不包含：真实 ASR/TTS、云 LLM 接入、LiveKit/WebRTC、coturn、正式鉴权、多场景 Flow Pack。
