@@ -1,260 +1,294 @@
-# 智语外呼 · 语音外呼数字员工（Fake 骨架）
+# 智语外呼 · 语音外呼客服数字员工
 
-这是“智语外呼”竞赛项目的 **Fake 全链路骨架**，对应 W1 集成计划：暴露 HTTP 控制面、提供静态 Demo 页面、记录 append-only 事件日志，ASR / Agent / TTS 先用确定性 Fake 实现。
+> 一个面向竞赛演示的任务型语音外呼 Agent：实时语音交互、工具调用、合规守卫、事件追踪、评测与 RSI 自进化。
+>
+> 当前是 **Fake 全链路 + 可交付 Docker + 新通话台**；真实 ASR/TTS、云 LLM、LiveKit 媒体是下一阶段。
 
-当前不需要模型权重、不需要 GPU、不需要外部网络。真实 CPU ASR/TTS、云 LLM、WebRTC/LiveKit 是后续里程碑；架构、契约与计划见 [docs/](docs/)（建议先看 [docs/05-week1-integration-plan.md](docs/05-week1-integration-plan.md) 和 [docs/09-delivery-runtime.md](docs/09-delivery-runtime.md)）。
-
-## 环境要求
-
-| 工具 | 版本 | 用途 |
-|---|---|---|
-| Python | 3.12 | 本地运行与测试 |
-| Docker Engine + Compose | Compose v2.24+ | 容器运行 |
-| make | 任意 POSIX make | 可选快捷命令 |
-
-## 本地启动
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8081
-```
-
-`app/config.py` 的默认值与 [.env.example](.env.example) 对齐，本地不需要 `.env`；需要覆盖时在 shell 里导出变量即可。Docker Compose 会自动读取 `.env`。
-
-也可以用 Makefile：
-
-```bash
-make install
-make run
-```
-
-启动后打开：
-
-- Demo 页面：<http://localhost:8081/>
-- 新通话台（cx，零依赖 ESM，支持麦克风/文件回灌）：<http://localhost:8081/rtc/>
-- 健康检查：<http://localhost:8081/healthz>
-- OpenAPI：<http://localhost:8081/docs>
-
-`web/rtc/` 的接后端方式：`http://127.0.0.1:8081/rtc/?app=http://127.0.0.1:8081`；无麦克风时用 `uplink=file` 回灌 `fixtures/demo_16k.wav`。细节见 [web/rtc/README.md](web/rtc/README.md)。
-
-### 常见问题：WebSocket 404
-
-如果 uvicorn 日志出现 `No supported WebSocket library detected`（`websockets` 16.x 常见），先安装 `requirements.txt`（已把版本钉在 `<16`），或这样启动：
-
-```bash
-uvicorn app.main:app --ws websockets-sansio --port 8081
-```
-
-### 用 curl 跑一轮文本对话
-
-```bash
-curl -s http://localhost:8081/healthz
-
-SESSION_ID=$(curl -s -X POST http://localhost:8081/sessions \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"text"}' \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')
-
-curl -s -X POST "http://localhost:8081/sessions/$SESSION_ID/text" \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"你好，我想查询一下我的订单。"}'
-
-curl -sN "http://localhost:8081/sessions/$SESSION_ID/events?since_seq=0"
-```
-
-### 没有云 Key 时跑 LLM 模式
-
-先启动本地 OpenAI 兼容 Mock，再把应用指过去：
-
-```bash
-python scripts/mock_llm.py --port 9000
-
-AGENT_PROVIDER=llm \
-LLM_PRIMARY_BASE_URL=http://127.0.0.1:9000/v1 \
-LLM_PRIMARY_API_KEY=mock \
-LLM_PRIMARY_MODEL=mock \
-uvicorn app.main:app --port 8082
-```
-
-这样可以不消耗云额度，验证 `LLMAgent → LLM Router → Tool Gateway → 结构化回写` 整条链路。
-
-## Docker
-
-```bash
-cp .env.example .env
-make docker-build
-make docker-up
-
-curl -fsS http://localhost:8081/healthz
-docker-compose logs -f app
-make docker-down
-```
-
-`docker compose`（v2 插件）也可以用；Makefile 默认用 `docker-compose`，因为当前工作区用的是独立二进制。可覆盖：
-
-```bash
-make docker-up COMPOSE="docker compose"
-```
-
-如果所在网络访问 Docker Hub 慢或被拦，可以先用镜像加速器拉基础镜像，并在构建时传 PyPI 镜像：
-
-```bash
-docker pull docker.m.daocloud.io/library/python:3.12-slim
-docker tag docker.m.daocloud.io/library/python:3.12-slim python:3.12-slim
-
-DOCKER_BUILDKIT=0 docker build \
-  --build-arg PIP_INDEX_URL=http://mirrors.aliyun.com/pypi/simple \
-  --build-arg PIP_TRUSTED_HOST=mirrors.aliyun.com \
-  -t aicall-app:local .
-```
-
-原因：当前工作区的 Docker Desktop 继承了残留代理 `127.0.0.1:10808`，BuildKit 拉 `docker/dockerfile:1` 会失败；用 classic builder + 本地基础镜像可以绕开。
-
-等价的原生命令：
-
-```bash
-docker build -t aicall-app:local .
-docker compose up -d
-```
-
-说明：
-
-- 镜像按 **CPU-only**、`linux/amd64` 设计（比赛现场目标）；Fake 骨架没有 GPU profile。
-- `docker-compose.yml` 目前只启动 `app`；LiveKit、CPU ASR/TTS 和 GPU override 是注释占位，留给后续里程碑。
-- `./data` 绑定到 `/app/data`，存 SQLite、JSONL 事件日志和产物；已在 `.gitignore` 中忽略。
-- Compose v2.24+ 下 `.env` 可选；没有 `.env` 时使用镜像默认值。
-- 赛题禁止外网穿透/代理，仓库不包含任何隧道工具。
-
-## 接口清单
-
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET | `/` | `web/` 静态 Demo 页面 |
-| GET | `/healthz` | 存活检查 + 运行时元信息 |
-| GET | `/metrics` | 最小 Prometheus 文本（`aicall_up`、`aicall_sessions`） |
-| POST | `/sessions` | 建会话（`mode`: `text` 或 `voice`，可选 `scenario_id`） |
-| GET | `/sessions/{session_id}/state` | 当前轮次/流程状态 |
-| POST | `/sessions/{session_id}/text` | 跑一轮文本对话 |
-| POST | `/sessions/{session_id}/cancel` | 取消当前轮（调试用） |
-| POST | `/sessions/{session_id}/end` | 结束会话 |
-| GET | `/sessions/{session_id}/events?since_seq=0` | NDJSON 事件流 |
-| WS | `/ws/session/{session_id}` | 骨架媒体/控制通道 |
-| POST | `/eval/sessions` | 跑 headless 文本评测 |
-| GET | `/eval/sessions/{eval_session_id}` | 读评测记录 |
-| POST | `/internal/tools/{tool}/invoke` | 经 Tool Gateway 调工具 |
-| POST | `/internal/llm/complete` | 调试 LLM Router（未配置返回 503 类错误） |
-| GET | `/voice/status` | 当前语音 Provider / 就绪状态 |
-| GET | `/media/status` | LiveKit 配置状态 |
-| POST | `/sessions/{session_id}/rtc` | 生成 LiveKit token（未配置返回 503） |
-| POST | `/knowledge/search` | 本地 RAG 检索 + 引用 |
-| GET | `/flowpacks` / `/flowpacks/{id}` | 列出/读取 Flow Pack |
-| POST | `/flowpacks/{id}/simulate` | 按意图序列模拟流程 |
-| POST | `/eval/run` | 跑评测套件（默认 `eval/cases/dev.json`） |
-| GET | `/registry/production` / `/registry/releases` | 当前/历史版本 |
-| POST | `/registry/candidates` / `/promote` / `/rollback` | 候选版本生命周期 |
-| POST | `/rsi/compare` | 基线 vs 候选（bootstrap CI + 门禁） |
-| POST | `/rsi/promote` | 门禁通过才晋升 |
-
-字段级契约以 [docs/03-interface-contract-v0.1.md](docs/03-interface-contract-v0.1.md)、[docs/11-contract-v0.2-patch.md](docs/11-contract-v0.2-patch.md) 和 [docs/04-event-schema-v0.1.md](docs/04-event-schema-v0.1.md) 为准。Fake 骨架实现 W1/W2 子集；真实 ASR/TTS 和 LiveKit 服务是后续里程碑。
-
-## Make 命令
-
-| 目标 | 命令 |
+| 现在能做什么 | 现在还不能做什么 |
 |---|---|
-| `make install` | `python -m pip install -r requirements.txt` |
-| `make run` | 在 `0.0.0.0:8081` 启动 uvicorn（`--reload`） |
-| `make test` | `pytest -q` |
-| `make contract-test` | 先校验 `contracts/fixtures`，再跑 `pytest tests/test_contract.py -q` |
-| `make smoke` | `sh scripts/smoke.sh`（服务需已启动） |
-| `make e2e` | 2 轮 + 打断 + 挂断的 WS E2E（`scripts/e2e_ws.py`） |
-| `make docker-build` | `docker build -t aicall-app:local .` |
-| `make docker-up` | `docker compose up -d --build` |
-| `make docker-down` | `docker compose down` |
+| 3 轮任务闭环、订单查询/改约、FAQ、转人工 | 真实麦克风 ASR、真实 TTS 音色 |
+| 打断（barge-in）、停止播报、`turn_aborted` | 真实 LiveKit 媒体面 |
+| 工具校验/幂等/重试/审计、合规拦截 | 真实云 LLM 意图/Function Calling |
+| JSONL + SQLite 事件、时延、回放、评测、RSI | 真实工单写回、真机声学时延 |
 
-命令行可覆盖默认值，例如 `make run PORT=9000`、`make test PYTHON=python3.12`。
+**入口**：旧 Demo `/` ｜ 新通话台 `/rtc/` ｜ OpenAPI `/docs` ｜ 健康检查 `/healthz`
 
-## 配置
+---
 
-| 变量 | 示例 | 含义 |
+## 1. 架构图
+
+```mermaid
+flowchart LR
+  subgraph ONLINE["在线请求链路（按序）"]
+    direction LR
+    U["用户 / 评委"] --> M1["M1 接入层<br/>FastAPI HTTP/WS<br/>静态页 + /rtc 通话台"]
+    M1 --> M2["M2 实时语音<br/>VAD / ASR / TTS<br/>当前 Fake，适配器边界已留"]
+    M2 --> M3["M3 编排器<br/>Session / Turn<br/>取消 / 超时 / 下行队列"]
+    M3 --> M4["M4 Agent<br/>Flow Pack + LLM + RAG"]
+    M4 --> M5["M5 Tool Gateway<br/>Schema / 幂等 / 重试 / 审计"]
+    M4 --> M6["M6 合规<br/>REWRITE / BLOCK / TRANSFER"]
+    M6 --> M2
+    M2 --> M1
+    M10["LiveKit / WebRTC<br/>当前仅 Token 边界"] -. 媒体面 .-> M1
+  end
+
+  subgraph SUPPORT["旁路支撑面（不阻塞主链路）"]
+    direction TB
+    M7["M7 事件总线<br/>JSONL + SQLite"]
+    M8["M8 评测 / 报告"]
+    M9["M9 Registry / RSI"]
+    M7 --> M8
+    M7 --> M9
+  end
+
+  M3 -. 事件 .-> M7
+  M4 -. 事件 .-> M7
+  M5 -. 事件 .-> M7
+  M6 -. 事件 .-> M7
+  M9 -. "版本固定（控制面）" .-> M4
+```
+
+> M7/M8/M9 属于旁路支撑面，不参与在线请求顺序：M3/M4/M5/M6 在运行时把事件写入 M7；M8 从 M7 读取评测数据；M9 向 M4 提供版本固定。在线主链路为 `M1 → M2 → M3 → M4 → M5/M6 → M2 → M1`。
+
+设计约束：
+
+- **模块化单体**：一个 asyncio 进程，进程内 EventBus；不引入 MQ/微服务。
+- **双状态机**：M3 管“会话/轮次”，M4 管“业务流程”。
+- **Agent 决策、Gateway 执行**：工具参数校验、幂等、超时、审计都在 M5。
+- **合规三层**：生成前约束、句级门禁、工具守卫；BLOCK 必须能取消 TTS。
+- **可回滚**：Registry 管 candidate → production → previous；RSI 只提议，不直接改生产。
+
+## 2. API 调用关系图
+
+```mermaid
+sequenceDiagram
+  participant B as 浏览器
+  participant API as FastAPI
+  participant O as Orchestrator
+  participant A as Agent
+  participant T as Tool Gateway
+  participant E as EventBus
+  participant V as TTS / 语音
+
+  B->>API: POST /sessions
+  API-->>B: session_id + token + ws_url
+  B->>API: WS /ws/session/{id}?token=...
+  B->>O: text（或音频帧）
+  O->>E: TurnStarted / Transcript
+  O->>A: AgentRequest
+  A->>T: order.query / order.reschedule
+  T-->>A: ToolReturned / ToolFailed
+  A-->>O: AgentChunk(sentence / tool / end)
+  O->>V: 合成 / TTS 元数据
+  O->>E: TurnLatency / ToolCalled / ComplianceChecked
+  O-->>B: agent_text / tts_* / turn_result
+  B->>O: local_muted（用户打断）
+  O-->>B: cancel / turn_aborted
+  O->>E: BargeInDetected / TurnAborted
+```
+
+关键消息：`session_ready`、`hello_ack`、`transcript`、`agent_text`、`tts_started/sentence/completed`、`compliance`、`turn_result`、`turn_end`、`turn_aborted`、`session_ended`。字段以 [03 契约](docs/03-interface-contract-v0.1.md)、[11 v0.2 补丁](docs/11-contract-v0.2-patch.md)、[04 事件](docs/04-event-schema-v0.1.md) 为准。
+
+## 3. 仓库结构图
+
+```mermaid
+flowchart TB
+  subgraph FE["接入与前端"]
+    WEB["web/<br/>旧版 Demo"] --> API["app/main.py"]
+    RTC["web/rtc/<br/>新通话台"] --> API
+  end
+
+  subgraph RUN["核心运行链路"]
+    API --> ORC["app/orchestrator.py"]
+    ORC --> AG["app/agent/"]
+    AG --> TOOLS["app/tools/"]
+    AG --> COMP["app/compliance.py"]
+    AG --> LLM["app/llm/"]
+    AG --> RAG["app/rag/"]
+    AG --> FLOW["app/flow/"]
+    ORC --> VOICE["app/voice/"]
+    API -.媒体.-> MEDIA["app/media/"]
+  end
+
+  subgraph SUP["事件、版本与评测支撑"]
+    EV["app/events.py"]
+    REG["app/registry.py"]
+    REP["app/reporting.py"]
+    EVA["app/eval/"]
+    RSI["app/rsi/"]
+    ORC -.事件.-> EV
+    EV --> EVA
+    EVA --> RSI
+    EV --> REP
+    REG -.版本固定.-> AG
+  end
+
+  subgraph DATA["契约与数据"]
+    C["contracts/"]
+    S["contracts/schemas/"]
+    F["flowpacks/"]
+    K["knowledge/"]
+    E["eval/cases/"]
+    C --> S
+    AG -.读取.-> K
+    AG -.加载.-> F
+    EVA -.读取用例.-> E
+  end
+
+  subgraph ENG["工程与交付"]
+    T["tests/"]
+    SC["scripts/"]
+    RPT["reports/"]
+    DOC["docs/"]
+    DG["docs/guides/"]
+    CFG["config/app.example"]
+    CI[".github/workflows/ci.yml"]
+    DF["Dockerfile"]
+    DC["docker-compose.yml"]
+    MK["Makefile"]
+    RQ["requirements.txt"]
+    DOC --> DG
+    SC --> RPT
+    CFG -.环境变量.-> API
+  end
+
+  T -.校验.-> C
+  SC -.运行/测试.-> API
+  CI -.执行.-> T
+  DF -.构建.-> API
+  DC -.编排.-> DF
+  MK -.封装.-> SC
+  RQ -.安装.-> DF
+```
+
+
+> 需要按模块看“哪个目录放什么”，见 [仓库结构图（Mermaid）](docs/guides/repository-map.md)；需要按请求看调用顺序，见上面的 API 时序图。
+
+## 4. 已经进行的工作
+
+| 模块 | 已完成 | 状态 |
 |---|---|---|
-| `APP_ENV` | `dev` | 运行环境（`dev` / `staging` / `prod`） |
-| `APP_BASE` | `http://127.0.0.1:8081` | 前端/开发基地址（见 `config/app.example`） |
-| `RELEASE_ID` | `rel_dev_001` | 每个 session/事件固定的版本 |
-| `DATA_DIR` | `./data` | SQLite / JSONL / 产物目录 |
-| `DEV_NO_AUTH` | `1` | 开发期跳过鉴权（Fake 骨架默认不强制） |
-| `AGENT_PROVIDER` | `fake` | `fake` 或 `llm`（LLM Router 路径，需要 Key） |
-| `LLM_PRIMARY_BASE_URL` | `https://api.deepseek.com/v1` | 主 OpenAI 兼容接口 |
-| `LLM_PRIMARY_API_KEY` | `sk-...` | 主 Key（仅服务端） |
-| `LLM_PRIMARY_MODEL` | `deepseek-chat` | 主模型 |
-| `LLM_SECONDARY_*` | 同上 | 可选备用供应商 |
-| `LLM_TIMEOUT_MS` | `3000` | 单供应商超时 |
-| `LLM_DAILY_BUDGET_CNY` | `100` | 日预算熔断 |
-| `VOICE_PROVIDER` | `fake` | `fake` / `sherpa` / `funasr` / `cosyvoice` |
-| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | — | 启用 `/sessions/{id}/rtc` token |
+| 需求/架构/契约 | 01–04、11 补丁、P1–P5、WS golden fixture | ✅ |
+| M1 接入 | HTTP/WS、静态页、`/rtc`、`ws_url` 带 token、503 降级 | ✅ Fake 路径 |
+| M2 语音 | Fake 文本、浏览器 TTS、`tts_*` 元数据、音频帧入口 | 🟡 真实模型待接 |
+| M3 编排 | Session/Turn、取消、超时、打断、`turn_aborted` | ✅ |
+| M4 Agent | FakeAgent、LLMAgent（Mock 验证）、RAG、Flow Pack | ✅ 代码；🟡 真实 Key |
+| M5 Tool Gateway | Schema、幂等、超时、1 次重试、审计 | ✅ |
+| M6 合规 | 禁语 REWRITE、隐私 BLOCK、转人工、事件 | ✅ 规则待外置 |
+| M7 事件 | JSONL + SQLite、`seq`、`TurnLatency t0..t9`、回放 | ✅ |
+| M8 评测/报告 | `/eval/run`、headless、失败标签、Markdown | ✅ |
+| M9 Registry/RSI | candidate → production → previous、bootstrap 门禁 | ✅ 代码；🟡 真实候选 |
+| 前端 | 旧 Demo + `/rtc` 通话台、打断修复、无麦回放 | ✅ |
+| 交付 | Docker 261MB、healthy、CI、端口 8081 | ✅ 已验证 |
+| 测试 | 21 pytest、90 契约文档、4 组前端、E2E、指标自检 | ✅ |
 
-没有 LLM Key 时，`/internal/llm/complete` 返回 `LLM_NOT_CONFIGURED`，Fake Agent 继续用规则/模板回复。
+## 5. 最近一次更新
 
-把 [.env.example](.env.example) 复制成 `.env`；不要提交 `.env`。带 `APP_BASE=http://127.0.0.1:8081` 的可读副本在 [`config/app.example`](config/app.example)。
+**2026-11-01，`650a3ea`：cx 打断修复合入。**
 
-## 测试
+修复了“打断后客服复读/继续播原内容”的三个叠加缺陷：
+
+1. 手动打断不再触发 300ms 自动 `unduck`；等服务端 `cancel/turn_aborted` 裁决。
+2. 误打断恢复从**下一句**继续，不重播已播句子。
+3. 服务端取消后，旧 `reply_id` 在 session 层封禁；后续 `tts_*` / `audio_chunk` 全部丢弃。
+4. 纯打断不说话时，Mock 用**新 `reply_id`** 下发兜底话术，不复活旧回复。
+5. `APP_BASE` 默认同源，`/rtc/` 接真后端不再依赖 `?app=`。
+
+验证：前端 `barge.mjs`、golden/pcm/uplink、mock smoke 全过；CI run [41319214781](https://github.com/SLR979111/AI-call/actions/runs/41319214781) success。
+
+**2026-11-02**：新增比赛指标自检脚本与本文档/指南整理。
+
+## 6. 各部分剩余工作
+
+| 部分 | 剩余工作 | 负责人 | 验收 |
+|---|---|---|---|
+| 语音 | sherpa-onnx 中文流式 ASR / VITS TTS、模型进镜像、真实时间轴 | SinCircle | 真机说一句 → 首字 P50 有数 |
+| 媒体 | LiveKit Server、前端入房、TURN、AEC/打断 | cx / SinCircle | `/rtc/` 真 WebRTC 通话 |
+| Agent | 真实 LLM Key、Function Calling、场景 Prompt、多轮改写 | pseudonym | 真实任务成功率 |
+| 业务 | 官方场景 Flow Pack、真实工单写回（当前 Fake 只 `order.query`） | pseudonym | `order.reschedule`/`ticket` 真写 |
+| 合规 | 规则外置 `rules.yaml`、质检报告、红队用例 | pseudonym | 严重违规 0 |
+| 评测 | 30/20/20 用例、LLM-as-Judge、模拟用户、留出集 | 湖中日月 | 可复现评测报告 |
+| RSI | 失败聚类、候选生成、A/B、门禁数据 | 湖中日月 | 一组可展示的改进前后 |
+| 交付 | 主办方干净机、模型/端口/离线验证 | 天命 | 一键启动 + 健康 |
+| 提交 | 真机数据、测试音频、5min 视频、3/7min 答辩 | 全员 | 提交包完整 |
+
+优先顺序：**LLM Key → CPU ASR/TTS → LiveKit → 官方场景/合规 → 评测/RSI → 提交物**。
+
+## 7. 当前测试
+
+| 测试 | 命令 | 最近结果 |
+|---|---|---|
+| 单元 + 契约 | `make test` | **21 passed** |
+| 契约 Schema | `make contract-test` | **5 files / 90 docs** |
+| 前端协议 | `cd web/rtc && npm test` | golden / PCM / 回灌 / 打断 **4 组 PASS** |
+| 端到端 | `make e2e` | 2 轮 + 打断 + 挂断 **PASS** |
+| 比赛指标 | `make metric` | **13 项 PASS** |
+| CI | GitHub Actions | [run 41319214781](https://github.com/SLR979111/AI-call/actions/runs/41319214781) **success** |
+
+## 8. 比赛指标测试
+
+`scripts/metric_check.py` 把硬指标变成可重复检查，支持**分段执行**：
 
 ```bash
-make test            # 全量 pytest
-make contract-test   # Schema 校验 + 契约测试
-make smoke           # 需要另开终端先 make run / make docker-up
-make e2e             # 2 轮 + 打断 + 挂断（WS）
+make metric                 # 全量
+make metric-closure         # 3 轮闭环 + 写回
+make metric-latency         # 首字 P50/P95
+make metric-task            # 任务成功率
+make metric-compliance      # 合规/不泄露
+make metric-barge           # 打断停止/确认
 ```
 
-`make contract-test` 等价于：
+当前结果（Fake/协议级，2026-11-02）：
+
+| 检查点 | 实测 | 门槛 | 结果 |
+|---|---|---|---|
+| 至少 3 轮 | 3 轮 | `>= 3` | ✅ |
+| 任务成功 | rescheduled | 成功 | ✅ |
+| 工具调用 | `order.query` | 有 `ToolReturned` | ✅ |
+| 业务结果回写 | `new_time` + `ticket` | 有结果 | ✅（Fake 模拟） |
+| 首字 P50 | 883 ms | `<= 2000 ms` | ✅ |
+| 首字 P95 | 887 ms | `<= 3000 ms` | ✅ |
+| 任务成功率 | 100%（5 cases） | `>= 80%` | ✅ |
+| 合规检查 | 2 次 | `> 0` | ✅ |
+| PII 泄露 | 无 | 无 | ✅ |
+| 打断停止 | 20 ms（客户端上报） | `<= 100 ms` | ✅ |
+| 服务端确认 | 212 ms | `<= 2000 ms` | ✅ |
+
+输出：控制台 + `reports/metric-check.md` + 可选 JSON。详细测试点见 [测试指南](docs/guides/testing.md)。
+
+> 这些数字是 **Fake/协议代理指标**，不是真实声学时延；真实 ASR/TTS 接入后用同一脚本复跑，阈值不变。
+
+## 9. 30 秒启动
 
 ```bash
-python contracts/validate.py contracts/fixtures
-pytest tests/test_contract.py -q
+docker-compose up -d --build
 ```
 
-`scripts/smoke.sh` 会检查 `GET /healthz`、创建文本会话、跑一轮并拉取事件流。指向其他地址：
+打开：
 
-```bash
-BASE_URL=http://127.0.0.1:8081 sh scripts/smoke.sh
-```
+- 旧 Demo：<http://127.0.0.1:8081/>
+- 新通话台：<http://127.0.0.1:8081/rtc/>
+- 健康检查：<http://127.0.0.1:8081/healthz>
 
-回放一轮事件时间线、生成自测报告：
+本地 venv、配置项、接口表、Docker 镜像/代理排障见 [开发指南](docs/guides/development.md)。
 
-```bash
-python scripts/replay.py --session s_...
-python scripts/report.py --data-dir data --out reports/self-test.md
-python scripts/rsi_compare.py --baseline data/baseline.json --candidate data/candidate.json
-```
+## 10. 文档索引
 
-CI（`.github/workflows/ci.yml`）在 `ubuntu-latest` + Python 3.12 上安装 `requirements.txt`，跑 `pytest -q`，校验 `contracts/fixtures`，最后启动服务跑 WS E2E。
+| 文档 | 内容 |
+|---|---|
+| [docs/10](docs/10-master-summary.md) | 总汇总（先看） |
+| [docs/13](docs/13-status-and-file-map.md) | 项目现状与文件地图 |
+| [docs/01](docs/01-requirement-metric-module-matrix.md)–[04](docs/04-event-schema-v0.1.md) | 需求/架构/契约/事件 |
+| [docs/11](docs/11-contract-v0.2-patch.md) | v0.2 / v0.2.1 契约补丁 |
+| [docs/12](docs/12-technical-proposal-draft.md) | 技术方案书初稿 |
+| [docs/guides/development.md](docs/guides/development.md) | 开发、配置、接口、Docker |
+| [docs/guides/testing.md](docs/guides/testing.md) | 测试分层、指标点、分段执行 |
+| [web/rtc/README.md](web/rtc/README.md) | 新通话台使用说明 |
+| [docs/README.md](docs/README.md) | 文档总索引 |
 
-## 项目结构
+## 11. 边界与合规
 
-```text
-aicall/
-├── app/                  FastAPI 应用（orchestrator、agent、llm、rag、flow、rsi）
-├── web/                  静态 Demo 页面
-├── contracts/            JSON Schema、fixtures、validate.py
-├── knowledge/            本地 FAQ 知识库
-├── flowpacks/            业务流程定义
-├── eval/                 评测用例
-├── reports/              生成的自测报告
-├── tests/                pytest 测试
-├── scripts/              smoke / e2e / mock_llm / report / rsi / replay
-├── docs/                 架构、契约、交付文档
-├── data/                 运行时 SQLite/JSONL/产物（gitignore）
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── Makefile
-├── .env.example
-└── .github/workflows/ci.yml
-```
-
-## 当前骨架范围
-
-- ASR / Agent / TTS 都是确定性 Fake，不需要模型文件。
-- 事件链路为内存 + JSONL + SQLite，`seq` 单调递增，可用于回放和时延分析（见 [docs/04](docs/04-event-schema-v0.1.md)）。
-- 暂不包含：真实 ASR/TTS、云 LLM 接入、LiveKit/WebRTC、coturn、正式鉴权、多场景 Flow Pack。
+- 当前 ASR/Agent/TTS 可确定性复现；不依赖 GPU/模型文件。
+- 不接真实外呼、不使用真实 PII、不包含隧道/穿透工具。
+- 交付按 CPU-only Docker 设计；真实模型/Key 通过环境变量注入，不进仓库。
+- 比赛指标以真实接入后的复跑结果为准；README 中的 Fake 数据均明确标注。
