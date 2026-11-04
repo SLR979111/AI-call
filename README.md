@@ -170,7 +170,7 @@ flowchart TB
 |---|---|---|
 | 需求/架构/契约 | 01–04、11 补丁、P1–P5、WS golden fixture | ✅ |
 | M1 接入 | HTTP/WS、静态页、`/rtc`、`ws_url` 带 token、503 降级 | ✅ Fake 路径 |
-| M2 语音 | sherpa 流式 ASR、Qwen3/Melo、真实 PCM、分组/时长/取消 | ✅ 本机实测；目标容器待验 |
+| M2 语音 | sherpa 流式 ASR、Qwen3/Melo、真实 PCM、分组/时长/取消 | ✅ 开发环境已验证；目标容器待验收 |
 | M3 编排 | Session/Turn、取消、超时、打断、`turn_aborted` | ✅ |
 | M4 Agent | FakeAgent、LLMAgent（Mock 验证）、RAG、Flow Pack | ✅ 代码；🟡 真实 Key |
 | M5 Tool Gateway | Schema、幂等、超时、1 次重试、审计 | ✅ |
@@ -184,7 +184,7 @@ flowchart TB
 
 ## 5. 最近一次更新
 
-**2026-11-03，工作区变更**：真实语音接入；运行命令和剩余边界见 [生产语音指南](docs/guides/production-voice.md)。
+**2026-11-03：真实语音接入**。运行命令和剩余边界见 [生产语音指南](docs/guides/production-voice.md)。
 
 **2026-11-01，`650a3ea`：cx 打断修复合入。**
 
@@ -220,12 +220,12 @@ flowchart TB
 
 | 测试 | 命令 | 最近结果 |
 |---|---|---|
-| 单元 + 契约 | `make test` | **21 passed** |
+| 单元 + 契约 | `make test` | **53 passed / 5 skipped**（模型集成用例默认跳过） |
 | 契约 Schema | `make contract-test` | **5 files / 90 docs** |
 | 前端协议 | `cd web/rtc && npm test` | golden / PCM / 回灌 / 打断 **4 组 PASS** |
 | 端到端 | `make e2e` | 2 轮 + 打断 + 挂断 **PASS** |
 | 比赛指标 | `make metric` | **13 项 PASS** |
-| CI | GitHub Actions | [run 41319214781](https://github.com/SLR979111/AI-call/actions/runs/41319214781) **success** |
+| CI | GitHub Actions | [run 41800240126](https://github.com/SLR979111/AI-call/actions/runs/41800240126) **success** |
 
 ## 8. 比赛指标测试
 
@@ -262,10 +262,22 @@ make metric-barge           # 打断停止/确认
 
 ## 9. 启动
 
-先按 [生产语音指南](docs/guides/production-voice.md) 准备模型和授权参考音频；CPU-only 显式选择 `TTS_PROVIDER=melo`。
+### 9.1 Fake/无模型（快速演示）
 
 ```bash
+ASR_PROVIDER=fake TTS_PROVIDER=fake docker-compose up -d --build app
+```
+
+### 9.2 生产语音（需模型）
+
+先按 [生产语音指南](docs/guides/production-voice.md) 准备模型和授权参考音频。
+
+```bash
+# GPU + Qwen3 sidecar
 docker compose --profile gpu up -d --build
+
+# 或 CPU-only + Melo
+TTS_PROVIDER=melo docker-compose up -d --build app
 ```
 
 打开：
@@ -273,6 +285,7 @@ docker compose --profile gpu up -d --build
 - 旧 Demo：<http://127.0.0.1:8081/>
 - 新通话台：<http://127.0.0.1:8081/rtc/>
 - 健康检查：<http://127.0.0.1:8081/healthz>
+- 语音 readiness：<http://127.0.0.1:8081/voice/status>
 
 本地 venv、配置项、接口表、Docker 镜像/代理排障见 [开发指南](docs/guides/development.md)。
 
@@ -292,7 +305,7 @@ docker compose --profile gpu up -d --build
 
 ## 11. 边界与合规
 
-- 当前 ASR/Agent/TTS 可确定性复现；不依赖 GPU/模型文件。
+- Fake 模式可确定性复现，不依赖 GPU/模型；生产语音需模型与 CPU/GPU 运行时。
 - 不接真实外呼、不使用真实 PII、不包含隧道/穿透工具。
 - 交付按 CPU-only Docker 设计；真实模型/Key 通过环境变量注入，不进仓库。
 - 比赛指标以真实接入后的复跑结果为准；README 中的 Fake 数据均明确标注。
