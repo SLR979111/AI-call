@@ -27,7 +27,7 @@ export class Playback {
     this.turnId = '';
     this.sampleRate = 24000;
     this.estimated = true;
-    /** @type {Array<{sentence_id:number,text:string,start_ms:number,end_ms:number,char_start:number,char_end:number,is_last?:boolean}>} */
+    /** @type {Array<{sentence_id:number,text:string,start_ms:number,end_ms:number,char_start:number,char_end:number,is_last?:boolean,estimated?:boolean}>} */
     this.sentences = [];
 
     this.firstFrameSent = false;
@@ -79,7 +79,8 @@ export class Playback {
     this.duckSentenceId = null;
     this.spoken.clear();
 
-    if (this.cfg.DOWNLINK === 'speech') this.form = 'speech';
+    if (d.audio_format === 'pcm16') this.form = 'pcm'; // server PCM never silently changes voice
+    else if (this.cfg.DOWNLINK === 'speech') this.form = 'speech';
     else if (this.cfg.DOWNLINK === 'pcm') this.form = 'pcm';
     else {
       this.form = null;                       // auto：等首个块或超时
@@ -117,7 +118,7 @@ export class Playback {
     const rate = d.sample_rate || this.sampleRate;
 
     const buf = ctx.createBuffer(1, pcm.length, rate);   // 让浏览器按 ctx 采样率自动重采样
-    buf.copyToChannel(pcm, 0);
+    buf.copyToChannel(Float32Array.from(pcm, (value) => value / 32768), 0);
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(gain);
@@ -315,7 +316,7 @@ export class Playback {
     return {
       sentence_id: s.sentence_id,
       char_idx: Math.round((s.char_start || 0) + ratio * charSpan),
-      estimated: this.estimated
+      estimated: this.estimated || s.estimated === true
     };
   }
 
@@ -341,6 +342,7 @@ function normalizeSentence(s) {
     end_ms: s.end_ms ?? s.endMs ?? 0,
     char_start: charStart,
     char_end: charEnd,
-    is_last: !!s.is_last
+    is_last: !!s.is_last,
+    estimated: s.estimated === true || s.tts_alignment === false
   };
 }

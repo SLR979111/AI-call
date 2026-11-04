@@ -1,55 +1,122 @@
 from __future__ import annotations
 
-import importlib.util
+import asyncio
 import os
 from dataclasses import dataclass
 
+from .types import VoiceError
 
-class VoiceNotConfigured(Exception):
-    pass
+VoiceNotConfigured = VoiceError
+
+
+def providers() -> tuple[str, str]:
+    legacy = os.getenv("VOICE_PROVIDER", "").strip().lower()
+    test = os.getenv("APP_ENV") == "test"
+    legacy_asr = {"sherpa-onnx": "sherpa"}.get(legacy, legacy)
+    legacy_tts = {"sherpa": "melo", "sherpa-onnx": "melo"}.get(legacy, legacy)
+    asr = os.getenv("ASR_PROVIDER", legacy_asr or ("fake" if test else "sherpa")).strip().lower()
+    tts = os.getenv("TTS_PROVIDER", legacy_tts or ("fake" if test else "qwen3")).strip().lower()
+    return asr, tts
+
+
+def create_tts(provider: str | None = None):
+    provider = provider or providers()[1]
+    if os.getenv("TTS_FALLBACK_PROVIDER", "").strip():
+        raise VoiceError("TTS_CONFIG", "TTS_FALLBACK_PROVIDER must be empty; voice fallback is disabled")
+    if provider == "fake":
+        from .fake import FakeTts
+        return FakeTts()
+    if provider == "qwen3":
+        from .qwen import QwenTts
+        return QwenTts(os.getenv("QWEN_TTS_URL", "http://127.0.0.1:8090"))
+    if provider == "melo":
+        from .melo import MeloTts
+        return MeloTts(os.getenv("MELO_MODEL_DIR", "models/vits-melo-tts-zh_en"))
+    raise VoiceError("TTS_CONFIG", f"unknown TTS_PROVIDER={provider}")
+
+
+def create_asr(provider: str | None = None):
+    provider = provider or providers()[0]
+    if provider == "fake":
+        from .fake import FakeAsr
+        return FakeAsr()
+    if provider == "sherpa":
+        from .sherpa_asr import SherpaAsr
+        return SherpaAsr(os.getenv("ASR_MODEL_DIR", "models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"))
+    raise VoiceError("ASR_CONFIG", f"unknown ASR_PROVIDER={provider}")
 
 
 @dataclass
 class VoiceStatus:
-    provider: str
-    asr_ready: bool
-    tts_ready: bool
-    detail: str
+    asr_provider: str
+    tts_provider: str
+    asr_ready: bool = False
+    tts_ready: bool = False
+    asr_detail: str = "not initialized"
+    tts_detail: str = "not initialized"
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "provider": self.provider,
-            "asr_ready": self.asr_ready,
-            "tts_ready": self.tts_ready,
-            "detail": self.detail,
-        }
+    @property
+    def provider(self):
+        return self.asr_provider if self.asr_provider == self.tts_provider else f"{self.asr_provider}/{self.tts_provider}"
+
+    @property
+    def detail(self):
+        return f"ASR: {self.asr_detail}; TTS: {self.tts_detail}"
+
+    def to_dict(self):
+        return {"provider": self.provider, "asr_ready": self.asr_ready, "tts_ready": self.tts_ready,
+                "detail": self.detail,
+                "asr": {"provider": self.asr_provider, "ready": self.asr_ready, "detail": self.asr_detail},
+                "tts": {"provider": self.tts_provider, "ready": self.tts_ready, "detail": self.tts_detail}}
 
 
 def voice_status() -> VoiceStatus:
-    """Report what the process can actually use.
-
-    The fake skeleton uses browser speechSynthesis for TTS and text input for
-    ASR. Real CPU ASR/TTS (sherpa-onnx) is a W2 milestone; this function makes
-    the boundary explicit instead of pretending it is ready.
-    """
-    provider = os.getenv("VOICE_PROVIDER", "fake").strip().lower()
-    if provider == "fake":
-        return VoiceStatus("fake", True, True, "browser speechSynthesis + text input")
-    if provider in {"sherpa", "sherpa-onnx"}:
-        installed = importlib.util.find_spec("sherpa_onnx") is not None
-        return VoiceStatus(
-            "sherpa-onnx",
-            installed,
-            installed,
-            "sherpa_onnx installed" if installed else "install sherpa-onnx and mount models/",
-        )
-    if provider in {"funasr", "cosyvoice"}:
-        return VoiceStatus(provider, False, False, f"{provider} adapter not wired in v0.1")
-    return VoiceStatus(provider, False, False, f"unknown VOICE_PROVIDER={provider}")
+    # Configuration-only helper retained for callers outside an application lifespan.
+    asr, tts = providers()
+    return VoiceStatus(asr, tts, asr == "fake", tts == "fake",
+                       "test provider" if asr == "fake" else "not initialized",
+                       "test tone" if tts == "fake" else "not initialized")
 
 
-def ensure_voice_provider() -> str:
-    status = voice_status()
-    if not (status.asr_ready and status.tts_ready):
-        raise VoiceNotConfigured(status.detail)
-    return status.provider
+class UnavailableTts:
+    sample_rate = 24000
+
+    def __init__(self, error):
+        self.error = error
+
+    async def synthesize(self, *args, **kwargs):
+        raise self.error
+        yield  # async iterator contract even on failure
+
+
+class VoiceRuntime:
+    def __init__(self):
+        self.status = voice_status()
+        self.asr = None
+        self.tts = None
+
+    async def initialize(self):
+        # Only the selected providers are imported / loaded.
+        for kind, factory in (("asr", create_asr), ("tts", create_tts)):
+            provider = getattr(self.status, f"{kind}_provider")
+            try:
+                adapter = await asyncio.to_thread(factory, provider)
+                setattr(self, kind, adapter)
+                setattr(self.status, f"{kind}_ready", True)
+                setattr(self.status, f"{kind}_detail", "loaded" if provider != "fake" else "test provider")
+            except Exception as exc:
+                setattr(self.status, f"{kind}_ready", False)
+                setattr(self.status, f"{kind}_detail", str(exc))
+                if kind == "tts":
+                    self.tts = UnavailableTts(VoiceError("TTS_NOT_READY", str(exc)))
+        await self.refresh()
+
+    async def refresh(self):
+        if self.status.tts_provider == "qwen3" and hasattr(self.tts, "health"):
+            self.status.tts_ready, self.status.tts_detail = await self.tts.health()
+        return self.status
+
+    async def start_asr(self, session_id):
+        if self.asr is None:
+            raise VoiceError("ASR_NOT_READY", self.status.asr_detail)
+        return await self.asr.start(session_id)

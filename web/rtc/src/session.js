@@ -278,7 +278,8 @@ export class SessionClient extends EventTarget {
     }
     this.currentReplyId = d.reply_id;
     store.beginReply(d.reply_id, d.turn_id, d.estimated === true || d.tts_alignment === false);
-    store.set({ downlink: d.estimated ? 'speech(估算)' : (d.tts_alignment === false ? 'speech(估算)' : 'pcm') });
+    store.set({ downlink: d.audio_format === 'pcm16' ? 'pcm'
+      : (d.estimated || d.tts_alignment === false ? 'speech(估算)' : 'pcm') });
     store.log(`tts_started reply=${d.reply_id} alignment=${d.tts_alignment} est=${d.estimated}`);
     this.dispatchEvent(new CustomEvent('tts-started', { detail: d }));
   }

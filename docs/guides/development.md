@@ -11,7 +11,9 @@ python -m pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8081
 ```
 
-默认值与 [.env.example](../../.env.example) 对齐，本地不需要 `.env`；Docker Compose 会自动读取 `.env`。
+默认语音为 sherpa ASR + Qwen GPU sidecar。真实语音的模型路径、授权参考音频、Melo CPU 切换、启动命令见 [生产语音指南](production-voice.md)。不挂模型做纯契约联调时，启动前显式设置 `ASR_PROVIDER=fake TTS_PROVIDER=fake`（PowerShell 分别设置 `$env:ASR_PROVIDER='fake'` 和 `$env:TTS_PROVIDER='fake'`）。Fake 只输出测试音调。pytest 默认采用 fake。
+
+配置样例见 [config/app.example](../../config/app.example)；本地 uvicorn 不自动读取 `.env`，Docker Compose 会读取。
 
 启动后：
 
@@ -52,7 +54,11 @@ uvicorn app.main:app --reload --port 8081
 | `LLM_SECONDARY_*` | 同上 | 备用 LLM |
 | `LLM_TIMEOUT_MS` | `3000` | 单供应商超时 |
 | `LLM_DAILY_BUDGET_CNY` | `100` | 日预算熔断 |
-| `VOICE_PROVIDER` | `fake` | `fake` / `sherpa` / `funasr` / `cosyvoice` |
+| `ASR_PROVIDER` | `sherpa` | `sherpa` / `fake` |
+| `TTS_PROVIDER` | `qwen3` | `qwen3` / `melo` / `fake`，不自动 fallback |
+| `VOICE_PROVIDER` | 未设置 | 旧兼容变量，新变量优先 |
+| `QWEN_TTS_URL` | `http://127.0.0.1:8090` | GPU sidecar base URL |
+| `ASR_MODEL_DIR` / `MELO_MODEL_DIR` | 本地目录 | 离线预备的模型 |
 | `LIVEKIT_*` | URL/Key/Secret | 启用 `/sessions/{id}/rtc` |
 
 没有 LLM Key 时，`/internal/llm/complete` 返回 `LLM_NOT_CONFIGURED`，Fake Agent 继续用规则回复。
@@ -80,10 +86,10 @@ uvicorn app.main:app --reload --port 8081
 ## 5. Docker 与网络
 
 ```bash
-docker-compose up -d --build
+docker compose --profile gpu up -d --build
 curl -fsS http://localhost:8081/healthz
-docker-compose logs -f app
-docker-compose down
+docker compose logs -f app
+docker compose --profile gpu down
 ```
 
 `docker compose`（v2 插件）也可用；Makefile 默认 `docker-compose`，可覆盖：

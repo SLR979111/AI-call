@@ -14,3 +14,8 @@ httpx>=0.27.0,<1.0.0
 # Tests: tests/, tests/test_contract.py and scripts/smoke.sh helpers.
 # Async tests are handled by tests/conftest.py; no pytest-asyncio needed.
 pytest>=8.3.0,<9.0.0
+
+# CPU voice providers; no torch / GPU libraries in the main application.
+numpy>=1.26,<3
+scipy>=1.12,<2
+sherpa-onnx==2.0.1

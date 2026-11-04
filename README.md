@@ -2,11 +2,11 @@
 
 > 一个面向竞赛演示的任务型语音外呼 Agent：实时语音交互、工具调用、合规守卫、事件追踪、评测与 RSI 自进化。
 >
-> 当前是 **Fake 全链路 + 可交付 Docker + 新通话台**；真实 ASR/TTS、云 LLM、LiveKit 媒体是下一阶段。
+> 已接入 **流式 sherpa ASR + 默认 Qwen3 GPU TTS / 可切换 Melo CPU TTS**。运行时离线加载模型，真实 PCM 下行与取消已接通。启动步骤见 [生产语音指南](docs/guides/production-voice.md)。
 
 | 现在能做什么 | 现在还不能做什么 |
 |---|---|
-| 3 轮任务闭环、订单查询/改约、FAQ、转人工 | 真实麦克风 ASR、真实 TTS 音色 |
+| 3 轮任务闭环、订单查询/改约、FAQ、转人工；真实 PCM ASR/TTS | 授权产品音色、真机麦克风声学验收 |
 | 打断（barge-in）、停止播报、`turn_aborted` | 真实 LiveKit 媒体面 |
 | 工具校验/幂等/重试/审计、合规拦截 | 真实云 LLM 意图/Function Calling |
 | JSONL + SQLite 事件、时延、回放、评测、RSI | 真实工单写回、真机声学时延 |
@@ -22,7 +22,7 @@ flowchart LR
   subgraph ONLINE["在线请求链路（按序）"]
     direction LR
     U["用户 / 评委"] --> M1["M1 接入层<br/>FastAPI HTTP/WS<br/>静态页 + /rtc 通话台"]
-    M1 --> M2["M2 实时语音<br/>VAD / ASR / TTS<br/>当前 Fake，适配器边界已留"]
+    M1 --> M2["M2 实时语音<br/>sherpa ASR / Qwen3 或 Melo TTS<br/>真实 PCM 与取消"]
     M2 --> M3["M3 编排器<br/>Session / Turn<br/>取消 / 超时 / 下行队列"]
     M3 --> M4["M4 Agent<br/>Flow Pack + LLM + RAG"]
     M4 --> M5["M5 Tool Gateway<br/>Schema / 幂等 / 重试 / 审计"]
@@ -170,7 +170,7 @@ flowchart TB
 |---|---|---|
 | 需求/架构/契约 | 01–04、11 补丁、P1–P5、WS golden fixture | ✅ |
 | M1 接入 | HTTP/WS、静态页、`/rtc`、`ws_url` 带 token、503 降级 | ✅ Fake 路径 |
-| M2 语音 | Fake 文本、浏览器 TTS、`tts_*` 元数据、音频帧入口 | 🟡 真实模型待接 |
+| M2 语音 | sherpa 流式 ASR、Qwen3/Melo、真实 PCM、分组/时长/取消 | ✅ 本机实测；目标容器待验 |
 | M3 编排 | Session/Turn、取消、超时、打断、`turn_aborted` | ✅ |
 | M4 Agent | FakeAgent、LLMAgent（Mock 验证）、RAG、Flow Pack | ✅ 代码；🟡 真实 Key |
 | M5 Tool Gateway | Schema、幂等、超时、1 次重试、审计 | ✅ |
@@ -179,10 +179,12 @@ flowchart TB
 | M8 评测/报告 | `/eval/run`、headless、失败标签、Markdown | ✅ |
 | M9 Registry/RSI | candidate → production → previous、bootstrap 门禁 | ✅ 代码；🟡 真实候选 |
 | 前端 | 旧 Demo + `/rtc` 通话台、打断修复、无麦回放 | ✅ |
-| 交付 | Docker 261MB、healthy、CI、端口 8081 | ✅ 已验证 |
-| 测试 | 21 pytest、90 契约文档、4 组前端、E2E、指标自检 | ✅ |
+| 交付 | CPU app + GPU sidecar profile、离线模型挂载 | ✅ Compose 校验；新镜像待构建验收 |
+| 测试 | 原契约测试 + provider/ASR/TTS/取消测试、4 组前端 | 见 [生产语音指南](docs/guides/production-voice.md) |
 
 ## 5. 最近一次更新
+
+**2026-11-03，工作区变更**：真实语音接入；运行命令和剩余边界见 [生产语音指南](docs/guides/production-voice.md)。
 
 **2026-11-01，`650a3ea`：cx 打断修复合入。**
 
@@ -202,7 +204,7 @@ flowchart TB
 
 | 部分 | 剩余工作 | 负责人 | 验收 |
 |---|---|---|---|
-| 语音 | sherpa-onnx 中文流式 ASR / VITS TTS、模型进镜像、真实时间轴 | SinCircle | 真机说一句 → 首字 P50 有数 |
+| 语音 | 授权产品音色、目标 GPU 容器、噪声 ASR/麦克风验收、分组句内精确对齐 | SinCircle | 真机说一句 → 声学首字 P50 有数 |
 | 媒体 | LiveKit Server、前端入房、TURN、AEC/打断 | cx / SinCircle | `/rtc/` 真 WebRTC 通话 |
 | Agent | 真实 LLM Key、Function Calling、场景 Prompt、多轮改写 | pseudonym | 真实任务成功率 |
 | 业务 | 官方场景 Flow Pack、真实工单写回（当前 Fake 只 `order.query`） | pseudonym | `order.reschedule`/`ticket` 真写 |
@@ -258,10 +260,12 @@ make metric-barge           # 打断停止/确认
 
 > 这些数字是 **Fake/协议代理指标**，不是真实声学时延；真实 ASR/TTS 接入后用同一脚本复跑，阈值不变。
 
-## 9. 30 秒启动
+## 9. 启动
+
+先按 [生产语音指南](docs/guides/production-voice.md) 准备模型和授权参考音频；CPU-only 显式选择 `TTS_PROVIDER=melo`。
 
 ```bash
-docker-compose up -d --build
+docker compose --profile gpu up -d --build
 ```
 
 打开：

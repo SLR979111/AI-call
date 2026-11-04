@@ -13,6 +13,7 @@
  */
 import { b64ToInt16 } from '../src/protocol.js';
 import { Playback } from '../src/playback.js';
+import * as store from '../src/store.js';
 
 const fails = [];
 const check = (name, ok, extra) => {
@@ -112,6 +113,47 @@ check('调度时间严格递增（nextAt 推进）',
   created.starts.length === 3 && created.starts.every((t, i) => i === 0 || t > created.starts[i - 1]),
   created.starts);
 check('source 连到共享 gain（便于 duck 全局静音）', !!pb.gain);
+check('PCM16 normalized to Float32 amplitude',
+  created.buffers.every((b) => b.getChannelData().every((v) => Math.abs(v) <= 1)) &&
+  Math.max(...created.buffers[0].getChannelData()) > 0.29);
+
+{
+  const serverPcm = new Playback(makeStubEngine().engine,
+    { DOWNLINK: 'auto', FIRST_FRAME_WAIT_MS: 1 }, makeStubClient());
+  serverPcm.begin({ reply_id: 'server-pcm', audio_format: 'pcm16', sample_rate: 24000 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  check('Explicit server PCM never falls back to browser speech', serverPcm.form === 'pcm');
+}
+
+{
+  const stub = makeStubEngine();
+  const callbacks = makeStubClient();
+  const streamed = new Playback(stub.engine, cfg, callbacks);
+  streamed.begin({ reply_id: 'metadata', turn_id: 't_meta', audio_format: 'pcm16', tts_alignment: true });
+  check('No sentence metadata means null cursor', streamed.cursor() === null);
+  const sentence = { sentence_id: 1, text: '您好。', start_ms: 0, end_ms: 540,
+    char_start: 0, char_end: 3, provisional: true, estimated: true, tts_alignment: false };
+  streamed.sentence(sentence);
+  check('Provisional sentence cursor is estimated even on aligned provider', streamed.cursor()?.estimated === true);
+  store.beginReply('metadata', 't_meta', false);
+  store.upsertSentence('metadata', sentence);
+  check('UI labels provisional sentence as estimated', store.get().replies.metadata.estimated);
+  streamed.pcm({ sample_rate: 24000, pcm_b64: toB64(int16(2400)), is_last: false });
+  const nextAt = streamed.nextAt;
+  streamed.pcm({ sample_rate: 24000, pcm_b64: '', is_last: true });
+  check('Empty group terminal neither schedules silence nor ends reply',
+    stub.created.sources.length === 1 && streamed.nextAt === nextAt && callbacks.calls.ended.length === 0);
+  const correction = { ...sentence, end_ms: 100, provisional: false, estimated: false, tts_alignment: true };
+  streamed.sentence(correction);
+  store.upsertSentence('metadata', correction);
+  check('Sentence correction upserts without duplicate text or audio',
+    streamed.sentences.length === 1 && streamed.sentences[0].end_ms === 100 && stub.created.sources.length === 1);
+  check('Corrected exact sentence clears provisional estimate in cursor and UI',
+    streamed.cursor()?.estimated === false && !store.get().replies.metadata.estimated);
+  streamed.pcm({ sample_rate: 24000, pcm_b64: toB64(int16(2400)), is_last: false });
+  check('Next synthesis group continues the same PCM reply', stub.created.sources.length === 2 && streamed.form === 'pcm');
+  streamed.stopNow();
+}
 
 // 首帧：异步（定时器），等一拍
 await new Promise((r) => setTimeout(r, 120));

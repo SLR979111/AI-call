@@ -1,6 +1,4 @@
-# CPU-only image for the competition runtime (x86_64, 8C/16GB, no GPU).
-# The fake skeleton has no model weights, so this stays small and builds offline
-# once the Python wheels are cached.
+# CPU application: sherpa ASR and optional Melo. Qwen runs in a separate GPU image.
 FROM python:3.12-slim
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
@@ -15,6 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/app/data
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies first so source edits do not invalidate this layer.
 # All packages ship manylinux wheels for x86_64; no compiler toolchain needed.

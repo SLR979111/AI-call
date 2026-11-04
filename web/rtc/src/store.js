@@ -124,6 +124,9 @@ export function upsertSentence(replyId, sentence) {
   if (i >= 0) r.sentences[i] = { ...r.sentences[i], ...sentence };
   else r.sentences.push(sentence);
   r.sentences.sort((a, b) => a.sentence_id - b.sentence_id);
+  if (sentence.estimated !== undefined || sentence.tts_alignment !== undefined) {
+    r.estimated = r.sentences.some((s) => s.estimated === true || s.tts_alignment === false);
+  }
   set({ replies: { ...state.replies } });
 }
 

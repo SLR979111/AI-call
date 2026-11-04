@@ -5,6 +5,7 @@
 
 # Python environments and caches
 .venv
+.venv-*
 venv
 env
 __pycache__
@@ -30,6 +31,12 @@ dist
 data
 logs
 artifacts
+models
+.uvcache
+.tmp
+*.wav
+*.onnx
+*.safetensors
 *.sqlite
 *.sqlite3
 *.db

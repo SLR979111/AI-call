@@ -1,6 +1,5 @@
 # Local / demo settings (copy the values you need into .env).
-# .env.example is protected by the agent's credential policy in this workspace;
-# this file is the human-readable copy for cx.
+# Export for local runs; Compose uses the *_HOST_DIR mounts documented in the guide.
 APP_BASE=http://127.0.0.1:8081
 APP_ENV=dev
 RELEASE_ID=rel_dev_001
@@ -15,8 +14,29 @@ LLM_PRIMARY_MODEL=
 LLM_TIMEOUT_MS=3000
 LLM_DAILY_BUDGET_CNY=100
 
-# Voice / media (optional; unset -> fake voice + ws_pcm)
-VOICE_PROVIDER=fake
+# Voice: production defaults. No automatic provider fallback.
+ASR_PROVIDER=sherpa
+TTS_PROVIDER=qwen3
+TTS_FALLBACK_PROVIDER=
+ASR_MODEL_DIR=./models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30
+MELO_MODEL_DIR=./models/vits-melo-tts-zh_en
+QWEN_TTS_URL=http://127.0.0.1:8090
+QWEN_TTS_TIMEOUT_S=30
+QWEN_GROUP_SENTENCES=3
+# Sidecar only: complete local weights and an authorized reference, never uploaded by requests.
+QWEN_MODEL_DIR=./models/Qwen3-TTS-12Hz-1.7B-Base
+QWEN_REF_AUDIO=./data/voice/reference.wav
+QWEN_REF_TEXT=
+QWEN_REFERENCE_CONSENT=0
+QWEN_CHUNK_SIZE=4
+QWEN_NON_STREAMING_MODE=false
+QWEN_TEMPERATURE=0.9
+QWEN_TOP_K=50
+QWEN_TOP_P=1.0
+QWEN_MAX_NEW_TOKENS=2048
+QWEN_INSTRUCT=用自然、平稳、亲切的客服语气，语速适中，句间停顿自然，不要夸张。
+# VOICE_PROVIDER is legacy-only; ASR_PROVIDER / TTS_PROVIDER take precedence.
+# Hermetic demo: ASR_PROVIDER=fake TTS_PROVIDER=fake (test tone, not speech).
 LIVEKIT_URL=
 LIVEKIT_API_KEY=
 LIVEKIT_API_SECRET=

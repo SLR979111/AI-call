@@ -1,8 +1,4 @@
-# Fake-skeleton stack for the competition runtime: CPU-only x86_64, 8C/16GB,
-# Docker Compose, no GPU and no external tunnel.
-#
-# Requires Docker Compose v2.24+ for the optional env_file entry. On an older
-# Compose, copy .env.example to .env first and drop `required: false`.
+# CPU app plus an explicitly enabled GPU sidecar. Models are never downloaded at runtime.
 services:
   app:
     build:
@@ -15,55 +11,73 @@ services:
       - path: .env
         required: false
     environment:
-      # The bind mount lives at /app/data regardless of DATA_DIR in .env.
       DATA_DIR: /app/data
+      ASR_PROVIDER: ${ASR_PROVIDER:-sherpa}
+      TTS_PROVIDER: ${TTS_PROVIDER:-qwen3}
+      TTS_FALLBACK_PROVIDER: ${TTS_FALLBACK_PROVIDER:-}
+      QWEN_TTS_URL: ${QWEN_TTS_URL:-http://qwen-tts:8090}
+      QWEN_GROUP_SENTENCES: ${QWEN_GROUP_SENTENCES:-3}
+      QWEN_TTS_TIMEOUT_S: ${QWEN_TTS_TIMEOUT_S:-30}
+      ASR_MODEL_DIR: /models/asr
+      MELO_MODEL_DIR: /models/melo
     volumes:
       - ./data:/app/data
+      - type: bind
+        source: ${ASR_MODEL_HOST_DIR:-./models/asr}
+        target: /models/asr
+        read_only: true
+      - type: bind
+        source: ${MELO_MODEL_HOST_DIR:-./models/melo}
+        target: /models/melo
+        read_only: true
     restart: unless-stopped
     init: true
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
-    stop_grace_period: 10s
+      start_period: 60s
+    stop_grace_period: 15s
 
-# ---------------------------------------------------------------------------
-# Placeholders for later milestones. None of these are started by the fake
-# skeleton; uncomment when the integration branch needs them.
-#
-# WebRTC media plane (W2, docs/05 + docs/09):
-#   livekit:
-#     image: livekit/livekit-server:v1.8
-#     command: --dev --bind 0.0.0.0
-#     ports:
-#       - "7880:7880"
-#       - "7881:7881"
-#       - "7882:7882/udp"
-#     restart: unless-stopped
-#
-# CPU ASR/TTS services (docs/09); each image bakes in its own model:
-#   asr:
-#     image: aicall-asr:local
-#     ports:
-#       - "10095:10095"
-#     restart: unless-stopped
-#   tts:
-#     image: aicall-tts:local
-#     ports:
-#       - "9880:9880"
-#     restart: unless-stopped
-#
-# GPU override (development only; the delivery target has no GPU):
-#   deploy:
-#     resources:
-#       reservations:
-#         devices:
-#           - driver: nvidia
-#             count: 1
-#             capabilities: [gpu]
+  qwen-tts:
+    profiles: [gpu]
+    build:
+      context: .
+      dockerfile: services/qwen_tts/Dockerfile
+    image: aicall-qwen-tts:local
+    environment:
+      APP_ENV: prod
+      QWEN_MODEL_DIR: /models/qwen
+      QWEN_REF_AUDIO: /voice/reference.wav
+      QWEN_REF_TEXT: ${QWEN_REF_TEXT:-}
+      QWEN_REFERENCE_CONSENT: ${QWEN_REFERENCE_CONSENT:-0}
+      QWEN_INSTRUCT: ${QWEN_INSTRUCT:-用自然、平稳、亲切的客服语气，语速适中，句间停顿自然，不要夸张。}
+      QWEN_CHUNK_SIZE: ${QWEN_CHUNK_SIZE:-4}
+      QWEN_NON_STREAMING_MODE: ${QWEN_NON_STREAMING_MODE:-false}
+      QWEN_TEMPERATURE: ${QWEN_TEMPERATURE:-0.9}
+      QWEN_TOP_K: ${QWEN_TOP_K:-50}
+      QWEN_TOP_P: ${QWEN_TOP_P:-1.0}
+      QWEN_MAX_NEW_TOKENS: ${QWEN_MAX_NEW_TOKENS:-2048}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - type: bind
+        source: ${QWEN_MODEL_HOST_DIR:-./models/qwen}
+        target: /models/qwen
+        read_only: true
+      - type: bind
+        source: ${QWEN_VOICE_HOST_DIR:-./data/voice}
+        target: /voice
+        read_only: true
+    expose: ["8090"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s

@@ -26,7 +26,8 @@ from .orchestrator import Orchestrator, SessionState
 from .registry import Registry, RegistryError
 from .rsi.gate import GateConfig, compare as rsi_compare
 from .tools.gateway import MockBusiness, ToolGateway
-from .voice.factory import voice_status
+from .voice.factory import VoiceRuntime
+from .voice.types import AudioFrame, VoiceError
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -44,9 +45,16 @@ CLIENT_EVENT_NAMES = {
 class WsConnection:
     def __init__(self, ws: WebSocket) -> None:
         self.ws = ws
+        self.lock = asyncio.Lock()
 
     async def send_json(self, data: dict[str, Any]) -> None:
-        await self.ws.send_json(data)
+        async with self.lock:
+            await asyncio.wait_for(self.ws.send_json(data), 5)
+
+    async def send_audio(self, data, cancel) -> None:
+        async with self.lock:
+            cancel.check()
+            await asyncio.wait_for(self.ws.send_json(data), 5)
 
 
 class CreateSessionRequest(BaseModel):
@@ -143,6 +151,8 @@ async def lifespan(app: FastAPI):
     else:
         agent = FakeAgent()
     compliance = ComplianceGuard()
+    voice = VoiceRuntime()
+    await voice.initialize()
     orchestrator = Orchestrator(
         bus=bus,
         agent=agent,
@@ -150,6 +160,7 @@ async def lifespan(app: FastAPI):
         compliance=compliance,
         release_id=settings.release_id,
         scenario_id=settings.scenario_id,
+        tts=voice.tts,
     )
     app.state.bus = bus
     app.state.tools = tools
@@ -159,6 +170,7 @@ async def lifespan(app: FastAPI):
     app.state.flowpack = flowpack
     app.state.llm = llm
     app.state.evals = {}
+    app.state.voice = voice
     try:
         yield
     finally:
@@ -166,7 +178,7 @@ async def lifespan(app: FastAPI):
         tools.close()
 
 
-app = FastAPI(title="智语外呼 Fake Skeleton", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="智语外呼", version="0.2.0", lifespan=lifespan)
 
 
 def _orc(request: Request) -> Orchestrator:
@@ -179,7 +191,7 @@ def _bus(request: Request) -> EventBus:
 
 @app.get("/voice/status")
 async def voice(request: Request) -> dict[str, Any]:
-    return voice_status().to_dict()
+    return (await request.app.state.voice.refresh()).to_dict()
 
 
 @app.get("/media/status")
@@ -542,26 +554,73 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
             return
 
     await websocket.accept()
+    if session.ws is not None or session.turn_state == "ENDED":
+        await websocket.close(code=4409)
+        return
     conn = WsConnection(websocket)
     await orc.attach(session_id, conn)
     tasks: set[asyncio.Task] = set()
+    asr = None
+    asr_task = None
+    last_seq = None
 
     def spawn(coro) -> None:
         task = asyncio.create_task(coro)
         tasks.add(task)
         task.add_done_callback(tasks.discard)
 
+    async def consume_asr(stream):
+        async for result in stream.events():
+            if result.kind == "error":
+                await conn.send_json({"type": "error", "error": result.error})
+                continue
+            metadata = {"confidence": result.confidence, "audio_start_ms": result.audio_start_ms,
+                        "audio_end_ms": result.audio_end_ms}
+            if result.kind == "final":
+                if result.text.strip():
+                    # Allocate the real turn under the orchestrator's lock, then
+                    # send exactly one final with that turn_id (never predict it).
+                    spawn(orc.handle_text(session_id, result.text, conn, transcript_metadata=metadata))
+            else:
+                await conn.send_json({"type": "transcript", "text": result.text,
+                                      "final": False, **metadata})
+
     try:
         while True:
             event = await websocket.receive()
+            if event["type"] == "websocket.disconnect":
+                break
             if "bytes" in event and event["bytes"] is not None:
-                # WS PCM fallback: frame parsing/ASR is a W2 adapter concern.
-                session.audio_frames += 1
+                try:
+                    frame = AudioFrame.parse(event["bytes"])
+                    if last_seq is not None:
+                        delta = (frame.seq - last_seq) & 0xFFFFFFFF
+                        if delta == 0 or delta > 0x7FFFFFFF:
+                            raise VoiceError("AUDIO_SEQUENCE", "duplicate or out-of-order PCM frame")
+                        if delta > 1:
+                            await request_bus_emit(websocket, session_id, "Degraded", "voice.asr",
+                                                   {"reason": "audio_gap", "missing_frames": delta - 1})
+                    last_seq = frame.seq
+                    if asr is None:
+                        asr = await websocket.app.state.voice.start_asr(session_id)
+                        asr_task = asyncio.create_task(consume_asr(asr))
+                    await asr.push(frame)
+                    session.audio_frames += 1
+                except Exception as exc:
+                    error = exc if isinstance(exc, VoiceError) else VoiceError("ASR_FAILED", str(exc), True)
+                    await conn.send_json({"type": "error", "error": error.to_dict()})
                 continue
             raw = event.get("text")
             if raw is None:
                 continue
-            msg = json.loads(raw)
+            try:
+                msg = json.loads(raw)
+                if not isinstance(msg, dict):
+                    raise ValueError("expected JSON object")
+            except ValueError as exc:
+                await conn.send_json({"type": "error", "error": {
+                    "code": "INVALID_MESSAGE", "message": str(exc), "retryable": False}})
+                continue
             kind = msg.get("type")
             if kind == "hello":
                 await conn.send_json({
@@ -570,7 +629,17 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                     "transport": session.transport,
                 })
             elif kind == "text":
-                spawn(orc.handle_text(session_id, str(msg.get("text", "")), conn))
+                text = msg.get("text")
+                if not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000:
+                    await conn.send_json({"type": "error", "error": {
+                        "code": "INVALID_TEXT", "message": "text must be 1..2000 chars", "retryable": False}})
+                else:
+                    spawn(orc.handle_text(session_id, text, conn))
+            elif kind == "speech_ended":
+                if asr is not None:
+                    await asr.finish()
+                    await asr_task
+                    asr, asr_task = None, None
             elif kind in {"speech_started", "local_muted", "playback_first_frame",
                           "playback_ended", "ping"}:
                 await orc.on_client_event(session_id, msg)
@@ -599,7 +668,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                     session.transport = target
                     await conn.send_json({"type": "transport_switched", "to": target,
                                           "audio": {"uplink": "pcm16/16000",
-                                                    "downlink": "pcm16/24000"}})
+                                                    "downlink": f"pcm16/{orc.tts.sample_rate}"}})
             elif kind == "client_event":
                 name = str(msg.get("name", ""))
                 if name not in CLIENT_EVENT_NAMES:
@@ -618,9 +687,20 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        if asr is not None:
+            await asr.close()
+        if asr_task:
+            asr_task.cancel()
+            await asyncio.gather(asr_task, return_exceptions=True)
+        if session.current_turn:
+            session.current_turn.cancel.cancel("SESSION_END")
+        if session.playing_turn:
+            session.playing_turn.cancel.cancel("SESSION_END")
+            session.playing_turn = None
         session.ws = None
         for task in list(tasks):
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 if WEB_DIR.exists():

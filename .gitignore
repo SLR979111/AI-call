@@ -9,6 +9,7 @@ __pycache__/
 *$py.class
 .Python
 .venv/
+.venv-*/
 venv/
 env/
 ENV/
@@ -40,6 +41,10 @@ data/
 logs/
 *.zip
 artifacts/
+models/
+*.wav
+*.onnx
+*.safetensors
 *.sqlite
 *.sqlite3
 *.db
