@@ -82,9 +82,9 @@ async def test_three_turns_and_events():
 async def test_tool_idempotency():
     _, _, tools, mock = build()
     args = {"order_id": "A12345678", "new_time": "2026-11-01T15:00"}
-    first = await tools.invoke("order.reschedule", args, idempotency_key="k-reschedule-1",
+    first = await tools.invoke("order_reschedule", args, idempotency_key="k-reschedule-1",
                                session_id="s_test", turn_id="t_0001")
-    second = await tools.invoke("order.reschedule", args, idempotency_key="k-reschedule-1",
+    second = await tools.invoke("order_reschedule", args, idempotency_key="k-reschedule-1",
                                 session_id="s_test", turn_id="t_0001")
     assert first["ok"] is True
     assert second["ok"] is True
@@ -97,7 +97,7 @@ async def test_tool_idempotency():
 async def test_tool_failure_retry_and_error():
     _, _, tools, mock = build()
     mock.fault = "timeout"
-    result = await tools.invoke("order.query", {"order_id": "A12345678"},
+    result = await tools.invoke("order_query", {"order_id": "A12345678"},
                                 session_id="s_test", turn_id="t_0001")
     assert result["ok"] is False
     assert result["error"]["code"] == "TOOL_TIMEOUT"
@@ -108,7 +108,7 @@ async def test_tool_failure_retry_and_error():
 @pytest.mark.asyncio
 async def test_invalid_tool_args():
     _, _, tools, _ = build()
-    result = await tools.invoke("order.query", {"order_id": "bad id"},
+    result = await tools.invoke("order_query", {"order_id": "bad id"},
                                 session_id="s_test", turn_id="t_0001")
     assert result["ok"] is False
     assert result["error"]["code"] == "TOOL_INVALID_ARGS"
@@ -343,7 +343,7 @@ async def test_llm_agent_tool_path():
                 "intent": "reschedule",
                 "reply": "可以帮您改约。",
                 "slots": {"order_id": "A12345678"},
-                "tool": "order.query",
+                "tool": "order_query",
                 "tool_args": {"order_id": "A12345678"},
                 "outcome": "rescheduled",
             }, ensure_ascii=False)}}],

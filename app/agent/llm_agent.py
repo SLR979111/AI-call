@@ -14,7 +14,7 @@ SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON �
 - intent: confirm|deny|unclear|order_query|reschedule|faq|transfer|other
 - reply: 要对用户说的一句话（首句尽量 <=20 字，口语化）
 - slots: 对象，已知的订单号/时间等
-- tool: 可选，order.query|order.reschedule|ticket.create|lead.query
+- tool: 可选，order_query|order_reschedule|ticket_create|lead_query
 - tool_args: 对象，仅当 tool 存在
 - outcome: rescheduled|answered|transferred|completed|tool_failed
 - citation: 可选，知识来源 id
@@ -190,7 +190,7 @@ class LLMAgent:
                        "text": "抱歉，业务系统暂时没有响应，我先帮您登记，稍后人工跟进。",
                        "final": True}
                 sentence_id += 1
-                await tools.invoke("ticket.create",
+                await tools.invoke("ticket_create",
                                    {"summary": "LLM tool failed, manual follow-up"},
                                    session_id=session_id, turn_id=turn_id, trace_id=trace_id)
 

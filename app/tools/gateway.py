@@ -100,15 +100,15 @@ class ToolGateway:
     """Single entry point for business tools: validate, idempotency, timeout, retry, audit."""
 
     SPECS = {
-        "order.query": ToolSpec(
-            "order.query", "1.2.0", ("order_id",), {"order_id": r"^[A-Z0-9]{8,20}$"}
+        "order_query": ToolSpec(
+            "order_query", "1.2.0", ("order_id",), {"order_id": r"^[A-Z0-9]{8,20}$"}
         ),
-        "order.reschedule": ToolSpec(
-            "order.reschedule", "1.1.0", ("order_id", "new_time"),
+        "order_reschedule": ToolSpec(
+            "order_reschedule", "1.1.0", ("order_id", "new_time"),
             {"order_id": r"^[A-Z0-9]{8,20}$", "new_time": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"},
         ),
-        "ticket.create": ToolSpec("ticket.create", "1.0.0", ("summary",), {}),
-        "lead.query": ToolSpec("lead.query", "1.0.0", ("lead_id",), {"lead_id": r"^L[0-9]{4,12}$"}),
+        "ticket_create": ToolSpec("ticket_create", "1.0.0", ("summary",), {}),
+        "lead_query": ToolSpec("lead_query", "1.0.0", ("lead_id",), {"lead_id": r"^L[0-9]{4,12}$"}),
     }
 
     def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None) -> None:
@@ -228,10 +228,10 @@ class ToolGateway:
             return cached
 
         handler = {
-            "order.query": self.mock.order_query,
-            "order.reschedule": self.mock.order_reschedule,
-            "ticket.create": self.mock.ticket_create,
-            "lead.query": self.mock.lead_query,
+            "order_query": self.mock.order_query,
+            "order_reschedule": self.mock.order_reschedule,
+            "ticket_create": self.mock.ticket_create,
+            "lead_query": self.mock.lead_query,
         }[tool]
 
         attempts = 0
@@ -341,10 +341,10 @@ class ToolGateway:
     @staticmethod
     def _tool_description(tool_name: str) -> str:
         descriptions = {
-            "order.query": "查询订单信息，包括状态、配送时间、地址等",
-            "order.reschedule": "修改订单配送时间，需要订单号和新的配送时间",
-            "ticket.create": "创建工单，用于记录需要人工跟进的问题",
-            "lead.query": "查询线索信息，用于销售场景"
+            "order_query": "查询订单信息，包括状态、配送时间、地址等",
+            "order_reschedule": "修改订单配送时间，需要订单号和新的配送时间",
+            "ticket_create": "创建工单，用于记录需要人工跟进的问题",
+            "lead_query": "查询线索信息，用于销售场景"
         }
         return descriptions.get(tool_name, f"Tool: {tool_name}")
     
