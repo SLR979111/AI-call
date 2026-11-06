@@ -571,7 +571,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                 })
             elif kind == "text":
                 spawn(orc.handle_text(session_id, str(msg.get("text", "")), conn))
-            elif kind in {"speech_started", "local_muted", "playback_first_frame",
+            elif kind in {"speech_started", "speech_ended", "local_muted", "playback_first_frame",
                           "playback_ended", "ping"}:
                 await orc.on_client_event(session_id, msg)
             elif kind == "hangup":
