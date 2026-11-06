@@ -34,19 +34,35 @@ class LLMAgent:
     """
 
     def __init__(self, router: LLMRouter, knowledge_path: Path | None = None,
-                 flow_pack: FlowPack | None = None) -> None:
+                 flow_pack: FlowPack | None = None, max_history_turns: int = 10) -> None:
         self.router = router
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
+        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
+        self.max_history_turns = max_history_turns
+        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
+        """Initialize session with empty conversation history."""
+        self.sessions[session_id] = []
         return None
 
-    def _system(self) -> str:
-        if not self.flow_pack:
-            return SYSTEM_PROMPT
-        states = ", ".join(self.flow_pack.states.keys())
-        return SYSTEM_PROMPT + f"\n当前业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
+    def _system(self, flow_state: str = "", slots: dict[str, Any] | None = None) -> str:
+        scenario = "服务外呼"
+        if not slots:
+            slots = {}
+        
+        context = SYSTEM_PROMPT.format(
+            scenario=scenario,
+            flow_state=flow_state or "初始状态",
+            slots=json.dumps(slots, ensure_ascii=False) if slots else "{}"
+        )
+        
+        if self.flow_pack:
+            states = ", ".join(self.flow_pack.states.keys())
+            context += f"\n\n业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
+        
+        return context
 
     async def handle(self, req: dict[str, Any], cancel: CancelToken,
                      tools: Any) -> AsyncIterator[dict[str, Any]]:
@@ -55,12 +71,26 @@ class LLMAgent:
         turn_id = req.get("turn_id", "t_0000")
         trace_id = req.get("trace_id")
         session_id = req.get("session_id", "s_dev")
+        flow_state = str(req.get("flow_state", ""))
+        slots = req.get("slots", {})
+        
+        # Retrieve conversation history
+        history = self.sessions.setdefault(session_id, [])
+        
+        # RAG knowledge retrieval
         chunks = self.knowledge.search(text, top_k=2)
         context = "\n".join(f"[{c.doc_id}] {c.title}: {c.content}" for c in chunks)
         user_prompt = text if not context else f"用户说：{text}\n可能相关的知识：\n{context}"
+        
+        # Build messages with history
+        msg_list = [{"role": "system", "content": self._system(flow_state, slots)}]
+        # Keep only recent history (last N turns = 2N messages)
+        recent_history = history[-(self.max_history_turns * 2):]
+        msg_list.extend(recent_history)
+        msg_list.append({"role": "user", "content": user_prompt})
 
         result = await self.router.complete(
-            messages(self._system(), user_prompt),
+            msg_list,
             temperature=0.2,
             max_tokens=400,
             response_format={"type": "json_object"},
@@ -68,6 +98,9 @@ class LLMAgent:
             turn_id=turn_id,
             trace_id=trace_id,
         )
+        
+        # Append user message to history
+        history.append({"role": "user", "content": text})
         cancel.check()
         if not result.ok:
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
@@ -117,5 +150,17 @@ class LLMAgent:
         result_payload: dict[str, Any] = {"llm_provider": result.provider, "model": result.model}
         if chunks:
             result_payload["citation"] = chunks[0].citation()
+        
+        # Append assistant reply to history
+        assistant_reply = decision.get("reply", "")
+        if tool_result and tool_result.get("ok"):
+            data = tool_result.get("data") or {}
+            assistant_reply += " " + str(data.get("message") or data.get("ticket_id") or "")
+        history.append({"role": "assistant", "content": assistant_reply})
+        
+        # Trim history to max turns
+        if len(history) > self.max_history_turns * 2:
+            self.sessions[session_id] = history[-(self.max_history_turns * 2):]
+        
         yield {"kind": "end", "reply_id": reply_id, "outcome": outcome,
                "slots": decision.get("slots") or {}, "result": result_payload}
