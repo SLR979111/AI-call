@@ -32,6 +32,7 @@ class LLMResult:
     usage: dict[str, Any] = field(default_factory=dict)
     cost_cny: float = 0.0
     error: dict[str, Any] | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 class LLMRouter:
@@ -92,6 +93,8 @@ class LLMRouter:
         temperature: float = 0.3,
         max_tokens: int = 512,
         response_format: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         session_id: str = "s_internal",
         turn_id: str = "t_0000",
         trace_id: str | None = None,
@@ -132,6 +135,10 @@ class LLMRouter:
                 }
                 if response_format:
                     payload["response_format"] = response_format
+                if tools:
+                    payload["tools"] = tools
+                    if tool_choice:
+                        payload["tool_choice"] = tool_choice
                 headers = {"Authorization": f"Bearer {provider.api_key}",
                            "Content-Type": "application/json"}
                 async with httpx.AsyncClient(transport=self.transport,
@@ -142,12 +149,24 @@ class LLMRouter:
                 if resp.status_code >= 400:
                     raise httpx.HTTPStatusError(f"HTTP {resp.status_code}", request=resp.request, response=resp)
                 data = resp.json()
-                text = data["choices"][0]["message"].get("content") or ""
+                message = data["choices"][0]["message"]
+                text = message.get("content") or ""
+                tool_calls_data = message.get("tool_calls") or []
                 usage = data.get("usage") or {}
                 cost = (float(usage.get("total_tokens", 0)) / 1000.0) * provider.price_per_1k_cny
                 self.spent_cny += cost
                 self._failures = 0
                 self._open_until = 0.0
+                
+                # Emit tool call event if tools were used
+                if tool_calls_data:
+                    await self._emit(
+                        session_id=session_id, type="ProviderToolCall", module="agent",
+                        turn_id=turn_id, trace_id=trace_id,
+                        payload={"provider": provider.name, "model": provider.model,
+                                "tool_calls": [{"name": tc["function"]["name"], "id": tc.get("id")}
+                                             for tc in tool_calls_data]},
+                    )
                 await self._emit(
                     session_id=session_id, type="ProviderFirstToken", module="agent",
                     turn_id=turn_id, trace_id=trace_id, latency_ms=round(latency, 2),
@@ -160,7 +179,8 @@ class LLMRouter:
                              "usage": usage, "cost_cny": round(cost, 6)},
                 )
                 return LLMResult(True, text=text, provider=provider.name, model=provider.model,
-                                 latency_ms=round(latency, 2), usage=usage, cost_cny=round(cost, 6))
+                                 latency_ms=round(latency, 2), usage=usage, cost_cny=round(cost, 6),
+                                 tool_calls=tool_calls_data)
             except Exception as exc:
                 latency = (time.perf_counter() - start) * 1000.0
                 status = getattr(getattr(exc, "response", None), "status_code", None)

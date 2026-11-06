@@ -7,12 +7,27 @@ RELEASE_ID=rel_dev_001
 DATA_DIR=./data
 DEV_NO_AUTH=1
 
-# LLM (optional; unset -> FakeAgent)
+# ---------------------------------------------------------------------------
+# LLM Provider Configuration (OpenAI-compatible APIs)
+# Set AGENT_PROVIDER=llm to enable real LLM agent; fake for rule-based agent
+# ---------------------------------------------------------------------------
 AGENT_PROVIDER=fake
-LLM_PRIMARY_BASE_URL=
+
+# Primary LLM Provider (required when AGENT_PROVIDER=llm)
+LLM_PRIMARY_BASE_URL=https://api.deepseek.com/v1
 LLM_PRIMARY_API_KEY=
-LLM_PRIMARY_MODEL=
+LLM_PRIMARY_MODEL=deepseek-chat
+LLM_PRIMARY_NAME=deepseek
+
+# Secondary LLM Provider (optional fallback)
+LLM_SECONDARY_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_SECONDARY_API_KEY=
+LLM_SECONDARY_MODEL=qwen-plus
+LLM_SECONDARY_NAME=qwen
+
+# LLM Configuration
 LLM_TIMEOUT_MS=3000
+LLM_PRICE_PER_1K_CNY=0.002
 LLM_DAILY_BUDGET_CNY=100
 
 # Voice / media (optional; unset -> fake voice + ws_pcm)
