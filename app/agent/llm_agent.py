@@ -55,15 +55,19 @@ class LLMAgent:
         return None
 
     def _system(self, flow_state: str = "", slots: dict[str, Any] | None = None) -> str:
-        scenario = "服务外呼"
+        """Build system prompt with context."""
         if not slots:
             slots = {}
         
-        context = SYSTEM_PROMPT.format(
-            scenario=scenario,
-            flow_state=flow_state or "初始状态",
-            slots=json.dumps(slots, ensure_ascii=False) if slots else "{}"
-        )
+        # Base prompt
+        context = SYSTEM_PROMPT
+        
+        # Add flow context if available
+        if flow_state:
+            context += f"\n\n当前流程状态：{flow_state}"
+        
+        if slots:
+            context += f"\n已知信息：{json.dumps(slots, ensure_ascii=False)}"
         
         if self.flow_pack:
             states = ", ".join(self.flow_pack.states.keys())
