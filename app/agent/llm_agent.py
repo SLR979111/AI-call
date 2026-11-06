@@ -95,12 +95,17 @@ class LLMAgent:
         recent_history = history[-(self.max_history_turns * 2):]
         msg_list.extend(recent_history)
         msg_list.append({"role": "user", "content": user_prompt})
+        
+        # Get available tools for Function Calling
+        from ..tools.gateway import ToolGateway
+        available_tools = ToolGateway.to_openai_tools()
 
         result = await self.router.complete(
             msg_list,
+            tools=available_tools,
+            tool_choice="auto",
             temperature=0.2,
             max_tokens=400,
-            response_format={"type": "json_object"},
             session_id=session_id,
             turn_id=turn_id,
             trace_id=trace_id,
@@ -109,14 +114,36 @@ class LLMAgent:
         # Append user message to history
         history.append({"role": "user", "content": text})
         cancel.check()
+        
+        # Handle LLM errors
         if not result.ok:
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
                    "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
             yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
                    "slots": {}, "result": {"error": result.error}}
             return
-
-        decision = parse_json_object(result.text) or {}
+        
+        # Parse decision: prefer Function Calling, fallback to JSON mode
+        decision: dict[str, Any] = {}
+        tool_calls_from_llm = result.tool_calls or []
+        
+        if tool_calls_from_llm:
+            # Function Calling path: LLM returned structured tool calls
+            # For simplicity, use first tool call (multi-tool support can be added later)
+            first_call = tool_calls_from_llm[0]
+            tool_name = first_call["function"]["name"]
+            tool_args = json.loads(first_call["function"]["arguments"])
+            
+            decision = {
+                "intent": "tool_call",
+                "reply": result.text or "我来帮您查询一下。",
+                "tool": tool_name,
+                "tool_args": tool_args,
+                "outcome": "tool_called"
+            }
+        else:
+            # JSON mode fallback (for LLMs without Function Calling)
+            decision = parse_json_object(result.text) or {}
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
