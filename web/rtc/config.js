@@ -25,7 +25,7 @@
 
     /** 传输偏好：webrtc | ws_pcm | auto。
      *  W1：/rtc 返回 MEDIA_NOT_CONFIGURED(503) → 静默回落 ws_pcm（C1） */
-    TRANSPORT_PREF: q.get('transport') || 'auto',
+    TRANSPORT_PREF: q.get('transport') || 'ws_pcm',
 
     /** 下行播放形态：auto | speech | pcm
      *  auto：tts_started 后 400ms 内收到 audio_chunk 用 pcm，否则用 speechSynthesis
