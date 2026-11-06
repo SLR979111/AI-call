@@ -256,10 +256,19 @@ async def test_llm_budget_and_unconfigured():
     validate_events(events)
     assert "BudgetExceeded" in [e["type"] for e in events]
 
-    unconfigured = LLMRouter()
-    result = await unconfigured.complete([{"role": "user", "content": "hi"}])
-    assert result.ok is False
-    assert result.error and result.error["code"] == "LLM_NOT_CONFIGURED"
+    # Test unconfigured router (clear env vars to simulate no config)
+    import os
+    old_env = {k: os.environ.pop(k, None) for k in list(os.environ.keys()) if k.startswith("LLM_")}
+    try:
+        unconfigured = LLMRouter()
+        result = await unconfigured.complete([{"role": "user", "content": "hi"}])
+        assert result.ok is False
+        assert result.error and result.error["code"] == "LLM_NOT_CONFIGURED"
+    finally:
+        # Restore env vars
+        for k, v in old_env.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_knowledge_search():
