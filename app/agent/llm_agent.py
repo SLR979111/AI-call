@@ -39,12 +39,19 @@ class LLMAgent:
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
         self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
+        self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
         self.max_history_turns = max_history_turns
-        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
-        """Initialize session with empty conversation history."""
+        """Initialize session with empty conversation history and Flow Engine."""
         self.sessions[session_id] = []
+        
+        # Initialize Flow Engine if flow_pack is provided
+        if flow_pack and self.flow_pack:
+            from ..flow.pack import FlowEngine
+            self.flow_engines[session_id] = FlowEngine(self.flow_pack)
+            self.flow_engines[session_id].start()
+        
         return None
 
     def _system(self, flow_state: str = "", slots: dict[str, Any] | None = None) -> str:
@@ -115,8 +122,23 @@ class LLMAgent:
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
             return
 
+        # Apply Flow Engine state transition if available
+        engine = self.flow_engines.get(session_id)
+        flow_result = None
+        if engine:
+            flow_result = engine.apply_intent(intent)
+            # Update slots in Flow Engine
+            for slot_name, slot_value in decision.get("slots", {}).items():
+                if slot_name in engine.pack.slots:
+                    engine.set_slot(slot_name, slot_value)
+        
         sentence_id = 1
-        reply = str(decision.get("reply") or "好的，我明白了。")
+        # Use Flow Engine's suggested utterance if available, otherwise LLM's reply
+        if flow_result and flow_result.get("say"):
+            reply = flow_result["say"]
+        else:
+            reply = str(decision.get("reply") or "好的，我明白了。")
+        
         yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
                "text": reply, "final": decision.get("tool") is None}
         sentence_id += 1
@@ -150,6 +172,10 @@ class LLMAgent:
         result_payload: dict[str, Any] = {"llm_provider": result.provider, "model": result.model}
         if chunks:
             result_payload["citation"] = chunks[0].citation()
+        
+        # Include Flow Engine state in result
+        if engine:
+            result_payload["flow_snapshot"] = engine.snapshot()
         
         # Append assistant reply to history
         assistant_reply = decision.get("reply", "")
