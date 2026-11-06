@@ -1,9 +1,9 @@
 # 13 · 项目现状与文件地图
 
-> 更新时间：2026-10-31
+> 更新时间：2026-11-06
 > 仓库：`git@github.com:SLR979111/AI-call.git` ｜ 分支 `master`
-> 最新提交：`5c2fd95`（Docker 验证）｜ 测试：**21 passed** ｜ 契约：**47/47**
-> 结论：**Fake 全链路 + Docker 交付已跑通；真实 ASR/TTS/LLM/LiveKit 待接外部资源。**
+> 当前基线：真实语音 + POP 资质审核驳回外呼场景 ｜ 测试：**58 passed / 5 skipped** ｜ 契约：**90/90**
+> 结论：**真实语音与 POP 场景已接入；真实 LLM、LiveKit、业务系统写回、声学验收待完成。**
 
 ---
 
@@ -11,16 +11,17 @@
 
 | 项 | 状态 |
 |---|---|
-| 浏览器 WebRTC 页面 | ✅ 静态 Demo UI（Fake 语音，文本输入 + 浏览器 TTS） |
+| 浏览器页面 | ✅ 旧 Demo `/` + 新通话台 `/rtc`（真实 PCM 播放） |
 | Fake 全链路 | ✅ 3 轮、打断、挂断、事件回放 |
-| 契约 / 事件 | ✅ 5 Schema、47 fixture 事件、`TurnLatency t0..t9` |
-| Tool Gateway | ✅ 参数校验、幂等、超时、重试、审计 |
+| POP 场景 | ✅ 68 条主表场景、52 条话术、11 组 QA、28 条追问、三级分类、电话/京麦分流 |
+| 契约 / 事件 | ✅ 5 Schema、90 fixture 文档、`TurnLatency t0..t9` |
+| Tool Gateway | ✅ 参数校验、幂等、超时、重试、审计、回电工单 |
 | 合规 | ✅ REWRITE / BLOCK / 事件 / 质检数据 |
 | Registry / RSI | ✅ candidate→production→previous；bootstrap 门禁 |
 | LLM | ✅ Router + LLMAgent（Mock 验证）；🟡 真实 Key 未接 |
-| ASR/TTS | 🟡 适配器边界；真实 CPU 模型未接 |
+| ASR/TTS | ✅ sherpa ASR + Qwen3/Melo；🟡 目标容器/声学验收未完成 |
 | LiveKit | 🟡 Token/WS 消息；媒体服务未接 |
-| Docker | ✅ 镜像 261MB，compose healthy，E2E PASS |
+| Docker | ✅ CPU app + GPU sidecar profile；🟡 新镜像待构建验收 |
 | 技术方案书 | 🟡 初稿（`docs/12`），待 W3 真机数据 |
 
 ---
@@ -142,8 +143,8 @@ aicall/
 
 | 项 | 结果 |
 |---|---|
-| 单元/契约测试 | 21 passed |
-| 事件 schema | 4 fixture / 47 事件通过 |
+| 单元/契约测试 | 58 passed / 5 skipped |
+| 事件 schema | 5 fixture / 90 文档通过 |
 | WS E2E | 2 轮 + 打断 + 挂断 PASS |
 | Docker | `aicall-app:local` 261MB，`Up (healthy)` |
 | 容器评测 | 5/5，P50 719ms，P95 937ms（Fake） |

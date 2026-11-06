@@ -101,9 +101,9 @@ class Registry:
             release_id="rel_dev_001",
             status="production",
             artifacts={
-                "flow": "service_outbound@1.0.0",
+                "flow": "pop_qualification_audit@1.0.0",
                 "prompt": "agent_system@1",
-                "knowledge": "faq@dev",
+                "knowledge": "pop_audit@dev",
                 "model": "fake@dev",
                 "config": "runtime@1",
             },

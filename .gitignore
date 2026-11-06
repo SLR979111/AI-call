@@ -18,7 +18,7 @@ ENV/
 .uvpython/
 .uvdata/
 .tmp/
-tools/
+/tools/
 build/
 dist/
 *.egg-info/
@@ -27,6 +27,7 @@ pip-wheel-metadata/
 
 # Tooling caches and coverage
 .pytest_cache/
+.pytest-tmp-*/
 pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
@@ -55,3 +56,6 @@ models/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Provided competition source files (extracted into knowledge/pop_audit.json)
+智语外呼-赛题说明/

@@ -1,0 +1,42 @@
+{
+  "suite": "pop_qualification_audit",
+  "version": 1,
+  "cases": [
+    {
+      "case_id": "pop-brand-status",
+      "turns": ["我是XX旗舰店，商标状态不符合要求，怎么改？"],
+      "expected_outcome": "rejected",
+      "tags": ["pop", "brand", "trademark", "phone"]
+    },
+    {
+      "case_id": "pop-auth-chain",
+      "turns": ["授权链路不完整，需要补什么材料？"],
+      "expected_outcome": "rejected",
+      "tags": ["pop", "authorization", "phone"]
+    },
+    {
+      "case_id": "pop-category",
+      "turns": ["品牌类目不符，应该怎么处理？"],
+      "expected_outcome": "rejected",
+      "tags": ["pop", "category", "phone"]
+    },
+    {
+      "case_id": "pop-jd-graphic",
+      "turns": ["我的商标是图形商标，京麦驳回就行吧？"],
+      "expected_outcome": "jd_rejected",
+      "tags": ["pop", "graphic", "jd_reject"]
+    },
+    {
+      "case_id": "pop-callback",
+      "turns": ["我没听清，能安排回电吗？"],
+      "expected_outcome": "callback_scheduled",
+      "tags": ["pop", "callback"]
+    },
+    {
+      "case_id": "pop-complaint",
+      "turns": ["我要投诉你们审核不公"],
+      "expected_outcome": "transferred",
+      "tags": ["pop", "complaint", "transfer"]
+    }
+  ]
+}

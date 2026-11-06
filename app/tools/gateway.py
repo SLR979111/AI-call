@@ -91,6 +91,19 @@ class MockBusiness:
         }
         return {"ticket_id": ticket_id, "status": "created"}
 
+    async def callback_create(self, request_id: str, reason: str) -> dict[str, Any]:
+        """POP 资质审核：登记回电任务；不伪造真实外呼结果。"""
+        await self._maybe_fault()
+        self._seq += 1
+        ticket_id = f"C{self._seq:06d}"
+        self.tickets[ticket_id] = {
+            "ticket_id": ticket_id,
+            "type": "callback",
+            "request_id": request_id,
+            "reason": reason,
+        }
+        return {"ticket_id": ticket_id, "request_id": request_id, "status": "scheduled"}
+
     async def lead_query(self, lead_id: str) -> dict[str, Any]:
         await self._maybe_fault()
         return {"lead_id": lead_id, "stage": "new", "owner": "mock"}
@@ -108,6 +121,10 @@ class ToolGateway:
             {"order_id": r"^[A-Z0-9]{8,20}$", "new_time": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"},
         ),
         "ticket.create": ToolSpec("ticket.create", "1.0.0", ("summary",), {}),
+        "callback.create": ToolSpec(
+            "callback.create", "1.0.0", ("request_id", "reason"),
+            {"request_id": r"^Q[0-9]{6,}$"},
+        ),
         "lead.query": ToolSpec("lead.query", "1.0.0", ("lead_id",), {"lead_id": r"^L[0-9]{4,12}$"}),
     }
 
@@ -231,6 +248,7 @@ class ToolGateway:
             "order.query": self.mock.order_query,
             "order.reschedule": self.mock.order_reschedule,
             "ticket.create": self.mock.ticket_create,
+            "callback.create": self.mock.callback_create,
             "lead.query": self.mock.lead_query,
         }[tool]
 

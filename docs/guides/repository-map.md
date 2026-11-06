@@ -115,9 +115,9 @@ flowchart TB
 | `web/` | 前端页面；`web/rtc/` 为零依赖 ESM 的新通话台，含音频、协议与会话模块 |
 | `contracts/` | 接口契约：JSON Schema、会话 fixtures 与 `validate.py` 校验脚本 |
 | `docs/` | 架构、契约、方案、评审与指南；`reference/` 存赛题与计划，`guides/` 存开发/测试指南 |
-| `eval/` | 评测用例，当前为 `cases/dev.json` |
-| `flowpacks/` | 业务流程配置，当前为 `service_outbound.json` |
-| `knowledge/` | 本地 FAQ 知识库，当前为 `faq.json` |
+| `eval/` | 评测用例，当前包含 `cases/dev.json` 与 POP 场景 `cases/pop_audit.json` |
+| `flowpacks/` | 业务流程配置，当前包含 `service_outbound.json` 与 `pop_qualification_audit.json` |
+| `knowledge/` | 本地知识库，当前包含 `faq.json` 与 POP 场景 `pop_audit.json` |
 | `tests/` | pytest 契约与集成测试 |
 | `scripts/` | 冒烟、WS E2E、回放、指标检查、报告与 RSI 对比脚本 |
 | `reports/` | 自测报告与指标检查结果 |

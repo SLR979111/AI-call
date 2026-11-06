@@ -1,0 +1,95 @@
+{
+  "id": "pop_qualification_audit",
+  "version": "1.0.0",
+  "entry": "OPEN",
+  "states": {
+    "OPEN": {
+      "say": "您好，我是京东商家资质审核专员，本次通话会录音。请问您是店铺负责人吗？",
+      "must_say": ["identity", "recording_notice"],
+      "next": "IDENTITY_CONFIRM"
+    },
+    "IDENTITY_CONFIRM": {
+      "say": "想跟您确认一下，您申请的资质单据目前被驳回，方便现在说明原因和处理方式吗？",
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "REASON"},
+        {"when": {"intent": "deny"}, "to": "END"},
+        {"when": {"intent": "unclear"}, "to": "IDENTITY_CONFIRM"}
+      ]
+    },
+    "REASON": {
+      "say": "您申请的品牌资质因具体审核项不符合要求，需要按驳回原因补充或修正。",
+      "slots": ["brand", "reject_l1", "reject_l2", "reject_l3"],
+      "next": "REMEDIATION"
+    },
+    "REMEDIATION": {
+      "say": "处理方式是可补齐、重新开具或调整对应材料后，在京麦重新提交。",
+      "slots": ["remediation", "handling_mode"],
+      "next": "CONFIRM_ACTION"
+    },
+    "CONFIRM_ACTION": {
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "WRITEBACK"},
+        {"when": {"intent": "ask_action"}, "to": "REMEDIATION"},
+        {"when": {"intent": "deny"}, "to": "CALLBACK"},
+        {"when": {"intent": "jd_reject"}, "to": "JD_REJECT"},
+        {"when": {"intent": "complaint"}, "to": "TRANSFER"},
+        {"when": {"intent": "unclear"}, "to": "CONFIRM_ACTION"}
+      ]
+    },
+    "WRITEBACK": {
+      "say": "我这边为您登记处理结果，请按京麦驳回意见补充材料后重新提交。",
+      "tool": "callback.create",
+      "next": "CLOSE"
+    },
+    "CALLBACK": {
+      "say": "我先为您登记回电任务，稍后由审核专员跟进。",
+      "tool": "callback.create",
+      "next": "CLOSE"
+    },
+    "JD_REJECT": {
+      "say": "该场景按京麦驳回处理，驳回原因和整改意见会留在单据里，无需强制回电。",
+      "next": "CLOSE"
+    },
+    "TRANSFER": {
+      "say": "我为您转接人工审核专员，请稍等。"
+    },
+    "CLOSE": {
+      "say": "感谢您的接听，如有疑问可拨打 4006180092。祝您生活愉快，再见。",
+      "next": "END"
+    },
+    "END": {
+      "say": "感谢您的接听，再见。"
+    }
+  },
+  "slots": {
+    "request_id": {
+      "required": true,
+      "ask": "方便提供一下资质申请单号吗？",
+      "pattern": "^Q[0-9]{6,}$"
+    },
+    "brand": {
+      "required": false,
+      "ask": "您申请的品牌是？"
+    },
+    "reject_l1": {
+      "required": false,
+      "ask": "驳回发生在哪个一级环节？"
+    },
+    "reject_l2": {
+      "required": false,
+      "ask": "对应的材料大类是？"
+    },
+    "reject_l3": {
+      "required": false,
+      "ask": "具体驳回原因是什么？"
+    },
+    "handling_mode": {
+      "required": false,
+      "ask": "本场景走电话还是京麦驳回？"
+    },
+    "remediation": {
+      "required": false,
+      "ask": "需要商家怎么整改？"
+    }
+  }
+}

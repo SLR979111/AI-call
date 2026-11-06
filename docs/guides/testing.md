@@ -6,11 +6,12 @@
 
 | 层 | 命令 | 覆盖 | 当前 |
 |---|---|---|---|
-| 单元 + 契约 | `make test` | 编排、工具、合规、Registry、RSI、RAG、LLM Mock、WS | 21 passed |
+| 单元 + 契约 | `make test` | 编排、工具、合规、Registry、RSI、RAG、LLM Mock、WS、POP 场景 | **58 passed / 5 skipped** |
 | 契约 Schema | `make contract-test` | 5 个 fixture / 90 条文档 | PASS |
 | 前端协议 | `cd web/rtc && npm test` | golden 回放、PCM、文件回灌、打断语义 | 4 组 PASS |
 | 端到端 | `make e2e` | 2 轮 + 打断 + 挂断 | PASS |
 | 比赛指标 | `make metric` | 3 轮闭环、P50、任务成功率、合规、打断 | 13 项 PASS |
+| POP 评测 | `POST /eval/run` | 商标/授权链/类目/图形商标/回电/投诉 | **6 cases / 100%** |
 
 CI：`.github/workflows/ci.yml` 在 Python 3.12 上跑 pytest → 契约 → 前端 4 组 → WS E2E。
 

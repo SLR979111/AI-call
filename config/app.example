@@ -3,6 +3,7 @@
 APP_BASE=http://127.0.0.1:8081
 APP_ENV=dev
 RELEASE_ID=rel_dev_001
+SCENARIO_ID=pop_qualification_audit
 DATA_DIR=./data
 DEV_NO_AUTH=1
 

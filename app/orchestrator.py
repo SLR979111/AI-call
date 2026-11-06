@@ -115,9 +115,9 @@ class Orchestrator:
             release_id=self.release_id,
             version_set={
                 "release_id": self.release_id,
-                "flow": "service_outbound@1.0.0",
+                "flow": f"{self.scenario_id}@1.0.0",
                 "prompt": "agent_system@1",
-                "knowledge": "faq@dev",
+                "knowledge": "pop_audit@dev" if self.scenario_id == "pop_qualification_audit" else "faq@dev",
                 "model": "fake@dev",
                 "config": "runtime@1",
             },

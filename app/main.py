@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent.fake import FakeAgent
+from .agent.pop_audit import PopAuditAgent
 from .compliance import ComplianceGuard
 from .config import settings
 from .events import EventBus
@@ -137,17 +138,24 @@ async def lifespan(app: FastAPI):
     bus = EventBus(settings.data_dir, settings.release_id, settings.clock_id)
     mock = MockBusiness()
     tools = ToolGateway(settings.data_dir, mock, bus)
-    flowpack = FlowPack.load(
-        Path(__file__).resolve().parent.parent / "flowpacks" / "service_outbound.json"
-    )
+    # 场景决定 Flow、知识库和默认 Agent；默认是赛题指定的 POP 资审驳回外呼。
+    root = Path(__file__).resolve().parent.parent
+    if settings.scenario_id == "pop_qualification_audit":
+        flowpack_path = root / "flowpacks" / "pop_qualification_audit.json"
+        knowledge_path = root / "knowledge" / "pop_audit.json"
+    else:
+        flowpack_path = root / "flowpacks" / "service_outbound.json"
+        knowledge_path = root / "knowledge" / "faq.json"
+    flowpack = FlowPack.load(flowpack_path)
     llm = LLMRouter(
         bus=bus,
         daily_budget_cny=float(os.getenv("LLM_DAILY_BUDGET_CNY", "100")),
     )
     if os.getenv("AGENT_PROVIDER", "fake").strip().lower() == "llm":
         from .agent.llm_agent import LLMAgent
-        agent: Any = LLMAgent(llm, Path(__file__).resolve().parent.parent / "knowledge" / "faq.json",
-                              flowpack)
+        agent: Any = LLMAgent(llm, knowledge_path, flowpack)
+    elif settings.scenario_id == "pop_qualification_audit":
+        agent = PopAuditAgent(knowledge_path)
     else:
         agent = FakeAgent()
     compliance = ComplianceGuard()
@@ -344,8 +352,9 @@ async def eval_run(request: Request, body: EvalRunRequest) -> dict[str, Any]:
             for index, item in enumerate(body.cases, start=1)
         ]
     else:
+        default_suite = "pop_audit.json" if settings.scenario_id == "pop_qualification_audit" else "dev.json"
         path = Path(body.suite_path) if body.suite_path else (
-            Path(__file__).resolve().parent.parent / "eval" / "cases" / "dev.json"
+            Path(__file__).resolve().parent.parent / "eval" / "cases" / default_suite
         )
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"suite not found: {path}")

@@ -16,7 +16,7 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", "data")))
     dev_no_auth: bool = field(default_factory=lambda: _bool("DEV_NO_AUTH", "1"))
     clock_id: str = field(default_factory=lambda: os.getenv("CLOCK_ID", "app-dev"))
-    scenario_id: str = field(default_factory=lambda: os.getenv("SCENARIO_ID", "service_outbound"))
+    scenario_id: str = field(default_factory=lambda: os.getenv("SCENARIO_ID", "pop_qualification_audit"))
 
     def ensure_dirs(self) -> None:
         (self.data_dir / "sessions").mkdir(parents=True, exist_ok=True)
