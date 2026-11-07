@@ -25,6 +25,25 @@ SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON �
 - 信息不足时先追问，不要编造订单信息。
 """
 
+POP_SYSTEM_PROMPT = """你是京东 POP 商家资质审核驳回外呼专员。只输出一个 JSON 对象，不要 Markdown。
+字段：
+- intent: confirm|ask_reason|ask_action|jd_reject|callback|complaint|unclear
+- reply: 一句口语化回复（首句尽量 <=20 字）
+- slots: {request_id, brand, reject_l1, reject_l2, reject_l3, handling_mode, remediation}
+- tool: 可选，callback.create（登记回电任务）
+- tool_args: 对象，仅当 tool 存在
+- outcome: rejected|jd_rejected|callback_scheduled|transferred|completed
+- citation: 可选，知识来源 id
+
+规则：
+- 先确认商家/店铺身份，再说明驳回原因和整改动作。
+- 原因必须来自知识库；不要编造三级分类或品牌信息。
+- 电话场景：说明原因、整改动作、重新提交路径；京麦驳回场景：明确站内驳回、不强制回电。
+- 商家要求回电/没听清：登记 callback.create；投诉/转人工：transfer。
+- 不承诺“补了就一定通过”；不泄露其他商家信息。
+- 单句超过 2000 字符时先概括，不要截断。
+"""
+
 
 class LLMAgent:
     """Cloud-LLM agent path.
@@ -34,19 +53,46 @@ class LLMAgent:
     """
 
     def __init__(self, router: LLMRouter, knowledge_path: Path | None = None,
-                 flow_pack: FlowPack | None = None) -> None:
+                 flow_pack: FlowPack | None = None, max_history_turns: int = 10) -> None:
         self.router = router
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
+        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
+        self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
+        self.max_history_turns = max_history_turns
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
+        """Initialize session with empty conversation history and Flow Engine."""
+        self.sessions[session_id] = []
+        
+        # Initialize Flow Engine if flow_pack is provided
+        if flow_pack and self.flow_pack:
+            from ..flow.pack import FlowEngine
+            self.flow_engines[session_id] = FlowEngine(self.flow_pack)
+            self.flow_engines[session_id].start()
+        
         return None
 
-    def _system(self) -> str:
-        if not self.flow_pack:
-            return SYSTEM_PROMPT
-        states = ", ".join(self.flow_pack.states.keys())
-        return SYSTEM_PROMPT + f"\n当前业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
+    def _system(self, flow_state: str = "", slots: dict[str, Any] | None = None) -> str:
+        """Build system prompt with context."""
+        if not slots:
+            slots = {}
+        
+        # Base prompt: choose the scenario-specific contract.
+        context = POP_SYSTEM_PROMPT if (self.flow_pack and self.flow_pack.id == "pop_qualification_audit") else SYSTEM_PROMPT
+        
+        # Add flow context if available
+        if flow_state:
+            context += f"\n\n当前流程状态：{flow_state}"
+        
+        if slots:
+            context += f"\n已知信息：{json.dumps(slots, ensure_ascii=False)}"
+        
+        if self.flow_pack:
+            states = ", ".join(self.flow_pack.states.keys())
+            context += f"\n\n业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
+        
+        return context
 
     async def handle(self, req: dict[str, Any], cancel: CancelToken,
                      tools: Any) -> AsyncIterator[dict[str, Any]]:
@@ -55,35 +101,97 @@ class LLMAgent:
         turn_id = req.get("turn_id", "t_0000")
         trace_id = req.get("trace_id")
         session_id = req.get("session_id", "s_dev")
+        flow_state = str(req.get("flow_state", ""))
+        slots = req.get("slots", {})
+        
+        # Retrieve conversation history
+        history = self.sessions.setdefault(session_id, [])
+        
+        # RAG knowledge retrieval
         chunks = self.knowledge.search(text, top_k=2)
         context = "\n".join(f"[{c.doc_id}] {c.title}: {c.content}" for c in chunks)
         user_prompt = text if not context else f"用户说：{text}\n可能相关的知识：\n{context}"
+        
+        # Build messages with history
+        msg_list = [{"role": "system", "content": self._system(flow_state, slots)}]
+        # Keep only recent history (last N turns = 2N messages)
+        recent_history = history[-(self.max_history_turns * 2):]
+        msg_list.extend(recent_history)
+        msg_list.append({"role": "user", "content": user_prompt})
+        
+        # Get available tools for Function Calling
+        from ..tools.gateway import ToolGateway
+        available_tools = ToolGateway.to_openai_tools()
 
         result = await self.router.complete(
-            messages(self._system(), user_prompt),
+            msg_list,
+            tools=available_tools,
+            tool_choice="auto",
             temperature=0.2,
             max_tokens=400,
-            response_format={"type": "json_object"},
             session_id=session_id,
             turn_id=turn_id,
             trace_id=trace_id,
         )
+        
+        # Append user message to history
+        history.append({"role": "user", "content": text})
         cancel.check()
+        
+        # Handle LLM errors
         if not result.ok:
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
                    "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
             yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
                    "slots": {}, "result": {"error": result.error}}
             return
-
-        decision = parse_json_object(result.text) or {}
+        
+        # Parse decision: prefer Function Calling, fallback to JSON mode
+        decision: dict[str, Any] = {}
+        tool_calls_from_llm = result.tool_calls or []
+        
+        if tool_calls_from_llm:
+            # Function Calling path: LLM returned structured tool calls
+            # For simplicity, use first tool call (multi-tool support can be added later)
+            first_call = tool_calls_from_llm[0]
+            tool_name = ToolGateway.resolve_tool_name(first_call["function"]["name"])
+            try:
+                tool_args = json.loads(first_call["function"]["arguments"])
+            except (TypeError, ValueError):
+                tool_args = {}
+            
+            decision = {
+                "intent": "tool_call",
+                "reply": result.text or "我来帮您查询一下。",
+                "tool": tool_name,
+                "tool_args": tool_args,
+                "outcome": "tool_called"
+            }
+        else:
+            # JSON mode fallback (for LLMs without Function Calling)
+            decision = parse_json_object(result.text) or {}
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
             return
 
+        # Apply Flow Engine state transition if available
+        engine = self.flow_engines.get(session_id)
+        flow_result = None
+        if engine:
+            flow_result = engine.apply_intent(intent)
+            # Update slots in Flow Engine
+            for slot_name, slot_value in decision.get("slots", {}).items():
+                if slot_name in engine.pack.slots:
+                    engine.set_slot(slot_name, slot_value)
+        
         sentence_id = 1
-        reply = str(decision.get("reply") or "好的，我明白了。")
+        # Use Flow Engine's suggested utterance if available, otherwise LLM's reply
+        if flow_result and flow_result.get("say"):
+            reply = flow_result["say"]
+        else:
+            reply = str(decision.get("reply") or "好的，我明白了。")
+        
         yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
                "text": reply, "final": decision.get("tool") is None}
         sentence_id += 1
@@ -117,5 +225,21 @@ class LLMAgent:
         result_payload: dict[str, Any] = {"llm_provider": result.provider, "model": result.model}
         if chunks:
             result_payload["citation"] = chunks[0].citation()
+        
+        # Include Flow Engine state in result
+        if engine:
+            result_payload["flow_snapshot"] = engine.snapshot()
+        
+        # Append assistant reply to history
+        assistant_reply = decision.get("reply", "")
+        if tool_result and tool_result.get("ok"):
+            data = tool_result.get("data") or {}
+            assistant_reply += " " + str(data.get("message") or data.get("ticket_id") or "")
+        history.append({"role": "assistant", "content": assistant_reply})
+        
+        # Trim history to max turns
+        if len(history) > self.max_history_turns * 2:
+            self.sessions[session_id] = history[-(self.max_history_turns * 2):]
+        
         yield {"kind": "end", "reply_id": reply_id, "outcome": outcome,
                "slots": decision.get("slots") or {}, "result": result_payload}

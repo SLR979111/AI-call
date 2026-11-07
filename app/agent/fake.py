@@ -61,7 +61,7 @@ class FakeAgent:
                    "text": "可以的，我先帮您看一下订单。", "final": False}
             await pause()
             res = await tools.invoke(
-                "order.query", {"order_id": "A12345678"},
+                "order_query", {"order_id": "A12345678"},
                 session_id=session_id, turn_id=turn_id, trace_id=trace_id,
             )
             if not res.get("ok"):
@@ -69,7 +69,7 @@ class FakeAgent:
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 2,
                        "text": "抱歉，订单系统暂时查不到，我先帮您登记一个工单。", "final": False}
                 await tools.invoke(
-                    "ticket.create", {"summary": "订单查询失败，需人工跟进"},
+                    "ticket_create", {"summary": "订单查询失败，需人工跟进"},
                     session_id=session_id, turn_id=turn_id, trace_id=trace_id,
                 )
                 await pause()

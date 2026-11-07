@@ -58,6 +58,109 @@ flowchart LR
 - **合规三层**：生成前约束、句级门禁、工具守卫；BLOCK 必须能取消 TTS。
 - **可回滚**：Registry 管 candidate → production → previous；RSI 只提议，不直接改生产。
 
+### 1.1 当前运行时链路（Fake / 正式 / 缺外部资源）
+
+> 绿色 = 正式代码链路可用；红色 = Fake/Mock；灰色 = 代码已实现但数据/候选未接；黄色 = 缺外部资源。
+
+```mermaid
+flowchart LR
+  subgraph CLIENT["客户端"]
+    OLD["旧 Demo /<br/>浏览器 speechSynthesis"]
+    RTC["/rtc 通话台<br/>麦克风 / 文件回灌"]
+  end
+
+  subgraph TRANS["传输"]
+    WS["ws_pcm<br/>16k 上行 / 24k 下行"]
+    LK["LiveKit / WebRTC<br/>未配置"]
+  end
+
+  subgraph VOICE["语音（绿=真实，红=Fake）"]
+    ASR["sherpa-onnx ASR<br/>真实模型"]
+    QWEN["Qwen3 GPU TTS<br/>sidecar"]
+    MELO["Melo CPU TTS<br/>真实模型"]
+    FASR["FakeAsr"]
+    FTTS["FakeTts"]
+  end
+
+  subgraph AGENT["Agent 与业务"]
+    ORC["Orchestrator<br/>Session / Turn / 取消"]
+    POP["PopAuditAgent<br/>规则 Agent"]
+    FA["FakeAgent<br/>订单兼容"]
+    LLM["LLMAgent<br/>真实云 LLM"]
+    TG["Tool Gateway<br/>幂等 / 重试 / 审计"]
+    MB["MockBusiness<br/>订单 / 回电工单"]
+    CG["Compliance<br/>规则守卫"]
+  end
+
+  subgraph OBS["事件与评测"]
+    EV["EventBus<br/>JSONL + SQLite"]
+    EVAL["Eval / Report<br/>代码真 / 数据合成"]
+    REG["Registry / RSI<br/>代码真 / 候选未接"]
+  end
+
+  subgraph EXT["缺外部资源"]
+    CLOUD["云 LLM API"]
+    BIZ["真实资质/工单系统"]
+    MODELS["ASR/TTS 模型权重"]
+    LKS["LiveKit Server"]
+  end
+
+  OLD --> WS
+  RTC --> WS
+  RTC -. "尝试媒体协商" .-> LK
+  LK -. "未配置 503 / C1 回退" .-> WS
+
+  WS --> ORC
+  WS --> ASR
+  WS --> FASR
+  ASR --> ORC
+  FASR --> ORC
+
+  ORC --> POP
+  ORC --> FA
+  ORC --> LLM
+  POP --> TG
+  FA --> TG
+  LLM --> TG
+  TG --> MB
+  ORC --> CG
+
+  ORC --> QWEN
+  ORC --> MELO
+  ORC --> FTTS
+  QWEN --> WS
+  MELO --> WS
+  FTTS --> WS
+
+  ORC --> EV
+  EV --> EVAL
+  EV --> REG
+
+  LLM -. "需要 Key" .-> CLOUD
+  TG -. "真实写回未接" .-> BIZ
+  ASR -. "需要模型" .-> MODELS
+  QWEN -. "需要 GPU/模型" .-> MODELS
+  MELO -. "需要模型" .-> MODELS
+  LK -. "需要服务端" .-> LKS
+
+  classDef real fill:#d4edda,stroke:#2f855a,color:#1c4532;
+  classDef fake fill:#f8d7da,stroke:#c53030,color:#742a2a;
+  classDef missing fill:#fff3cd,stroke:#b7791f,color:#744210;
+  classDef code fill:#e2e8f0,stroke:#4a5568,color:#2d3748;
+
+  class ASR,QWEN,MELO,ORC,POP,TG,CG,EV,WS,RTC real;
+  class FASR,FTTS,FA,OLD,MB fake;
+  class CLOUD,BIZ,MODELS,LK,LKS missing;
+  class LLM,EVAL,REG code;
+```
+
+当前默认：
+
+- `AGENT_PROVIDER=fake` 走 `PopAuditAgent`；`AGENT_PROVIDER=llm` 才走 `LLMAgent`（需 Key）。
+- `APP_ENV=test` 默认 `FakeAsr`/`FakeTts`；生产默认 sherpa ASR + Qwen3 TTS，CPU 可切 Melo。
+- W1 演示默认 `TRANSPORT_PREF=ws_pcm`；`auto` 模式下未配置 LiveKit 走 C1 静默回落。
+- 真实业务系统、模型权重、LiveKit Server、云 LLM Key 均未随仓库提供。
+
 ## 2. API 调用关系图
 
 ```mermaid
@@ -185,6 +288,8 @@ flowchart TB
 
 ## 5. 最近一次更新
 
+**2026-11-07：LLM Agent 接入**。`LLMAgent` 支持 Function Calling、对话历史与 Flow 状态；工具名保持点号契约，OpenAI Function 使用安全别名并映射回 `order.query` 等内部名；POP 场景使用独立 Prompt；`.env` 仅在 dev/local 加载；补充 `speech_ended` 处理，修复该消息触发的 `UNKNOWN_MESSAGE`。
+
 **2026-11-06：赛题场景落地**。默认场景切换为 POP 品牌入驻资质审核驳回外呼；新增 68 条主表场景知识库、52 条整句话术、11 组高频 QA、28 条特殊追问、POP Flow、6 条评测用例和 `callback.create` 回电工单。
 
 **2026-11-03：真实语音接入**。运行命令和剩余边界见 [生产语音指南](docs/guides/production-voice.md)。
@@ -223,13 +328,15 @@ flowchart TB
 
 | 测试 | 命令 | 最近结果 |
 |---|---|---|
-| 单元 + 契约 | `make test` | **58 passed / 5 skipped**（模型集成用例默认跳过） |
+| 单元 + 契约 | `make test` | **59 passed / 5 skipped**（模型集成用例默认跳过） |
 | 契约 Schema | `make contract-test` | **5 files / 90 docs** |
 | 前端协议 | `cd web/rtc && npm test` | golden / PCM / 回灌 / 打断 **4 组 PASS** |
 | 端到端 | `make e2e` | 2 轮 + 打断 + 挂断 **PASS** |
 | 比赛指标 | `make metric` | **13 项 PASS** |
 | 场景评测 | `POST /eval/run` | POP 6 cases，**100%** |
 | CI | GitHub Actions | pytest / 契约 / 前端 / WS E2E |
+
+> 端到端“PASS”或“<3s”只是冒烟上限，不等于比赛时延达标；硬门槛是**首字 P50 ≤ 2s**。任何时延结论请用 `make metric-latency` 给出 P50/P95 与样本数。
 
 ## 8. 比赛指标测试
 
@@ -283,6 +390,16 @@ docker compose --profile gpu up -d --build
 # 或 CPU-only + Melo
 TTS_PROVIDER=melo docker-compose up -d --build app
 ```
+
+### 9.3 LiveKit 接入后的必做项
+
+当前 `TRANSPORT_PREF=ws_pcm` 是 W1 的防错默认值，不是 LiveKit 修复。接入 LiveKit 后必须完成：
+
+1. 恢复 `TRANSPORT_PREF=auto`，让 `/rtc` 真正参与传输协商。
+2. 验证 `/sessions/{id}/rtc` 返回 200、`media_ready`、`transport_switched` 和真实 WebRTC 入房。
+3. 保留 `MEDIA_NOT_CONFIGURED` 的 C1 静默回落 `ws_pcm`；不要用默认值把 503 藏起来。
+4. 服务端对 `speech_ended` 已支持；其他未知 WS 类型只记 warning，不再用 `UNKNOWN_MESSAGE` 当作致命错误展示。
+5. 增加“LiveKit 未配置 → ws_pcm 可用”的回归测试，避免再次用默认值掩盖协议错误。
 
 打开：
 

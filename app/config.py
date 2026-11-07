@@ -4,6 +4,14 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Load .env only for local/dev runs; CI and production must use explicit env.
+try:
+    from dotenv import load_dotenv
+    if os.getenv("APP_ENV", "dev").strip().lower() in {"dev", "local"}:
+        load_dotenv(override=False)
+except ImportError:
+    pass  # python-dotenv not installed, use system env vars only
+
 
 def _bool(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).lower() in {"1", "true", "yes", "on"}

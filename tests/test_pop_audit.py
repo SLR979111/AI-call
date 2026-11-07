@@ -34,6 +34,25 @@ def build(tmp_path: Path):
     return orc, bus, tools, mock
 
 
+class RecordingAgent:
+    """Test double for the Orchestrator <-> Agent session contract."""
+
+    def __init__(self) -> None:
+        self.started: tuple | None = None
+        self.requests: list[dict] = []
+
+    async def start_session(self, session_id, version_set, flow_pack) -> None:
+        self.started = (session_id, version_set, flow_pack)
+
+    async def handle(self, req, cancel, tools):
+        self.requests.append(req)
+        yield {"kind": "sentence", "reply_id": req["reply_id"], "sentence_id": 1,
+               "text": "收到", "final": True}
+        yield {"kind": "end", "reply_id": req["reply_id"], "outcome": "completed",
+               "slots": {"probe": "ok"}, "result": {}}
+
+
+
 def test_pop_flowpack_valid():
     pack = FlowPack.load(ROOT / "flowpacks" / "pop_qualification_audit.json")
     engine = FlowEngine(pack)
@@ -87,3 +106,24 @@ async def test_pop_eval_suite():
     assert report["cases"] == 6
     assert report["task_success_rate"] == 1.0, report["failure_counts"]
     assert report["p50_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_wires_agent_session_and_flow_context():
+    data = temp_dir()
+    bus = EventBus(data, "rel_wire_test", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    agent = RecordingAgent()
+    orc = Orchestrator(bus, agent, tools, ComplianceGuard(), "rel_wire_test",
+                       "pop_qualification_audit", tts=FakeTts())
+    session = await orc.create_session("text")
+    assert agent.started is not None
+    assert agent.started[0] == session.session_id
+    assert agent.started[2]["id"] == "pop_qualification_audit"
+
+    await orc.handle_text(session.session_id, "你好", None)
+    assert agent.requests
+    assert agent.requests[0]["flow_state"] == "OPEN"
+    assert "slots" in agent.requests[0]
+    assert session.slots.get("probe") == "ok"

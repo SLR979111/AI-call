@@ -124,6 +124,10 @@ class Orchestrator:
         )
         self.sessions[sid] = session
         self.bus.register_session(sid, mode)
+        # LLMAgent needs an explicit session hook to create its FlowEngine/history.
+        start_session = getattr(self.agent, "start_session", None)
+        if start_session is not None:
+            await start_session(sid, session.version_set, {"id": self.scenario_id})
         await self.bus.emit(
             session_id=sid, type="SessionStarted", module="orchestrator", mode=mode,
             payload={"mode": mode, "scenario_id": self.scenario_id, "client_version": "dev"},
@@ -348,6 +352,8 @@ class Orchestrator:
                     "reply_id": turn.reply_id,
                     "user_text": text,
                     "asr_conf": 1.0,
+                    "flow_state": session.flow_state,
+                    "slots": dict(session.slots),
                     "dialog_state": {"flow_state": session.flow_state, "slots": session.slots},
                     "recent_turns": [],
                 }
@@ -479,6 +485,11 @@ class Orchestrator:
 
                 session.flow_state = "CLOSE" if result.get("outcome") in {"rescheduled", "completed"} else session.flow_state
                 session.slots.update(result.get("slots") or {})
+                flow_snapshot = (result.get("result") or {}).get("flow_snapshot") or {}
+                if flow_snapshot.get("state"):
+                    session.flow_state = str(flow_snapshot["state"])
+                if isinstance(flow_snapshot.get("slots"), dict):
+                    session.slots.update(flow_snapshot["slots"])
                 await self.bus.emit(
                     session_id=session_id, type="TurnCommitted", module="orchestrator",
                     turn_id=turn.turn_id, trace_id=turn.trace_id,

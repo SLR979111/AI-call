@@ -128,6 +128,19 @@ class ToolGateway:
         "lead.query": ToolSpec("lead.query", "1.0.0", ("lead_id",), {"lead_id": r"^L[0-9]{4,12}$"}),
     }
 
+    @classmethod
+    def openai_tool_name(cls, tool: str) -> str:
+        """OpenAI function names cannot contain dots; expose a stable safe alias."""
+        return tool.replace(".", "_")
+
+    @classmethod
+    def resolve_tool_name(cls, name: str) -> str:
+        """Map an OpenAI-safe name back to the public dotted contract name."""
+        for tool in cls.SPECS:
+            if name == cls.openai_tool_name(tool):
+                return tool
+        return name
+
     def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +230,7 @@ class ToolGateway:
         turn_id: str = "t_0000",
         trace_id: str | None = None,
     ) -> dict[str, Any]:
+        tool = self.resolve_tool_name(tool)
         spec = self.SPECS.get(tool)
         if spec is None:
             return {
@@ -329,6 +343,45 @@ class ToolGateway:
                      "tool_version": f"{spec.name}@{spec.version}"},
         }
 
+    @classmethod
+    def to_openai_tools(cls) -> list[dict[str, Any]]:
+        """Export tool specs as OpenAI Function Calling format."""
+        tools = []
+        for tool_name, spec in cls.SPECS.items():
+            safe_name = cls.openai_tool_name(tool_name)
+            properties: dict[str, Any] = {}
+            for field in spec.required:
+                field_def: dict[str, Any] = {"type": "string"}
+                if field in spec.patterns:
+                    field_def["pattern"] = spec.patterns[field]
+                    field_def["description"] = f"Required field matching pattern: {spec.patterns[field]}"
+                properties[field] = field_def
+            
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": safe_name,
+                    "description": cls._tool_description(safe_name),
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": list(spec.required)
+                    }
+                }
+            })
+        return tools
+    
+    @staticmethod
+    def _tool_description(tool_name: str) -> str:
+        descriptions = {
+            "order_query": "查询订单信息，包括状态、配送时间、地址等",
+            "order_reschedule": "修改订单配送时间，需要订单号和新的配送时间",
+            "ticket_create": "创建工单，用于记录需要人工跟进的问题",
+            "callback_create": "登记回电任务，需要申请单号和回电原因",
+            "lead_query": "查询线索信息，用于销售场景"
+        }
+        return descriptions.get(tool_name, f"Tool: {tool_name}")
+    
     def close(self) -> None:
         try:
             self._conn.close()

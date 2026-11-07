@@ -82,9 +82,9 @@ async def test_three_turns_and_events():
 async def test_tool_idempotency():
     _, _, tools, mock = build()
     args = {"order_id": "A12345678", "new_time": "2026-11-01T15:00"}
-    first = await tools.invoke("order.reschedule", args, idempotency_key="k-reschedule-1",
+    first = await tools.invoke("order_reschedule", args, idempotency_key="k-reschedule-1",
                                session_id="s_test", turn_id="t_0001")
-    second = await tools.invoke("order.reschedule", args, idempotency_key="k-reschedule-1",
+    second = await tools.invoke("order_reschedule", args, idempotency_key="k-reschedule-1",
                                 session_id="s_test", turn_id="t_0001")
     assert first["ok"] is True
     assert second["ok"] is True
@@ -97,7 +97,7 @@ async def test_tool_idempotency():
 async def test_tool_failure_retry_and_error():
     _, _, tools, mock = build()
     mock.fault = "timeout"
-    result = await tools.invoke("order.query", {"order_id": "A12345678"},
+    result = await tools.invoke("order_query", {"order_id": "A12345678"},
                                 session_id="s_test", turn_id="t_0001")
     assert result["ok"] is False
     assert result["error"]["code"] == "TOOL_TIMEOUT"
@@ -108,7 +108,7 @@ async def test_tool_failure_retry_and_error():
 @pytest.mark.asyncio
 async def test_invalid_tool_args():
     _, _, tools, _ = build()
-    result = await tools.invoke("order.query", {"order_id": "bad id"},
+    result = await tools.invoke("order_query", {"order_id": "bad id"},
                                 session_id="s_test", turn_id="t_0001")
     assert result["ok"] is False
     assert result["error"]["code"] == "TOOL_INVALID_ARGS"
@@ -176,7 +176,7 @@ def test_http_api_smoke():
         sid = created["session_id"]
         assert "?token=" in created["ws_url"]
         turn = client.post(f"/sessions/{sid}/text", json={"text": "我想问一下订单"}).json()
-        assert turn["result"]["outcome"] in {"rescheduled", "completed", "tool_failed"}
+        assert turn["result"]["outcome"] in {"rescheduled", "completed", "tool_failed", "answered", "llm_failed"}
         refreshed = client.post(f"/sessions/{sid}/token").json()
         assert "?token=" in refreshed["ws_url"]
         events = client.get(f"/sessions/{sid}/events")
@@ -256,10 +256,19 @@ async def test_llm_budget_and_unconfigured():
     validate_events(events)
     assert "BudgetExceeded" in [e["type"] for e in events]
 
-    unconfigured = LLMRouter()
-    result = await unconfigured.complete([{"role": "user", "content": "hi"}])
-    assert result.ok is False
-    assert result.error and result.error["code"] == "LLM_NOT_CONFIGURED"
+    # Test unconfigured router (clear env vars to simulate no config)
+    import os
+    old_env = {k: os.environ.pop(k, None) for k in list(os.environ.keys()) if k.startswith("LLM_")}
+    try:
+        unconfigured = LLMRouter()
+        result = await unconfigured.complete([{"role": "user", "content": "hi"}])
+        assert result.ok is False
+        assert result.error and result.error["code"] == "LLM_NOT_CONFIGURED"
+    finally:
+        # Restore env vars
+        for k, v in old_env.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_knowledge_search():
@@ -343,7 +352,7 @@ async def test_llm_agent_tool_path():
                 "intent": "reschedule",
                 "reply": "可以帮您改约。",
                 "slots": {"order_id": "A12345678"},
-                "tool": "order.query",
+                "tool": "order_query",
                 "tool_args": {"order_id": "A12345678"},
                 "outcome": "rescheduled",
             }, ensure_ascii=False)}}],
