@@ -450,6 +450,7 @@ export POP_CONTEST_CONTEXT='{"request_id":"Q983001","brand":"演示品牌","reje
 - 模型：
   - `models/asr/tokens.txt`、`encoder.int8.onnx`、`decoder.onnx`、`joiner.int8.onnx`
   - `models/melo/model.onnx`、`tokens.txt`、`lexicon.txt`、`dict/`、四个 `.fst`
+- 官方权重：GitHub Release [`weights-v1`](https://github.com/SLR979111/AI-call/releases/tag/weights-v1)，包含 ASR/Melo/Qwen 资产和 `SHA256SUMS`；本地 ASR/Melo 文件已逐文件校验一致。
 
 启动：
 
