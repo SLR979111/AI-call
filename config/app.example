@@ -7,6 +7,12 @@ SCENARIO_ID=pop_qualification_audit
 DATA_DIR=./data
 DEV_NO_AUTH=1
 
+# Optional six-stage competition path. The default app uses PopAuditAgent;
+# set POP_CONTEST=1 to use PopCompetitionAgent with a case-specific context.
+POP_CONTEST=0
+POP_CONTEST_POLICY=guided
+POP_CONTEST_CONTEXT={"request_id":"Q983001","brand":"演示品牌","reject_l1":"入驻","reject_l2":"公司主体","reject_l3":"主体资质到期"}
+
 # ---------------------------------------------------------------------------
 # LLM Provider Configuration (OpenAI-compatible APIs)
 # Set AGENT_PROVIDER=llm to enable real LLM agent; fake for rule-based agent

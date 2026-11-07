@@ -288,6 +288,8 @@ flowchart TB
 
 ## 5. 最近一次更新
 
+**2026-11-07：POP 评测与离线 RSI**。新增 POP 六阶段 Agent、规则/Judge/评测 Runner、本地写回、离线策略对比、可选 WebRTC DataChannel 与比赛启动器；默认 app 仍走 `PopAuditAgent`，比赛路径通过 `POP_CONTEST=1` 或 `scripts/serve_pop_contest.py` 启用。
+
 **2026-11-07：LLM Agent 接入**。`LLMAgent` 支持 Function Calling、对话历史与 Flow 状态；工具名保持点号契约，OpenAI Function 使用安全别名并映射回 `order.query` 等内部名；POP 场景使用独立 Prompt；`.env` 仅在 dev/local 加载；补充 `speech_ended` 处理，修复该消息触发的 `UNKNOWN_MESSAGE`。
 
 **2026-11-06：赛题场景落地**。默认场景切换为 POP 品牌入驻资质审核驳回外呼；新增 68 条主表场景知识库、52 条整句话术、11 组高频 QA、28 条特殊追问、POP Flow、6 条评测用例和 `callback.create` 回电工单。
@@ -328,7 +330,7 @@ flowchart TB
 
 | 测试 | 命令 | 最近结果 |
 |---|---|---|
-| 单元 + 契约 | `make test` | **59 passed / 5 skipped**（模型集成用例默认跳过） |
+| 单元 + 契约 | `make test` | **111 passed / 5 skipped**（含 POP 规则/策略/评测） |
 | 契约 Schema | `make contract-test` | **5 files / 90 docs** |
 | 前端协议 | `cd web/rtc && npm test` | golden / PCM / 回灌 / 打断 **4 组 PASS** |
 | 端到端 | `make e2e` | 2 轮 + 打断 + 挂断 **PASS** |
@@ -400,6 +402,36 @@ TTS_PROVIDER=melo docker-compose up -d --build app
 3. 保留 `MEDIA_NOT_CONFIGURED` 的 C1 静默回落 `ws_pcm`；不要用默认值把 503 藏起来。
 4. 服务端对 `speech_ended` 已支持；其他未知 WS 类型只记 warning，不再用 `UNKNOWN_MESSAGE` 当作致命错误展示。
 5. 增加“LiveKit 未配置 → ws_pcm 可用”的回归测试，避免再次用默认值掩盖协议错误。
+
+### 9.4 比赛路径（六阶段 POP）
+
+默认 app 使用三句式的 `PopAuditAgent`；六阶段比赛版使用 `PopCompetitionAgent`，推荐用 contest 启动器：
+
+```bash
+# 可选 WebRTC DataChannel（不装也能走 ws_pcm）
+python -m pip install -r requirements-rtc.txt
+
+python scripts/serve_pop_contest.py \
+  --output ./data/contest \
+  --asr-model /path/to/sherpa-asr \
+  --tts-model /path/to/melo \
+  --doc-id pop-scene-034 \
+  --request-id Q983001 \
+  --brand 演示品牌 \
+  --dialogue-version guided
+```
+
+需要 WebRTC DataChannel 时追加 `--rtc-pcm`；不装 `aiortc` 时该参数会明确报错，默认仍走 `ws_pcm`。
+
+也可以在普通 app 生命周期中启用六阶段 Agent：
+
+```bash
+export POP_CONTEST=1
+export POP_CONTEST_POLICY=guided   # legacy | repair | guided
+export POP_CONTEST_CONTEXT='{"request_id":"Q983001","brand":"演示品牌","reject_l1":"入驻","reject_l2":"公司主体","reject_l3":"主体资质到期"}'
+```
+
+`POP_CONTEST_CONTEXT` 必须包含 `request_id`、`brand`、`reject_l1/l2/l3`；缺失时启动失败，不会用空上下文冒充真实单据。比赛路径的写回记录在 `data/index/pop_contacts.db`，默认 app 的规则路径不写回。
 
 打开：
 

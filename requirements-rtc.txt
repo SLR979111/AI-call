@@ -1,0 +1,5 @@
+# Optional WebRTC DataChannel transport for the competition path.
+# The default ws_pcm application does not need this file.
+# Install only on the demo/contest machine:
+#   python -m pip install -r requirements-rtc.txt
+aiortc==1.14.0

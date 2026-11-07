@@ -51,7 +51,13 @@ def build_app(args):
     from app.main import app, lifespan
     app.state.rtc_pcm_enabled = args.rtc_pcm
     if args.rtc_pcm:
-        import aiortc  # Verify the optional transport dependency at startup.
+        try:
+            import aiortc  # noqa: F401
+        except ImportError as exc:
+            raise SystemExit(
+                "--rtc-pcm requires the optional WebRTC dependency; "
+                "install it with: python -m pip install -r requirements-rtc.txt"
+            ) from exc
 
     scene = next(doc["scene"] for doc in read_json(KNOWLEDGE) if doc["id"] == args.doc_id)
     if scene["mode"] != "电话":
@@ -119,7 +125,8 @@ if __name__ == "__main__":
     version.add_argument("--dialogue-version", choices=("legacy", "repair", "guided"), default="guided")
     version.add_argument("--baseline-dialogue", dest="dialogue_version", action="store_const", const="legacy")
     parser.add_argument("--semantic-followups", action="store_true")
-    parser.add_argument("--rtc-pcm", action="store_true")
+    parser.add_argument("--rtc-pcm", action="store_true",
+                        help="enable optional WebRTC DataChannel (install requirements-rtc.txt first)")
     parser.add_argument("--fault-writeback", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)

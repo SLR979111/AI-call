@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .agent.fake import FakeAgent
 from .agent.pop_audit import PopAuditAgent
 from .compliance import ComplianceGuard
-from .config import settings
+from .config import _bool, settings
 from .events import EventBus
 from .eval.runner import EvalCase, EvalRunner
 from .flow.pack import FlowPack, FlowPackError
@@ -165,6 +165,33 @@ async def lifespan(app: FastAPI):
         agent = PopAuditAgent(knowledge_path)
     else:
         agent = FakeAgent()
+
+    # Competition path: six-stage POP agent with a case-specific context and
+    # a local writeback store. It is opt-in because it needs request/brand/
+    # reject fields that are not available for a generic text session.
+    pop_store = None
+    if _bool("POP_CONTEST", "0") and settings.scenario_id == "pop_qualification_audit":
+        from .agent.pop_competition import PopCompetitionAgent
+        from .agent.pop_repair import BASELINE, GUIDED, REPAIRED
+        from .tools.pop_writeback import PopContactStore
+
+        raw_context = os.getenv("POP_CONTEST_CONTEXT", "").strip()
+        try:
+            context = json.loads(raw_context) if raw_context else {}
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("POP_CONTEST_CONTEXT must be a JSON object") from exc
+        required = ("request_id", "brand", "reject_l1", "reject_l2", "reject_l3")
+        missing = [key for key in required if not str(context.get(key, "")).strip()]
+        if missing:
+            raise RuntimeError(f"POP_CONTEST_CONTEXT missing: {', '.join(missing)}")
+        policy_name = os.getenv("POP_CONTEST_POLICY", "guided").strip().lower()
+        policy_map = {"legacy": BASELINE, "repair": REPAIRED, "guided": GUIDED}
+        if policy_name not in policy_map:
+            raise RuntimeError("POP_CONTEST_POLICY must be legacy|repair|guided")
+        pop_store = PopContactStore(settings.data_dir / "index" / "pop_contacts.db", bus)
+        agent = PopCompetitionAgent(knowledge_path, context, pop_store,
+                                    policy=policy_map[policy_name])
+
     compliance = ComplianceGuard()
     voice = VoiceRuntime()
     await voice.initialize()
@@ -186,9 +213,12 @@ async def lifespan(app: FastAPI):
     app.state.llm = llm
     app.state.evals = {}
     app.state.voice = voice
+    app.state.pop_store = pop_store
     try:
         yield
     finally:
+        if pop_store is not None:
+            pop_store.close()
         bus.close()
         tools.close()
 
