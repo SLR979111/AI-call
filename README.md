@@ -288,6 +288,8 @@ flowchart TB
 
 ## 5. 最近一次更新
 
+**2026-11-07：本地 CPU 真语音链路**。sherpa ASR + Melo CPU TTS 在 Python 3.11 / ONNX Runtime 1.28 下跑通；新增 `app/voice/ort_runtime.py` 预加载本地 ORT，避免 Windows System32 旧 DLL；新增 `scripts/run_local_voice.ps1`。模型与 `.web311`/`.venv311` 均不提交仓库。
+
 **2026-11-07：POP 评测与离线 RSI**。新增 POP 六阶段 Agent、规则/Judge/评测 Runner、本地写回、离线策略对比、可选 WebRTC DataChannel 与比赛启动器；默认 app 仍走 `PopAuditAgent`，比赛路径通过 `POP_CONTEST=1` 或 `scripts/serve_pop_contest.py` 启用。
 
 **2026-11-07：LLM Agent 接入**。`LLMAgent` 支持 Function Calling、对话历史与 Flow 状态；工具名保持点号契约，OpenAI Function 使用安全别名并映射回 `order.query` 等内部名；POP 场景使用独立 Prompt；`.env` 仅在 dev/local 加载；补充 `speech_ended` 处理，修复该消息触发的 `UNKNOWN_MESSAGE`。
@@ -432,6 +434,47 @@ export POP_CONTEST_CONTEXT='{"request_id":"Q983001","brand":"演示品牌","reje
 ```
 
 `POP_CONTEST_CONTEXT` 必须包含 `request_id`、`brand`、`reject_l1/l2/l3`；缺失时启动失败，不会用空上下文冒充真实单据。比赛路径的写回记录在 `data/index/pop_contacts.db`，默认 app 的规则路径不写回。
+
+### 9.5 本地 CPU 真语音（sherpa + Melo，无浏览器）
+
+本地真语音不依赖浏览器 ASR/TTS，也不依赖云：
+
+```text
+麦克风 → sherpa ASR → Orchestrator → Agent → Melo CPU TTS → PCM
+```
+
+前置：
+
+- Python 3.11/3.12（Python 3.13 没有 sherpa wheel）
+- `sherpa-onnx==2.0.1` + `onnxruntime>=1.28`（sherpa 需要 ORT API 28）
+- 模型：
+  - `models/asr/tokens.txt`、`encoder.int8.onnx`、`decoder.onnx`、`joiner.int8.onnx`
+  - `models/melo/model.onnx`、`tokens.txt`、`lexicon.txt`、`dict/`、四个 `.fst`
+
+启动：
+
+```powershell
+.\scripts\run_local_voice.ps1
+```
+
+或手动：
+
+```powershell
+$env:ASR_PROVIDER='sherpa'
+$env:TTS_PROVIDER='melo'
+$env:ASR_MODEL_DIR="$PWD\models\asr"
+$env:MELO_MODEL_DIR="$PWD\models\melo"
+$env:TTS_FALLBACK_PROVIDER=''
+$env:POP_CONTEST='1'
+$env:POP_CONTEST_CONTEXT='{"request_id":"Q983001","brand":"演示品牌","reject_l1":"入驻","reject_l2":"公司主体","reject_l3":"主体资质到期"}'
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
+```
+
+验收：
+
+- `GET /voice/status` 返回 `asr.provider=sherpa`、`tts.provider=melo`，两者 `ready=true`
+- `/rtc/` 说话出现 transcript，回复有真实人声 PCM
+- 若 Windows 的 `System32\onnxruntime.dll` 是旧版，`app/voice/ort_runtime.py` 会优先加载项目内 `.web311/onnxruntime/capi/onnxruntime.dll`；也可用 `ORT_DLL_DIR` 指定目录。
 
 打开：
 

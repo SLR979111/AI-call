@@ -74,8 +74,15 @@ async function startCall(source) {
 function showConnected() {
   const useFile = inputSource === 'file' || !engine.micAvailable;
   ui.setConnected(true, useFile);
-  if (inputSource === 'mic' && useFile) ui.status('麦克风不可用，可以选择录音文件或输入文字。', 'err');
-  else ui.status(useFile ? '已连接，请选择录音文件。' : '麦克风已连接，可以说话。', 'ok');
+  if (inputSource === 'mic' && useFile) {
+    const err = engine.lastError;
+    const detail = err ? `${err.name || 'Error'}: ${err.message || err}` : '未获得麦克风轨道';
+    ui.status(`麦克风不可用（${detail}）。请用独立 Chrome/Edge 打开并允许麦克风。`, 'err');
+  } else if (useFile) {
+    ui.status('已连接，请选择录音文件。', 'ok');
+  } else {
+    ui.status('麦克风已连接，可以说话。', 'ok');
+  }
 }
 
 /**

@@ -23,6 +23,7 @@ export class AudioEngine {
     this.inputRate = 0;          // 麦克风轨道实际采样率（通常 48000）
     this.device = null;
     this.micAvailable = false;
+    this.lastError = null;
     this.muted = false;
     this.workletLoaded = false;
     this._monoBase = 0;          // mono = (monoBase - ctxBaseSec*1000) + captureTimeSec*1000
@@ -91,6 +92,7 @@ export class AudioEngine {
     } catch (e) {
       // 麦克风失败不是致命错误：pcm 播放、字幕、按钮联调都还能用
       console.warn('[engine] 麦克风不可用，进入无麦模式', e);
+      this.lastError = e;
       this.micAvailable = false;
     }
   }

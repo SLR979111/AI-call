@@ -10,6 +10,13 @@ __pycache__/
 .Python
 .venv/
 .venv-*/
+.venv*/
+.vendor*/
+.web*/
+.sherpa*/
+.tmp-pip*/
+.wheels/
+wheels/
 venv/
 env/
 ENV/
