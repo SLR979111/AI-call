@@ -28,13 +28,23 @@ let muted = false;
 let inBarge = false;
 let bargeTimer = 0;
 let firstVoicedFrameSent = false;
+let lastSpeechEnd = 0;
+let timingTurn = null;
+let inputSource = 'mic';
 
 ui = initUi({
-  onStart: () => startCall().catch((e) => { console.error(e); ui.status('启动失败：' + e.message, 'err'); }),
+  initialSource: !cfg.ENABLE_MIC || cfg.UPLINK_MODE === 'file' ? 'file' : 'mic',
+  onStart: (source) => startCall(source).catch((e) => {
+    engine.stopCapture();
+    ui.setConnected(false);
+    console.error(e);
+    ui.status('启动失败：' + e.message, 'err');
+  }),
   onHangup: () => hangup(),
   onMute: () => toggleMute(),
   onBarge: () => triggerBarge('manual'),
   onDemo: () => startDemoUplink().catch((e) => ui.status('回放失败：' + e.message, 'err')),
+  onAudioFile: (file) => startDemoUplink(file).catch((e) => ui.status('回放失败：' + e.message, 'err')),
   onText: (text) => {
     if (!client.sendText(text)) { ui.status('连接未就绪，无法发送', 'err'); return; }
     store.log(`→ text: ${text}`);
@@ -43,30 +53,29 @@ ui = initUi({
 
 /* ============================ 通话生命周期 ============================ */
 
-async function startCall() {
-  ui.status('请求麦克风与音频上下文…');
+async function startCall(source) {
+  inputSource = source;
+  lastSpeechEnd = 0;
+  timingTurn = null;
+  vad.reset();
+  ui.setStarting();
+  ui.status(source === 'mic' ? '请求麦克风权限…' : '准备录音回放…');
   try {
-    await engine.start();                       // ★ 必须在点击手势内
+    await engine.start(source === 'mic');       // ★ 必须在点击手势内
   } catch (e) {
     console.warn('音频引擎启动失败（继续以无麦模式）', e);
   }
 
   ui.status('建立会话…');
   await client.startCall();
-  ui.setConnected(true);
-  ui.status('已连接', 'ok');
+  showConnected();
+}
 
-  // 无麦克风兜底：自动切到回放音源（现场保险），失败则退到纯文本输入
-  const wantFile = cfg.UPLINK_MODE === 'file' || !engine.micAvailable;
-  if (wantFile) {
-    try {
-      await startDemoUplink();
-      ui.status(engine.micAvailable ? '麦克风不可用 → 已切回放音源' : '无麦克风 → 回放音源模式', 'ok');
-    } catch (e) {
-      store.log('回放音源不可用：' + e.message);
-      ui.status('无麦克风：请用底部输入框（text 消息）', 'err');
-    }
-  }
+function showConnected() {
+  const useFile = inputSource === 'file' || !engine.micAvailable;
+  ui.setConnected(true, useFile);
+  if (inputSource === 'mic' && useFile) ui.status('麦克风不可用，可以选择录音文件或输入文字。', 'err');
+  else ui.status(useFile ? '已连接，请选择录音文件。' : '麦克风已连接，可以说话。', 'ok');
 }
 
 /**
@@ -74,16 +83,20 @@ async function startCall() {
  * @param {string|File|Blob} [source]
  */
 async function startDemoUplink(source) {
+  if (fileUplink.running) throw new Error('当前录音还在回放');
+  engine.stopCapture();
+  vad.reset();
   const info = await fileUplink.load(source || cfg.DEMO_WAV);
   store.log(`回放音源 ${fileUplink.sourceLabel} ${info.durationMs}ms @${info.sampleRate}Hz`);
   await fileUplink.start({
     onFrame: handleFrame,
-    onEnd: () => { store.log('回放结束'); client.speechEnded(vad.lastVoicedMono); }
+    onEnd: () => { store.log('回放结束'); reportSpeechEnd(vad.lastVoicedMono); }
   });
   ui.status(`回放中：${fileUplink.sourceLabel}（${info.durationMs}ms）`, 'ok');
 }
 
 function hangup() {
+  fileUplink.stop();
   playback.stopNow();
   engine.stopCapture();
   client.hangup('user_click');
@@ -109,11 +122,12 @@ engine.onFrame = (f) => handleFrame(f);
  * @param {{pcm:Int16Array, frameSeq:number, monoMs:number, energyDb:number}} f
  */
 function handleFrame(f) {
+  if (cfg.TRANSPORT_PREF === 'rtc_pcm' && client.transport !== 'rtc_pcm') return;
   // 1) 上行音频（仅 ws_pcm：WebRTC 期音频走 RTP，这里必须停发）
-  if (client.transport === 'ws_pcm') {
+  if (client.transport === 'ws_pcm' || client.transport === 'rtc_pcm') {
     const flags = (muted ? 1 : 0) | (firstVoicedFrameSent ? 0 : 0);
     const frame = buildAudioFrame({
-      frameSeq: f.frameSeq,
+      frameSeq: client.frameSeq++,
       clientMonoMs: f.monoMs,
       flags,
       pcm: f.pcm
@@ -137,7 +151,12 @@ function handleFrame(f) {
     firstVoicedFrameSent = true;
   }
   if (r.barge != null) triggerBarge('local_vad', r.barge);
-  if (r.end != null) client.speechEnded(vad.lastVoicedMono);
+  if (r.end != null) reportSpeechEnd(vad.lastVoicedMono);
+}
+
+function reportSpeechEnd(lastVoiced) {
+  if (lastVoiced > lastSpeechEnd) lastSpeechEnd = lastVoiced;
+  client.speechEnded(lastVoiced);
 }
 
 /* ============================ 打断（C2 / C3） ============================ */
@@ -163,6 +182,7 @@ function triggerBarge(source, b0Hint) {
     turnId: playback.turnId,
     reason: source === 'manual' ? 'user_barge_button' : 'barge_in'
   });
+  if (source === 'manual') client.speechStarted(b0, store.get().db);
   store.log(`打断 source=${source} b0=${b0.toFixed(0)} b3=${b3.toFixed(0)} stop=${stopLatency.toFixed(1)}ms cursor=${JSON.stringify(cur)}`);
 
   // C3：**只有本地 VAD 判定的打断**才允许 300ms 后自恢复（"误打断"）。
@@ -190,8 +210,7 @@ function triggerBarge(source, b0Hint) {
 /* ============================ 服务端 → 本地 ============================ */
 
 client.addEventListener('ready', () => {
-  ui.setConnected(true);
-  ui.status('会话就绪', 'ok');
+  if (cfg.TRANSPORT_PREF !== 'rtc_pcm') showConnected();
 });
 
 client.addEventListener('tts-started', (ev) => playback.begin(ev.detail));
@@ -226,18 +245,18 @@ client.addEventListener('turn-aborted', (ev) => {
   ui.status(`已打断（${ev.detail.reason}），请继续说`, 'ok');
 });
 
-client.addEventListener('transport-switched', () => {
-  ui.status('已切到兼容模式（ws_pcm）', 'ok');
-});
+client.addEventListener('transport-switched', showConnected);
 
 client.addEventListener('server-error', (ev) => {
   const e = ev.detail || {};
+  if (e.code === 'ASR_NO_MATCH') { ui.status(e.user_message || '没有听清，请再说一遍', 'err'); return; }
   if (e.code === 'SESSION_TIMEOUT') { ui.status('会话超时', 'err'); return; }
   if (e.code === 'TTS_TIMEOUT') { ui.status('语音合成超时，仅显示文本', 'err'); return; }
   ui.status(`${e.code || 'ERROR'}${e.user_message ? '：' + e.user_message : ''}`, 'err');
 });
 
 client.addEventListener('ended', (ev) => {
+  fileUplink.stop();
   playback.stopNow();
   engine.stopCapture();
   ui.setConnected(false);
@@ -252,13 +271,17 @@ client.addEventListener('expired', () => {
 
 /* ============================ 首字时延（本地观测） ============================ */
 
-// playback_first_frame 发出的时刻 ≈ 播放开始；这里只做本地展示，
-// 官方口径由服务端用 t9 计算（04 §2.10 TurnLatency）。
+// 浏览器本地代理指标。对齐最后有声帧和同一轮首播通知，避免混用时钟。
+client.addEventListener('final-transcript', (event) => {
+  const transcript = /** @type {CustomEvent} */ (event).detail;
+  timingTurn = transcript.audio_end_ms != null && lastSpeechEnd
+    ? { id: transcript.turn_id, lastVoiced: lastSpeechEnd } : null;
+  lastSpeechEnd = 0;
+  store.set({ ttfb: null });
+});
 const origFirstFrame = client.playbackFirstFrame.bind(client);
 client.playbackFirstFrame = (replyId, turnId, audioCtxTime) => {
-  const t9 = now();
-  const t0 = store.get().b0;
-  if (t0 != null) store.set({ ttfb: Math.round(t9 - client.t0 - t0) });
+  if (timingTurn?.id === turnId) store.set({ ttfb: Math.round(now() - timingTurn.lastVoiced) });
   origFirstFrame(replyId, turnId, audioCtxTime);
 };
 

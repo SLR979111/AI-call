@@ -38,6 +38,7 @@
   #txtInput{flex:1 1 260px;min-width:200px;background:#0b0e12;color:var(--fg);border:1px solid #2f3d4b;
     border-radius:6px;padding:7px 10px;font-size:13px}
   #txtInput:disabled{opacity:.45}
+  #inputSource{background:#171c22;color:var(--fg);border:1px solid #2f3d4b;border-radius:5px;padding:6px}
   .stages{list-style:none;margin:0;padding:0}
   .stages li{display:flex;align-items:center;gap:8px;padding:5px 0;color:var(--dim);font-size:13px}
   .stages li.done{color:var(--ok)} .stages li.now{color:var(--acc);font-weight:600}
@@ -99,7 +100,7 @@
       <div class="kv"><span>b0（VAD 首帧）</span><b id="b0">—</b></div>
       <div class="kv"><span>b3（末帧播出）</span><b id="b3">—</b></div>
       <div class="kv"><span>打断停止时延</span><b id="stopLat">—</b></div>
-      <div class="kv"><span>首字时延（playback_first_frame）</span><b id="ttfb">—</b></div>
+      <div class="kv"><span>浏览器首帧估计</span><b id="ttfb">—</b></div>
       <div class="kv"><span>downlink</span><b id="downlink">—</b></div>
       <details><summary>事件日志</summary><div id="log"></div></details>
     </section>
@@ -107,11 +108,17 @@
 </main>
 
 <footer>
+  <label for="inputSource">输入方式</label>
+  <select id="inputSource">
+    <option value="mic">麦克风</option>
+    <option value="file">录音文件</option>
+  </select>
   <button id="btnStart" class="primary">开始通话</button>
   <button id="btnHangup" class="danger" disabled>挂断</button>
   <button id="btnMute" disabled>静音</button>
   <button id="btnBarge" disabled>模拟打断</button>
   <button id="btnDemo" disabled>无麦回放</button>
+  <input id="audioFile" type="file" accept=".wav,audio/wav" aria-label="回放本地 WAV" disabled />
   <input id="txtInput" placeholder="无麦模式：输入一句话，回车发送（契约消息 text）" disabled />
   <button id="btnSend" disabled>发送</button>
   <span class="hint" id="status">未连接</span>

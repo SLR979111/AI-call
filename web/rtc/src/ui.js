@@ -10,17 +10,25 @@ const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 
 let lastLinesSig = '';
 
-/** @param {{onStart:Function,onHangup:Function,onMute:Function,onBarge:Function,onText:Function,onDemo:Function}} h */
+/** @param {{initialSource:string,onStart:Function,onHangup:Function,onMute:Function,onBarge:Function,onText:Function,onDemo:Function,onAudioFile:Function}} h */
 export function initUi(h) {
   const stages = $('stages');
   stages.innerHTML = STAGE_LABELS.map((label, i) =>
     `<li data-i="${i}"><span class="dot">${i + 1}</span><span>${label}</span></li>`).join('');
 
-  $('btnStart').addEventListener('click', () => h.onStart());
+  const source = /** @type {HTMLSelectElement} */ ($('inputSource'));
+  source.value = h.initialSource;
+  $('btnStart').addEventListener('click', () => h.onStart(source.value));
   $('btnHangup').addEventListener('click', () => h.onHangup());
   $('btnMute').addEventListener('click', () => h.onMute());
   $('btnBarge').addEventListener('click', () => h.onBarge());
   $('btnDemo').addEventListener('click', () => h.onDemo());
+  const audioFile = /** @type {HTMLInputElement} */ ($('audioFile'));
+  audioFile.addEventListener('change', () => {
+    const file = audioFile.files?.[0];
+    audioFile.value = '';
+    if (file) h.onAudioFile(file);
+  });
 
   const input = /** @type {HTMLInputElement} */ ($('txtInput'));
   const submit = () => {
@@ -36,12 +44,18 @@ export function initUi(h) {
   render(store.get());
 
   return {
-    setConnected(ok) {
+    setStarting() {
+      $('btnStart').disabled = true;
+      source.disabled = true;
+    },
+    setConnected(ok, useFile = true) {
       $('btnStart').disabled = ok;
+      source.disabled = ok;
       $('btnHangup').disabled = !ok;
       $('btnMute').disabled = !ok;
       $('btnBarge').disabled = !ok;
-      /** @type {HTMLButtonElement} */ ($('btnDemo')).disabled = !ok;
+      /** @type {HTMLButtonElement} */ ($('btnDemo')).disabled = !ok || !useFile;
+      audioFile.disabled = !ok || !useFile;
       input.disabled = !ok;
       /** @type {HTMLButtonElement} */ ($('btnSend')).disabled = !ok;
     },
@@ -121,6 +135,10 @@ function render(s) {
        <div class="kv"><span>ticket</span><b>${escapeHtml(String(s.result.ticket || '—'))}</b></div>
        ${s.result.newTime ? `<div class="kv"><span>new_time</span><b>${escapeHtml(String(s.result.newTime))}</b></div>` : ''}`
     : '<span class="hint">未回写</span>';
+  if (s.result?.recordId) {
+    $('result').insertAdjacentHTML('beforeend',
+      '<div class="kv"><span>模拟回写编号</span><b>' + escapeHtml(s.result.recordId) + '</b></div>');
+  }
 
   // 调试
   $('db').textContent = s.db > -90 ? s.db.toFixed(1) + ' dB' : '—';

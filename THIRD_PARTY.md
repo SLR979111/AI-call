@@ -20,6 +20,7 @@
 | NumPy | >=1.26,<3 | https://github.com/numpy/numpy | BSD-3-Clause | PCM 转换 |
 | SciPy | >=1.12,<2 | https://github.com/scipy/scipy | BSD-3-Clause | Melo 重采样 |
 | sherpa-onnx | 2.0.1 | [官方许可证](https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE) | Apache-2.0 | CPU Zipformer ASR / OfflineTts Melo |
+| aiortc | 1.14.0（可选） | [项目源码与许可证](https://github.com/aiortc/aiortc) | BSD-3-Clause | 本地演示的 WebRTC 数据通道 |
 | Qwen3-TTS | Qwen3-TTS-12Hz-1.7B-Base | [官方仓库/许可证](https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE)、[模型](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) | Apache-2.0 | GPU ICL 声音克隆 |
 | MeloTTS | vits-melo-tts-zh_en ONNX 导出 | [官方许可证](https://github.com/myshell-ai/MeloTTS/blob/main/LICENSE)、[sherpa 模型发布](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) | MIT | 可选 CPU TTS |
 | faster-qwen3-tts | 0.5.4 | [许可证](https://github.com/andimarafioti/faster-qwen3-tts/blob/main/LICENSE) | MIT | sidecar 流式 Torch backend |

@@ -15,7 +15,10 @@ from .types import AudioChunk, VoiceError, mono_ms
 class MeloTts:
     sample_rate = 44100
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, *, speed: float = 1.0):
+        if not 0.75 <= speed <= 1.25:
+            raise VoiceError("MELO_CONFIG", "Melo speed must be between 0.75 and 1.25")
+        self.speed = speed
         root = Path(model_dir)
         rules = ["phone.fst", "date.fst", "number.fst", "new_heteronym.fst"]
         require_files(root, ["model.onnx", "tokens.txt", "lexicon.txt", "dict", *rules])
@@ -34,7 +37,7 @@ class MeloTts:
         self.lock = threading.Lock()
         # Load resampler and native lazy state before reporting readiness.
         from scipy.signal import resample_poly  # noqa: F401
-        self.model.generate("您好。", sid=0, speed=1.0)
+        self.model.generate("您好。", sid=0, speed=self.speed)
 
     async def synthesize(self, text, *, voice="default", sample_rate=24000, cancel):
         if voice != "default" or sample_rate not in (8000, 16000, 24000, 44100, 48000):
@@ -59,7 +62,7 @@ class MeloTts:
                     chunk = AudioChunk(pcm, seq, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
                     seq += 1
                     return int(emit(chunk))
-                self.model.generate(text, sid=0, speed=1.0, callback=callback)
+                self.model.generate(text, sid=0, speed=self.speed, callback=callback)
                 if not stop.is_set():
                     emit(AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate))
             finally:

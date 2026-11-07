@@ -34,7 +34,10 @@ export class SessionClient extends EventTarget {
     this.abortedReplies = new Set();
     this.currentReplyId = '';
     this.transport = 'ws_pcm';
+    this.opensOutbound = false;
     this.frameSeq = 0;
+    this.rtcPeer = null;
+    this.rtcChannel = null;
   }
 
   /** client_mono_ms：距会话开始的单调毫秒 */
@@ -49,6 +52,11 @@ export class SessionClient extends EventTarget {
     this.reconnectAttempt = 0;
     this.frameSeq = 0;
     this.audioFramesSent = 0;
+    this.abortedReplies.clear();
+    this.currentReplyId = '';
+    this.transport = 'ws_pcm';
+    this.rtcPeer = null;
+    this.rtcChannel = null;
 
     const body = { mode: 'voice', scenario_id: this.cfg.SCENARIO_ID };
     if (this.cfg.RELEASE_ID) body.release_id = this.cfg.RELEASE_ID;
@@ -71,7 +79,12 @@ export class SessionClient extends EventTarget {
 
     // C5：服务端直接给完整 ws_url（含 token），不自行拼 query
     this.wsUrl = this.resolveWsUrl(data.ws_url);
+    const ready = this.cfg.TRANSPORT_PREF === 'rtc_pcm' ? this.waitForRtcPcm() : null;
     this.connect();
+    if (ready) {
+      try { await ready; }
+      catch (error) { this.hangup('rtc_setup_failed'); throw error; }
+    }
     return data;
   }
 
@@ -93,6 +106,7 @@ export class SessionClient extends EventTarget {
     this.ws = ws;
 
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       store.log('WS open');
       this.reconnectAttempt = 0;
       this.send(C2S.HELLO, {
@@ -104,16 +118,21 @@ export class SessionClient extends EventTarget {
     };
 
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
       if (typeof ev.data === 'string') this.dispatch(ev.data);
       else store.log(`收到二进制帧 ${ev.data.byteLength}B（W1 不使用）`);
     };
 
     ws.onerror = () => store.log('WS error');
-    ws.onclose = (ev) => this.onClose(ev);
+    ws.onclose = (ev) => { if (this.ws === ws) this.onClose(ev); };
   }
 
   /** @param {CloseEvent} ev */
   onClose(ev) {
+    this.rtcPeer?.close();
+    this.rtcPeer = null;
+    this.rtcChannel = null;
+    this.transport = 'ws_pcm';
     clearInterval(this.pingTimer);
     store.set({ phase: 'error' });
     if (ev.code === 4401) {                      // G6：会话过期，禁止无限重连
@@ -140,14 +159,18 @@ export class SessionClient extends EventTarget {
    */
   send(type, data = {}) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ type, seq: this.c2sSeq.next(), ...data }));
+    const connection = this.transport === 'rtc_pcm' ? this.rtcChannel : this.ws;
+    if (!connection || (connection === this.rtcChannel && connection.readyState !== 'open')) return false;
+    connection.send(JSON.stringify({ type, seq: this.c2sSeq.next(), ...data }));
     return true;
   }
 
   /** 上行音频帧（ws_pcm 时使用；WebRTC 期停用） @param {ArrayBuffer} frame */
   sendAudioFrame(frame) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(frame);
+    const connection = this.transport === 'rtc_pcm' ? this.rtcChannel : this.ws;
+    if (!connection || (connection === this.rtcChannel && connection.readyState !== 'open')) return;
+    connection.send(frame);
     this.audioFramesSent++;
   }
 
@@ -161,6 +184,9 @@ export class SessionClient extends EventTarget {
     const d = msg.data || msg;          // 兼容 envelope{data} 与扁平两种形状
 
     switch (type) {
+      case 'rtc_pcm_answer':
+        return this.rtcPeer?.setRemoteDescription({ type: 'answer', sdp: d.sdp })
+          .catch(error => this.onError({ code: 'RTC_NEGOTIATION', message: String(error) }));
       case S2C.SESSION_READY: return this.onSessionReady(d);
       case S2C.HELLO_ACK: return this.onHelloAck(d);
       case S2C.STATE: return this.onState(d);
@@ -204,14 +230,21 @@ export class SessionClient extends EventTarget {
       ...(d.version_set ? { versionSet: d.version_set } : {})
     });
     if (d.session_id) this.sessionId = d.session_id;
+    this.opensOutbound = d.opens_outbound === true;
     store.log(`session_ready turn=${d.turn_id || '—'} protocol=${d.protocol_version || '—'} transport=${d.transport || '—'}`);
     if (d.transport) this.setTransport(d.transport, '');
     this.startPing();
     this.requestMedia();
+    if (this.opensOutbound && this.cfg.TRANSPORT_PREF === 'ws_pcm') this.send(C2S.CALL_READY);
     this.dispatchEvent(new CustomEvent('ready', { detail: d }));
   }
 
   async requestMedia() {
+    if (this.cfg.TRANSPORT_PREF === 'rtc_pcm') {
+      try { await this.offerRtcPcm(); }
+      catch (error) { this.onError({ code: 'RTC_NEGOTIATION', message: String(error) }); }
+      return;
+    }
     // C1：/rtc 未配置(503) 或 media_ready 超时 → 静默回落 ws_pcm，不阻断
     if (this.cfg.TRANSPORT_PREF === 'ws_pcm') {
       this.setTransport('ws_pcm', '按配置走兼容层');
@@ -230,6 +263,74 @@ export class SessionClient extends EventTarget {
     };
     this.addEventListener('media-ready', h);
     this.send(C2S.MEDIA_REQUEST, {});
+  }
+
+  waitForRtcPcm() {
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.removeEventListener('transport-switched', opened);
+        this.removeEventListener('server-error', failed);
+      };
+      const opened = event => {
+        if (event.detail.to !== 'rtc_pcm') return;
+        cleanup();
+        resolve();
+      };
+      const failed = event => {
+        cleanup();
+        reject(new Error(event.detail.message || 'WebRTC audio setup failed'));
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('WebRTC audio setup timed out'));
+      }, 11000);
+      this.addEventListener('transport-switched', opened);
+      this.addEventListener('server-error', failed);
+    });
+  }
+
+  async offerRtcPcm() {
+    const peer = new RTCPeerConnection({ iceServers: [] });
+    this.rtcPeer = peer;
+    const channel = peer.createDataChannel('voice-pcm', { ordered: true });
+    this.rtcChannel = channel;
+    let fragments = '';
+    channel.onmessage = event => {
+      if (this.rtcChannel !== channel) return;
+      const { data } = event;
+      if (typeof data !== 'string') return;
+      if (data[0] === '=') {
+        fragments = '';
+        this.dispatch(data.slice(1));
+      } else if (data[0] === '[') fragments = data.slice(1);
+      else if (fragments && fragments.length < 2_000_000) {
+        fragments += data.slice(1);
+        if (data[0] === '!') {
+          this.dispatch(fragments);
+          fragments = '';
+        }
+      }
+    };
+    channel.onopen = () => channel.send(JSON.stringify({ type: 'rtc_pcm_ready' }));
+    channel.onclose = () => {
+      if (this.rtcChannel !== channel || this.intentionalClose) return;
+      this.onError({ code: 'RTC_CLOSED', message: 'WebRTC audio disconnected' });
+      this.ws?.close();
+    };
+    await peer.setLocalDescription(await peer.createOffer());
+    if (peer.iceGatheringState !== 'complete') {
+      await new Promise(resolve => {
+        const done = () => {
+          if (peer.iceGatheringState !== 'complete') return;
+          peer.removeEventListener('icegatheringstatechange', done);
+          resolve();
+        };
+        peer.addEventListener('icegatheringstatechange', done);
+        done();
+      });
+    }
+    this.send('rtc_pcm_offer', { sdp: peer.localDescription.sdp });
   }
 
   /** @param {string} transport @param {string} note */
@@ -254,6 +355,7 @@ export class SessionClient extends EventTarget {
   onTranscript(d) {
     store.pushUserLine(d.text || '', !!d.final);
     store.set({ hint: '' });                        // 用户说话了：撤掉"等待"提示
+    if (d.final) this.dispatchEvent(new CustomEvent('final-transcript', { detail: d }));
   }
 
   /**
@@ -348,6 +450,7 @@ export class SessionClient extends EventTarget {
       slots: r.slots || d.slots || {},
       ticket: inner.ticket_id || inner.ticket || (typeof inner === 'string' ? inner : '') || '',
       newTime: inner.new_time || '',
+      recordId: inner.writeback?.record_id || '',
       raw: d
     };
     store.set({ result: normalized });
@@ -361,7 +464,8 @@ export class SessionClient extends EventTarget {
   }
 
   onTransportSwitched(d) {
-    this.setTransport(d.to || 'ws_pcm', '兼容模式');
+    this.setTransport(d.to || 'ws_pcm', d.to === 'rtc_pcm' ? 'WebRTC 数据通道' : '兼容模式');
+    if (this.opensOutbound) this.send(C2S.CALL_READY);
     this.dispatchEvent(new CustomEvent('transport-switched', { detail: d }));
   }
 
@@ -488,7 +592,9 @@ export class SessionClient extends EventTarget {
     this.intentionalClose = true;
     this.send(C2S.HANGUP, { reason, client_mono_ms: round3(this.mono()) });
     clearInterval(this.pingTimer);
-    setTimeout(() => { try { this.ws && this.ws.close(); } catch { /* noop */ } }, 200);
+    const ws = this.ws;
+    const peer = this.rtcPeer;
+    setTimeout(() => { peer?.close(); ws?.close(); }, 200);
   }
 }
 

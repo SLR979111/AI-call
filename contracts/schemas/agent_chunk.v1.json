@@ -2,13 +2,22 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://aicall.local/contracts/schemas/agent_chunk.v1.json",
   "title": "AgentChunk v1.0",
-  "description": "Union type produced by Agent.handle(): sentence | transfer | end | error.",
+  "description": "Union type produced by Agent.handle(): stage | sentence | transfer | end | error.",
   "type": "object",
   "required": ["kind"],
   "properties": {
-    "kind": { "type": "string", "enum": ["sentence", "transfer", "end", "error"] }
+    "kind": { "type": "string", "enum": ["stage", "sentence", "transfer", "end", "error"] }
   },
   "oneOf": [
+    {
+      "title": "stage",
+      "properties": {
+        "kind": { "const": "stage" },
+        "reply_id": { "type": "string", "minLength": 1 },
+        "stage": { "enum": ["OPEN", "IDENTITY_CONFIRM", "NEED_CONFIRM", "OFFER", "RESULT_CONFIRM", "WRITEBACK"] }
+      },
+      "required": ["kind", "reply_id", "stage"]
+    },
     {
       "title": "sentence",
       "properties": {

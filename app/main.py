@@ -47,15 +47,22 @@ class WsConnection:
     def __init__(self, ws: WebSocket) -> None:
         self.ws = ws
         self.lock = asyncio.Lock()
+        self.rtc_pcm = None
 
     async def send_json(self, data: dict[str, Any]) -> None:
         async with self.lock:
-            await asyncio.wait_for(self.ws.send_json(data), 5)
+            if self.rtc_pcm:
+                await self.rtc_pcm.send(data)
+            else:
+                await asyncio.wait_for(self.ws.send_json(data), 5)
 
     async def send_audio(self, data, cancel) -> None:
         async with self.lock:
             cancel.check()
-            await asyncio.wait_for(self.ws.send_json(data), 5)
+            if self.rtc_pcm:
+                await self.rtc_pcm.send(data, cancel)
+            else:
+                await asyncio.wait_for(self.ws.send_json(data), 5)
 
 
 class CreateSessionRequest(BaseModel):
@@ -572,6 +579,20 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     asr = None
     asr_task = None
     last_seq = None
+    rtc = None
+    inbox = None
+    ws_reader = None
+    if getattr(websocket.app.state, "rtc_pcm_enabled", False):
+        inbox = asyncio.Queue(maxsize=256)
+
+        async def forward_ws():
+            while True:
+                event = await websocket.receive()
+                await inbox.put(event)
+                if event["type"] == "websocket.disconnect":
+                    return
+
+        ws_reader = asyncio.create_task(forward_ws())
 
     def spawn(coro) -> None:
         task = asyncio.create_task(coro)
@@ -579,26 +600,32 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         task.add_done_callback(tasks.discard)
 
     async def consume_asr(stream):
+        handled = False
         async for result in stream.events():
             if result.kind == "error":
                 await conn.send_json({"type": "error", "error": result.error})
+                handled = True
                 continue
             metadata = {"confidence": result.confidence, "audio_start_ms": result.audio_start_ms,
                         "audio_end_ms": result.audio_end_ms}
             if result.kind == "final":
                 if result.text.strip():
+                    handled = True
                     # Allocate the real turn under the orchestrator's lock, then
                     # send exactly one final with that turn_id (never predict it).
                     spawn(orc.handle_text(session_id, result.text, conn, transcript_metadata=metadata))
             else:
                 await conn.send_json({"type": "transcript", "text": result.text,
                                       "final": False, **metadata})
+        return handled
 
     try:
         while True:
-            event = await websocket.receive()
+            event = await inbox.get() if inbox is not None else await websocket.receive()
             if event["type"] == "websocket.disconnect":
                 break
+            if conn.rtc_pcm and not event.get("rtc_pcm"):
+                continue
             if "bytes" in event and event["bytes"] is not None:
                 try:
                     frame = AudioFrame.parse(event["bytes"])
@@ -631,12 +658,36 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                     "code": "INVALID_MESSAGE", "message": str(exc), "retryable": False}})
                 continue
             kind = msg.get("type")
-            if kind == "hello":
+            if kind == "rtc_pcm_offer" and inbox is not None and rtc is None:
+                from .media.rtc_pcm import RtcPcm
+                sdp = msg.get("sdp")
+                if not isinstance(sdp, str) or len(sdp) > 16000:
+                    await conn.send_json({"type": "error", "error": {
+                        "code": "RTC_OFFER_INVALID", "message": "Invalid WebRTC offer", "retryable": False}})
+                    continue
+                rtc = RtcPcm(inbox)
+                try:
+                    answer = await asyncio.wait_for(rtc.answer(sdp), 6)
+                    await conn.send_json({"type": "rtc_pcm_answer", "sdp": answer})
+                except Exception:
+                    await rtc.peer.close()
+                    rtc = None
+                    await conn.send_json({"type": "error", "error": {
+                        "code": "RTC_NEGOTIATION", "message": "WebRTC negotiation failed", "retryable": True}})
+            elif kind == "rtc_pcm_ready" and rtc and rtc.ready and event.get("rtc_pcm") and not conn.rtc_pcm:
+                conn.rtc_pcm = rtc
+                session.transport = "rtc_pcm"
+                await request_bus_emit(websocket, session_id, "TransportSwitched", "media",
+                                       {"to": "rtc_pcm", "profile": "webrtc_datachannel"})
+                await conn.send_json({"type": "transport_switched", "to": "rtc_pcm"})
+            elif kind == "hello":
                 await conn.send_json({
                     "type": "hello_ack", "session_id": session_id,
                     "protocol_version": "0.2", "server_version": "0.2.0",
                     "transport": session.transport,
                 })
+            elif kind == "call_ready":
+                spawn(orc.open_outbound(session_id, conn))
             elif kind == "text":
                 text = msg.get("text")
                 if not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000:
@@ -647,8 +698,16 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
             elif kind == "speech_ended":
                 if asr is not None:
                     await asr.finish()
-                    await asr_task
+                    handled = await asr_task
                     asr, asr_task = None, None
+                    voiced = msg.get("last_voiced_mono_ms")
+                    if (not handled and getattr(orc.agent, "opens_outbound", False)
+                            and isinstance(voiced, (int, float)) and voiced > 0):
+                        await request_bus_emit(websocket, session_id, "AsrNoMatch", "voice.asr", {})
+                        await conn.send_json({"type": "error", "error": {
+                            "code": "ASR_NO_MATCH", "message": "No speech was recognized",
+                            "user_message": "没有听清，请再说一遍", "retryable": True,
+                        }})
             elif kind in {"speech_started", "local_muted", "playback_first_frame",
                           "playback_ended", "ping"}:
                 await orc.on_client_event(session_id, msg)
@@ -696,6 +755,9 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        if ws_reader:
+            ws_reader.cancel()
+            await asyncio.gather(ws_reader, return_exceptions=True)
         if asr is not None:
             await asr.close()
         if asr_task:
@@ -710,6 +772,8 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         for task in list(tasks):
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if rtc:
+            await rtc.peer.close()
 
 
 if WEB_DIR.exists():

@@ -77,6 +77,7 @@ class SessionState:
     transport: str = "ws_pcm"
     started_mono_ms: float = field(default_factory=now_ms)
     audio_frames: int = 0
+    outbound_started: bool = False
 
     def __post_init__(self) -> None:
         self.done.set()
@@ -92,6 +93,8 @@ class Orchestrator:
         release_id: str = "rel_dev_001",
         scenario_id: str = "service_outbound",
         tts=None,
+        *,
+        tts_provider: str | None = None,
     ) -> None:
         self.bus = bus
         self.agent = agent
@@ -101,7 +104,7 @@ class Orchestrator:
         self.scenario_id = scenario_id
         self.sessions: dict[str, SessionState] = {}
         self.tts = tts if tts is not None else create_tts()
-        self.tts_provider = providers()[1]
+        self.tts_provider = tts_provider or providers()[1]
         self.tts_group_size = max(1, min(3, int(os.getenv("QWEN_GROUP_SENTENCES", "3")))) if self.tts_provider == "qwen3" else 1
         self.tts_alignment = self.tts_provider != "fake" and self.tts_group_size == 1
 
@@ -155,6 +158,7 @@ class Orchestrator:
             "server_version": "0.2.0",
             "transport": session.transport,
             "tts_alignment": self.tts_alignment,
+            "opens_outbound": session.mode == "voice" and bool(getattr(self.agent, "opens_outbound", False)),
             "timeouts": {
                 "listening_silence_ms": 10000,
                 "session_max_ms": 600000,
@@ -292,8 +296,17 @@ class Orchestrator:
         return True
 
     # ---- text turn ----
+    async def open_outbound(self, session_id: str, conn: Connection) -> None:
+        session = self.get_session(session_id)
+        if (session.mode != "voice" or not getattr(self.agent, "opens_outbound", False)
+                or session.outbound_started or session.turn_seq):
+            return
+        session.outbound_started = True
+        await self.handle_text(session_id, "", conn, outbound_opening=True)
+
     async def handle_text(self, session_id: str, text: str, conn: Connection | None = None,
-                          *, transcript_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+                          *, transcript_metadata: dict[str, Any] | None = None,
+                          outbound_opening: bool = False) -> dict[str, Any]:
         session = self.get_session(session_id)
         if conn is not None:
             session.ws = conn
@@ -313,27 +326,30 @@ class Orchestrator:
                 reply_id=make_reply_id(make_turn_id(session.turn_seq)),
             )
             turn.t["t0"] = now_ms()
-            turn.t["t1"] = turn.t["t0"] + 1.0
+            if not outbound_opening:
+                turn.t["t1"] = turn.t["t0"] + 1.0
             session.current_turn = turn
             session.done.clear()
             session.turn_state = "THINKING"
             await self._send_state(session)
             await self.bus.emit(
                 session_id=session_id, type="TurnStarted", module="orchestrator",
-                turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"trigger": "user"},
+                turn_id=turn.turn_id, trace_id=turn.trace_id,
+                payload={"trigger": "outbound_opening" if outbound_opening else "user"},
             )
-            await self.bus.emit(
-                session_id=session_id, type="Transcript", module="orchestrator",
-                turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"text": text, "final": True},
-            )
-            if conn:
-                await conn.send_json({**(transcript_metadata or {}), "type": "transcript",
-                                      "turn_id": turn.turn_id, "text": text, "final": True})
-            turn.t["t2"] = now_ms()
-            await self.bus.emit(
-                session_id=session_id, type="TurnCommitted", module="orchestrator",
-                turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"phase": "input", "text": text},
-            )
+            if not outbound_opening:
+                await self.bus.emit(
+                    session_id=session_id, type="Transcript", module="orchestrator",
+                    turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"text": text, "final": True},
+                )
+                if conn:
+                    await conn.send_json({**(transcript_metadata or {}), "type": "transcript",
+                                          "turn_id": turn.turn_id, "text": text, "final": True})
+                turn.t["t2"] = now_ms()
+                await self.bus.emit(
+                    session_id=session_id, type="TurnCommitted", module="orchestrator",
+                    turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"phase": "input", "text": text},
+                )
 
             sentence_no = 0
             sentences: list[str] = []
@@ -360,7 +376,15 @@ class Orchestrator:
                 async for chunk in self.agent.handle(req, turn.cancel, self.tools):
                     turn.cancel.check()
                     kind = chunk.get("kind")
-                    if kind == "sentence":
+                    if kind == "stage":
+                        stage = chunk["stage"]
+                        session.flow_state = stage
+                        await self.bus.emit(
+                            session_id=session_id, type="BusinessStageReached", module="orchestrator",
+                            turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"stage": stage},
+                        )
+                        await self._send_state(session)
+                    elif kind == "sentence":
                         sentence_no += 1
                         if "t4" not in turn.t:
                             turn.t["t4"] = now_ms()
@@ -432,7 +456,9 @@ class Orchestrator:
                             turn_id=turn.turn_id, trace_id=turn.trace_id,
                             payload={"reason": chunk.get("reason"), "queue": chunk.get("queue")},
                         )
-                        await self._speak(session, turn, "好的，正在为您转接人工。", sentence_no + 1, True)
+                        transfer_text = "好的，正在为您转接人工。"
+                        await self._speak(session, turn, transfer_text, sentence_no + 1, True)
+                        sentences.append(transfer_text)
                         break
                     elif kind == "end":
                         result = dict(chunk)
@@ -498,7 +524,16 @@ class Orchestrator:
                 session.turn_state = "LISTENING"
                 await self._send_state(session)
                 await self._send_turn_end(session, turn, result)
-                await self._emit_turn_latency(session, turn)
+                if outbound_opening:
+                    await self.bus.emit(
+                        session_id=session_id, type="OutboundOpeningLatency", module="orchestrator",
+                        turn_id=turn.turn_id, trace_id=turn.trace_id,
+                        payload={"ready_to_first_playback_ms": (
+                            round(turn.t9 - turn.t["t0"], 2) if turn.t9 is not None else None
+                        ), "playback_measured": turn.playback.is_set()},
+                    )
+                else:
+                    await self._emit_turn_latency(session, turn)
                 return {
                     "turn_id": turn.turn_id,
                     "reply_id": turn.reply_id,

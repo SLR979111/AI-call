@@ -12,6 +12,7 @@ export const CLIENT_VERSION = 'web@0.2.1';
 /** 客户端 → 服务端（JSON 控制帧） */
 export const C2S = Object.freeze({
   HELLO: 'hello',
+  CALL_READY: 'call_ready',
   SPEECH_STARTED: 'speech_started',
   SPEECH_ENDED: 'speech_ended',
   LOCAL_MUTED: 'local_muted',

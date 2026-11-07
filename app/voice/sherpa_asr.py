@@ -14,9 +14,10 @@ def require_files(root: Path, names: list[str]):
 
 
 class SherpaAsr:
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, *, finish_padding_ms: int = 300):
         root = Path(model_dir)
         require_files(root, ["tokens.txt", "encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"])
+        self.finish_padding_ms = finish_padding_ms
         import sherpa_onnx
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=str(root / "tokens.txt"), encoder=str(root / "encoder.int8.onnx"),
@@ -29,11 +30,11 @@ class SherpaAsr:
     async def start(self, session_id, *, sample_rate=16000, hotwords=None):
         if sample_rate != 16000 or hotwords:
             raise VoiceError("ASR_CONFIG", "ASR requires 16000 Hz; hotwords unsupported by greedy_search")
-        return SherpaAsrStream(self.recognizer)
+        return SherpaAsrStream(self.recognizer, finish_padding_ms=self.finish_padding_ms)
 
 
 class SherpaAsrStream:
-    def __init__(self, recognizer):
+    def __init__(self, recognizer, *, finish_padding_ms: int = 300):
         self.recognizer = recognizer
         self.stream = recognizer.create_stream()
         self.queue = asyncio.Queue(maxsize=64)
@@ -42,6 +43,7 @@ class SherpaAsrStream:
         self.samples = 0
         self.start_ms = 0
         self.last_text = ""
+        self.finish_padding = np.zeros(finish_padding_ms * 16, dtype=np.float32)
 
     def _emit(self, event):
         # A slow consumer may miss partial revisions, never block finalization.
@@ -53,7 +55,7 @@ class SherpaAsrStream:
         if pcm:
             self.stream.accept_waveform(16000, np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768)
         if finish:
-            self.stream.accept_waveform(16000, np.zeros(4800, dtype=np.float32))
+            self.stream.accept_waveform(16000, self.finish_padding)
             self.stream.input_finished()
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)

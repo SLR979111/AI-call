@@ -34,8 +34,8 @@ export class AudioEngine {
     this.frameSeq = 0;
   }
 
-  /** 必须在用户点击的回调里调用 @returns {Promise<void>} */
-  async start() {
+  /** 必须在用户点击的回调里调用 @param {boolean} enableMic @returns {Promise<void>} */
+  async start(enableMic = this.cfg.ENABLE_MIC) {
     if (!this.ctx) {
       try {
         this.ctx = new AudioContext({ sampleRate: 16000 });
@@ -53,8 +53,8 @@ export class AudioEngine {
       await this.ctx.audioWorklet.addModule(new URL('./capture-worklet.js', import.meta.url));
       this.workletLoaded = true;
     }
+    if (!enableMic) { this.stopCapture(); return; }
     if (this.micAvailable) return;                  // 幂等
-    if (!this.cfg.ENABLE_MIC) { console.warn('[engine] ENABLE_MIC=0，跳过麦克风'); return; }
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({

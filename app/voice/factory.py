@@ -31,7 +31,11 @@ def create_tts(provider: str | None = None):
         return QwenTts(os.getenv("QWEN_TTS_URL", "http://127.0.0.1:8090"))
     if provider == "melo":
         from .melo import MeloTts
-        return MeloTts(os.getenv("MELO_MODEL_DIR", "models/vits-melo-tts-zh_en"))
+        try:
+            speed = float(os.getenv("MELO_SPEED", "1.0"))
+        except ValueError as exc:
+            raise VoiceError("MELO_CONFIG", "MELO_SPEED must be a number") from exc
+        return MeloTts(os.getenv("MELO_MODEL_DIR", "models/vits-melo-tts-zh_en"), speed=speed)
     raise VoiceError("TTS_CONFIG", f"unknown TTS_PROVIDER={provider}")
 
 
