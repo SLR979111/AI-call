@@ -4,6 +4,8 @@
 >
 > 已接入 **流式 sherpa ASR + 默认 Qwen3 GPU TTS / 可切换 Melo CPU TTS**。运行时离线加载模型，真实 PCM 下行与取消已接通；默认业务场景为 **POP 资质审核驳回外呼**。启动步骤见 [生产语音指南](docs/guides/production-voice.md)，场景说明见 [POP 场景文档](docs/16-pop-audit-scenario.md)。
 
+Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联调说明](eval/pop/contest-rsi-nov08.md)。
+
 | 现在能做什么 | 现在还不能做什么 |
 |---|---|
 | 3 轮任务闭环、POP 资质驳回（电话/京麦）、FAQ、转人工；真实 PCM ASR/TTS | 授权产品音色、真机麦克风声学验收 |

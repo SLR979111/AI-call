@@ -120,7 +120,9 @@ class VoiceRuntime:
             self.status.tts_ready, self.status.tts_detail = await self.tts.health()
         return self.status
 
-    async def start_asr(self, session_id):
+    async def start_asr(self, session_id, *, client_endpointing=False):
         if self.asr is None:
             raise VoiceError("ASR_NOT_READY", self.status.asr_detail)
+        if client_endpointing:
+            return await self.asr.start(session_id, client_endpointing=True)
         return await self.asr.start(session_id)

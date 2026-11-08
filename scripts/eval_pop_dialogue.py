@@ -21,13 +21,15 @@ from app.tools.pop_writeback import TOOL, PopContactStore
 from app.voice.fake import FakeTts
 
 
-async def run_case(case: dict, policy: RepairPolicy, run: Path, arm: str, *, semantic_topics=None) -> dict:
+async def run_case(case: dict, policy: RepairPolicy, run: Path, arm: str, *, semantic_topics=None,
+                   release_id: str | None = None) -> dict:
     folder = run / "raw" / arm / case["case_id"]
-    bus = EventBus(folder, policy.version, "pop-dialogue-eval")
+    release_id = release_id or policy.version
+    bus = EventBus(folder, release_id, "pop-dialogue-eval")
     scenario = case["scenario"]
     store = PopContactStore(folder / "index/pop_contacts.db", bus, fault=scenario == "write_fault")
     agent = PopCompetitionAgent(KNOWLEDGE, case["context"], store, policy=policy, semantic_topics=semantic_topics)
-    orc = Orchestrator(bus, agent, None, ComplianceGuard(), policy.version, "pop_qualification_audit",
+    orc = Orchestrator(bus, agent, None, ComplianceGuard(), release_id, "pop_qualification_audit",
                        tts=FakeTts(), tts_provider="fake")
     customer = AdaptiveMerchant(case)
     turns, failed = [], set()
@@ -133,11 +135,11 @@ async def run_case(case: dict, policy: RepairPolicy, run: Path, arm: str, *, sem
               or stored[0]["confirmed_turn_id"] != expected_confirmation):
             failed.add("bad_receipt")
     trace = folder / "trace.json"
-    write_json(trace, {"case_id": case["case_id"], "release_id": policy.version, "turns": turns,
+    write_json(trace, {"case_id": case["case_id"], "release_id": release_id, "turns": turns,
                        "stages": stages, "records": stored, "failed": sorted(failed)})
     return {
         **{key: case[key] for key in ("case_id", "split", "family", "scenario", "doc_id")},
-        "arm": arm, "release_id": policy.version, "task_success": not failed, "failure_labels": sorted(failed),
+        "arm": arm, "release_id": release_id, "task_success": not failed, "failure_labels": sorted(failed),
         "first_ask_answered": not missing_goals(case, scored_turn["sentences"]) if scored_turn else None,
         "rephrased": any(row["role"].startswith("rephrase_") for row in turns),
         "followup_sources": dict(Counter(

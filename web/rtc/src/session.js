@@ -45,7 +45,7 @@ export class SessionClient extends EventTarget {
 
   /* ============================ 建会话 ============================ */
 
-  async startCall() {
+  async startCall(caseId = '') {
     store.resetForNewCall();
     this.t0 = now();
     this.intentionalClose = false;
@@ -59,6 +59,7 @@ export class SessionClient extends EventTarget {
     this.rtcChannel = null;
 
     const body = { mode: 'voice', scenario_id: this.cfg.SCENARIO_ID };
+    if (caseId) body.case_id = caseId;
     if (this.cfg.RELEASE_ID) body.release_id = this.cfg.RELEASE_ID;
 
     const res = await fetch(`${this.cfg.APP_BASE}/sessions`, {

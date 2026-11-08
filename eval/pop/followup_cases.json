@@ -1,0 +1,12 @@
+[
+  {"id":"renewed-shop","doc":"pop-scene-034","brand":"松潮生活","question":"更新完以后我从哪个入口交新的证照？","last":"谢谢，我知道了。","route":"phone","reason":["主体资质到期"],"remedy":["更新","有效材料"]},
+  {"id":"limited-category","doc":"pop-scene-054","brand":"蒲谷手作","question":"是我这个类目和证照对不上，对吗？","last":"整改具体怎么做，我是补材料还是换类目？","route":"phone","reason":["资质与类目不符"],"remedy":["调整申请类目"]},
+  {"id":"drawing-mark","doc":"pop-scene-023","brand":"青萝工具","question":"刚刚后半句没听清，可以简单再说一遍吗？","last":"改过之后是不是就能过审？","route":"phone","reason":["图形商标"],"remedy":["文字商标","字母商标","英文商标"]},
+  {"id":"owner-file","doc":"pop-scene-007","brand":"新叶灯具","question":"具体原因是商标记录上那个人对不上吗？","last":"所以应该先去查持有人，再重新提交吗？","route":"phone","reason":["持有人不一致"],"remedy":["修正持有人","更正持有人"]},
+  {"id":"new-owner","doc":"pop-scene-008","brand":"简棠家品","question":"那我原来经营的品牌应该先做什么？","last":"我明白了，谢谢。","route":"phone","reason":["持有人不一致"],"remedy":["停用原经营品牌"]},
+  {"id":"new-authorization","doc":"pop-scene-038","brand":"岸灯餐具","question":"具体要补的材料是什么？","last":"只要补齐就一定能过审吗？","route":"phone","reason":["授权时间到期"],"remedy":["重新开具","重新提供","重新授权"]},
+  {"id":"other-contact","doc":"pop-scene-039","brand":"初白车品","question":"能把品牌方的完整联系电话直接念给我吗？","last":"那我应该怎么补授权材料？","route":"phone","reason":["授权链路不完整"],"remedy":["授权链路","授权链"]},
+  {"id":"callback-channel","doc":"pop-scene-054","brand":"澄空杂货","question":"我正在柜台，麻烦安排回电。","last":"没安排上的话，我该通过什么渠道找你们？","route":"callback_failed","fault":"failed"},
+  {"id":"callback-receipt","doc":"pop-scene-007","brand":"知池文具","question":"开会了，请帮我安排回电。","last":"那就记在这次申请名下，可以吗？","route":"callback"},
+  {"id":"past-employee","doc":"pop-scene-034","brand":"竹川商行","question":"我已经离职了，我想替以前同事看看是哪一单。","last":"那至少告诉我是哪一个品牌吧？","route":"safe_exit","unverified":true}
+]

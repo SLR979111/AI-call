@@ -15,6 +15,11 @@
 (function () {
   var q = new URLSearchParams(location.search);
   var appFromQuery = q.get('app');
+  var frameMs = 20;
+  var requestedBargeMs = Number(q.get('bargeMs'));
+  var bargeFrames = requestedBargeMs >= 60 && requestedBargeMs <= 400
+    ? Math.ceil(requestedBargeMs / frameMs)
+    : 8;
   var cfg = {
     /** 后端基地址：默认同源；不同源时用 ?app= 覆盖 */
     APP_BASE: appFromQuery || location.origin,
@@ -34,7 +39,7 @@
     DOWNLINK: q.get('downlink') || 'auto',
 
     UPLINK_RATE: 16000,
-    FRAME_MS: 20,
+    FRAME_MS: frameMs,
     /** auto | mic | file —— file 或无麦时自动走回放音源（现场保险 / E2E） */
     UPLINK_MODE: q.get('uplink') || 'auto',
     DEMO_WAV: q.get('wav') || './fixtures/demo_16k.wav',
@@ -42,7 +47,7 @@
     FIRST_FRAME_WAIT_MS: 400,  // auto 模式判定窗口
     PING_MS: 10000,
     RECONNECT_BACKOFF: [500, 1000, 2000, 4000, 8000],
-    VAD: { START_FRAMES: 3, END_FRAMES: 20, BARGE_FRAMES: 8, FLOOR_MARGIN_DB: 9, REF_MARGIN_DB: 6 },
+    VAD: { START_FRAMES: 3, END_FRAMES: 20, BARGE_FRAMES: bargeFrames, FLOOR_MARGIN_DB: 9, REF_MARGIN_DB: 6 },
     ENABLE_MIC: q.get('mic') !== '0'
   };
   window.__AICALL_CONFIG__ = cfg;

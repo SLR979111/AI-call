@@ -39,7 +39,7 @@
   #txtInput{flex:1 1 260px;min-width:200px;background:#0b0e12;color:var(--fg);border:1px solid #2f3d4b;
     border-radius:6px;padding:7px 10px;font-size:13px}
   #txtInput:disabled{opacity:.45}
-  #inputSource{background:#171c22;color:var(--fg);border:1px solid #2f3d4b;border-radius:5px;padding:6px}
+  #inputSource,#contestCase{background:#171c22;color:var(--fg);border:1px solid #2f3d4b;border-radius:5px;padding:6px;max-width:100%}
   .stages{list-style:none;margin:0;padding:0}
   .stages li{display:flex;align-items:center;gap:8px;padding:5px 0;color:var(--dim);font-size:13px}
   .stages li.done{color:var(--ok)} .stages li.now{color:var(--acc);font-weight:600}
@@ -110,6 +110,7 @@
 </main>
 
 <footer>
+  <label id="contestCases" hidden>测试场景 <select id="contestCase"></select></label>
   <label for="inputSource">输入方式</label>
   <select id="inputSource">
     <option value="mic">麦克风</option>

@@ -78,6 +78,7 @@ class SessionState:
     started_mono_ms: float = field(default_factory=now_ms)
     audio_frames: int = 0
     outbound_started: bool = False
+    case_id: str | None = None
 
     def __post_init__(self) -> None:
         self.done.set()
@@ -109,12 +110,13 @@ class Orchestrator:
         self.tts_alignment = self.tts_provider != "fake" and self.tts_group_size == 1
 
     # ---- session ----
-    async def create_session(self, mode: str = "voice") -> SessionState:
+    async def create_session(self, mode: str = "voice", *, case_id: str | None = None) -> SessionState:
         sid = make_session_id()
         session = SessionState(
             session_id=sid,
             token="dev-token",
             mode=mode,
+            case_id=case_id,
             release_id=self.release_id,
             version_set={
                 "release_id": self.release_id,
@@ -129,11 +131,15 @@ class Orchestrator:
         self.bus.register_session(sid, mode)
         # LLMAgent needs an explicit session hook to create its FlowEngine/history.
         start_session = getattr(self.agent, "start_session", None)
+        flow_context = {"id": self.scenario_id}
+        if case_id is not None:
+            flow_context["case_id"] = case_id
         if start_session is not None:
-            await start_session(sid, session.version_set, {"id": self.scenario_id})
+            await start_session(sid, session.version_set, flow_context)
         await self.bus.emit(
             session_id=sid, type="SessionStarted", module="orchestrator", mode=mode,
-            payload={"mode": mode, "scenario_id": self.scenario_id, "client_version": "dev"},
+            payload={"mode": mode, "scenario_id": self.scenario_id, "client_version": "dev",
+                     **({"case_id": case_id} if case_id is not None else {})},
         )
         await self.bus.emit(
             session_id=sid, type="VersionPinned", module="registry", mode=mode,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 import threading
 from math import gcd
 from pathlib import Path
+from time import monotonic
 
 from contextlib import aclosing
 from app.cancel import TurnCancelled
@@ -10,6 +12,9 @@ from app.cancel import TurnCancelled
 from .sherpa_asr import require_files
 from .streaming import thread_stream
 from .types import AudioChunk, VoiceError, mono_ms
+
+_SPOKEN_INITIALISMS = {"AI": "人工智能", "APP": "应用"}
+_INITIALISM = re.compile(r"(?<![A-Za-z0-9])(?:AI|APP)(?![A-Za-z0-9])")
 
 
 class MeloTts:
@@ -46,10 +51,20 @@ class MeloTts:
         def produce(emit, stop):
             import numpy as np
             from scipy.signal import resample_poly
-            if not self.lock.acquire(blocking=False):
-                raise VoiceError("TTS_BUSY", "Melo is already generating", True)
+            deadline = monotonic() + 0.6
+            while not stop.is_set():
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise VoiceError("TTS_BUSY", "Melo is still generating after 600 ms", True)
+                if self.lock.acquire(timeout=min(0.05, remaining)):
+                    break
+            else:
+                return
             seq = 0
             try:
+                if stop.is_set():
+                    return
+
                 def callback(samples, progress):
                     nonlocal seq
                     if stop.is_set():
@@ -62,7 +77,8 @@ class MeloTts:
                     chunk = AudioChunk(pcm, seq, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
                     seq += 1
                     return int(emit(chunk))
-                self.model.generate(text, sid=0, speed=self.speed, callback=callback)
+                spoken_text = _INITIALISM.sub(lambda match: _SPOKEN_INITIALISMS[match[0]], text)
+                self.model.generate(spoken_text, sid=0, speed=self.speed, callback=callback)
                 if not stop.is_set():
                     emit(AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate))
             finally:

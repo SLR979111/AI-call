@@ -228,6 +228,67 @@ async def test_asr_finish_final_or_error_within_300ms(slow):
     assert events[-1].kind == ("error" if slow else "final")
 
 
+async def test_contest_asr_waits_for_the_browser_endpoint():
+    class EagerEndpoint(Recognizer):
+        def is_endpoint(self, stream):
+            pytest.fail("a native endpoint must not split a browser-managed turn")
+
+    stream = SherpaAsrStream(EagerEndpoint(), client_endpointing=True)
+    await stream.push(AudioFrame.parse(frame()))
+    await stream.push(AudioFrame.parse(frame(1)))
+    await stream.finish()
+    assert [(event.kind, event.text) async for event in stream.events()] == [
+        ("partial", "您好"), ("final", "您好"),
+    ]
+
+
+async def test_melo_new_reply_waits_for_cancelled_native_generation():
+    pytest.importorskip("scipy")
+    from app.voice.melo import MeloTts
+
+    old_started = threading.Event()
+    second_started = threading.Event()
+    release_old = threading.Event()
+    seen = []
+
+    class NativeModel:
+        def generate(self, text, *, sid, speed, callback):
+            seen.append(text)
+            if text == "旧回复":
+                old_started.set()
+                release_old.wait(1)
+                assert callback([0.5], 1) == 0
+            else:
+                second_started.set()
+                assert callback([0.5], 1) == 1
+
+    tts = MeloTts.__new__(MeloTts)
+    tts.speed = 1.0
+    tts.lock = threading.Lock()
+    tts.model = NativeModel()
+
+    async def generate(text, cancel):
+        return [chunk async for chunk in tts.synthesize(text, sample_rate=44100, cancel=cancel)]
+
+    cancel = CancelToken()
+    old = asyncio.create_task(generate("旧回复", cancel))
+    try:
+        assert await asyncio.to_thread(old_started.wait, 2)
+        cancel.cancel()
+        with pytest.raises(TurnCancelled):
+            await old
+        new = asyncio.create_task(generate("AI客服的APP", CancelToken()))
+        await asyncio.sleep(0.08)
+        assert not new.done()
+        release_old.set()
+        chunks = await asyncio.wait_for(new, 1)
+        assert second_started.is_set()
+        assert seen == ["旧回复", "人工智能客服的应用"]
+        assert chunks[0].pcm and chunks[-1].is_last
+    finally:
+        release_old.set()
+
+
 def test_app_audio_duration_timing_and_invalid_uplink():
     with TestClient(app) as client:
         sid = client.post("/sessions", json={"mode": "voice"}).json()["session_id"]

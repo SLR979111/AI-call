@@ -25,6 +25,7 @@ globalThis.SpeechSynthesisUtterance = globalThis.SpeechSynthesisUtterance || cla
 
 const { Playback } = await import('../src/playback.js');
 const { SessionClient } = await import('../src/session.js');
+const { LocalVad } = await import('../src/vad-local.js');
 const store = await import('../src/store.js');
 
 const fails = [];
@@ -132,6 +133,50 @@ const flush = () => new Promise((r) => setTimeout(r, 20));
   // 新一轮
   sclient.dispatch(JSON.stringify({ type: 'tts_started', reply_id: 'r_B', turn_id: 't_2', sentences: [] }));
   check('C6 新 reply 正常接受', events.includes('started:r_B') && Object.keys(store.get().replies).includes('r_B'));
+}
+
+/* ---------------- D. 播放时打断阈值，不走普通开口的快路径 ---------------- */
+
+{
+  const fixtures = [
+    { name: '安静 300 ms', values: Array(15).fill(-68), expected: [false, false, false, false] },
+    { name: '轻微背景 300 ms', values: Array(15).fill(-54), expected: [false, false, false, false] },
+    { name: '碰麦 60 ms', values: Array(3).fill(-28), expected: [true, false, false, false] },
+    { name: '短响动 120 ms', values: Array(6).fill(-35), expected: [true, true, false, false] },
+    { name: '短插话 180 ms', values: [-36, -31, -29, -28, -25, -27, -30, -32, -34], expected: [true, true, true, false] },
+    { name: '插话 260 ms', values: [-39, -34, -27, -30, -26, -29, -33, -28, -27, -32, -31, -29, -37], expected: [true, true, true, true] },
+    { name: '持续突发声 260 ms', values: Array(13).fill(-38), expected: [true, true, true, true] }
+  ];
+  const durations = [60, 120, 160, 200];
+  for (const { name, values, expected } of fixtures) {
+    const results = durations.map((ms) => {
+      const vad = new LocalVad({ VAD: { BARGE_FRAMES: ms / 20 } });
+      const events = values.map((energyDb, i) => vad.push({ energyDb, monoMs: 100 + i * 20, playing: true, refDb: -99 }));
+      check(`D ${name} ${ms}ms 无提前 speech_started`, events.every((e) => e.start == null));
+      return events.some((e) => e.barge != null);
+    });
+    check(`D ${name} 60/120/160/200 ms`, results.every((r, i) => r === expected[i]), results);
+  }
+
+  const vad = new LocalVad({});
+  let ts = 100;
+  const feed = (playing, energyDb = -29) => {
+    const event = vad.push({ energyDb, monoMs: ts, playing, refDb: -99 });
+    ts += 20;
+    return event;
+  };
+  for (let i = 0; i < 7; i++) feed(true);
+  feed(false, -75);
+  const nextB0 = ts;
+  const second = Array.from({ length: 7 }, () => feed(true));
+  check('D 分开的播报片段不累计打断帧', second.every((e) => e.barge == null));
+  check('D 打断的 b0 仍是这段插话的第一帧', feed(true).barge === nextB0);
+  vad.reset();
+  feed(true);
+  feed(true);
+  const idleB0 = ts;
+  check('D 播报结束后重新计数', feed(false).start == null && feed(false).start == null);
+  check('D 空闲语音仍走 60 ms 开口判断', feed(false).start === idleB0);
 }
 
 console.log(fails.length ? `\n❌ ${fails.length} 项失败：\n - ` + fails.join('\n - ') : '\n✅ 全部通过');

@@ -37,18 +37,30 @@ class RepairPolicy:
     repair_followups: bool = False
     answer_implied_need: bool = False
     guided_remediation: bool = False
+    contextual_followups: bool = False
+    fast_followups: bool = False
+    resilient_dialogue: bool = False
 
     @property
     def version(self) -> str:
         settings = asdict(self)
         if not self.guided_remediation:
             del settings["guided_remediation"]  # Keep the two previously recorded version IDs reproducible.
+        if not self.contextual_followups:
+            del settings["contextual_followups"]
+        if not self.fast_followups:
+            del settings["fast_followups"]
+        if not self.resilient_dialogue:
+            del settings["resilient_dialogue"]
         return "pop-dialogue-" + sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12]
 
 
 BASELINE = RepairPolicy()
 REPAIRED = RepairPolicy(repair_followups=True, answer_implied_need=True)
 GUIDED = replace(REPAIRED, guided_remediation=True)
+CONTEXTUAL = replace(GUIDED, contextual_followups=True)
+FAST = replace(CONTEXTUAL, fast_followups=True)
+RESILIENT = replace(FAST, resilient_dialogue=True)
 
 
 def propose_repair(failure_counts: dict[str, int]) -> RepairPolicy:

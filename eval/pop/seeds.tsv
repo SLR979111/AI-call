@@ -1,0 +1,71 @@
+# split	id suffix	family	source row (main or Q for QA special)	case type	user question	follow-up	reason groups	remedy groups	tags
+dev	trademark-state	trademark-validity	13	source	我这边材料刚收到退回通知，主要卡在哪一步？	状态以后更新了，我还得重新上传一遍吗？	商标状态,商标当前状态;不符合,未达到,未满足	有效商标,符合申请状态,符合要求的商标	知识来源
+dev	trademark-expiry	trademark-validity	14	source	我明明之前登记过同一个牌子，为什么这回不行？	如果续展办好了，我用新的材料怎么处理？	商标注册时间,商标有效期,商标已过期,商标到期	有效期内,续展,有效商标	历史记录
+dev	missing-seal	authorization-completeness	17	source	申请单退了，能说下授权这块到底哪儿不完整吗？	我们供应商只发了电子版，我得先补齐再交吗？	授权书内容不完整,授权书不全,授权书缺少,授权书材料不全	补齐,补全,补充;授权书,缺少的材料,缺漏	书面转口语
+dev	missing-qualification	qualification-document	18	source	昨晚我把压缩包传上去了，怎么还是退回来？	我能在原申请单把缺的那份资料补上再提交吗？	资质不全,资质提交不全,缺少资质,缺少相关资质	补齐,补充;资质,材料	操作路径
+dev	expired-auth	authorization-expiry	21	source	这份文件去年能用，今年同一个品牌怎么退了？	以前的那张还能补签吗？我想知道要重新开什么。	授权时间到期,授权已过期,授权时间已失效,授权到期,授权书已过期	重新开具,重新出具,重新提供;授权书,授权文件	历史记录
+dev	chain-gap	authorization-chain	22	source	我手上有经销商给的文件，为什么还要补？	经销商说是他们集团的，能只交这张吗？	授权链,授权关系;不完整,缺少,缺失	补齐,补充,补全;授权链,授权关系	质疑
+dev	store-name-mismatch	store-authorization-name	23	source	我们刚换过店铺名字，文件里是以前那个，这个会卡吗？	如果不想改回老名字，要品牌方重新出什么？	店铺名称,店铺名;不一致,不符,不同	修改店铺名称,改店名,重新提交授权书,重新开具授权书	操作路径
+dev	brandless-brand	no-brand	24	source	我卖的是无牌产品，能不能直接用无品牌提交？	我在后台能看到你们的处理意见吗？	无品牌;不支持,不允许	有授权的品牌,其他合规品牌,有品牌授权,选择其他品牌	站内
+dev	tampered-auth	document-tampering	25	source	我按同事给的扫描件传了，审核具体哪里没过？	那我能直接把扫描件再修一下发给你吗？	造假,失真,修改信息,实际不符	真实有效,真实合规,真实的,规范提交	对抗,站内
+dev	auth-no-reply	authorization-contact	26	source	材料原件都在，我不明白为什么授权这里没通过。	我能请品牌方回复你们，或者在授权书位置补个合规联系方式吗？	授权方未回复,未收到品牌方的回复,暂未收到,未回复	回复,重新提交,补充联系方式,与品牌方确认	知识来源
+dev	category-outside	authorized-category	29	source	我手上的授权只写了日用品，我加的类目为什么退了？	如果只经营授权书上那些类目，要改哪里？	品牌类目不符,超出授权范围,授权经营范围不符,实际授权经营范围	经营范围限制,有经营限制,调整申请类目,选择授权类目,类目与授权书匹配,补充对应类目	操作路径
+dev	mark-scope	trademark-scope	30	source	我给店里加了一项新品，品牌没变但单子没过，是什么情况？	我先把那项删掉再递交，还是让品牌方补相应范围？	类目超商标范围,超出授权可使用范围,超出商标,商标覆盖不到	删除对应类目,删除超范围类目,删除超范围,补充商标授权范围,重新提交授权信息	操作路径
+dev	graphic-mark	graphic-trademark	36	source	这个牌子一直用的图样，为什么新增产品线还是没过？	能不能就走京麦驳回，不用解释这么多？	图形商标	文字商标,更换品牌	对抗,渠道误导
+dev	onboarding-missing-auth	authorization-completeness	50	source	我第一次开店，审核说材料有问题，能说具体是哪份吗？	品牌方说模板固定。能不能让对接运营先确认这个例外？	授权书内容不完整,授权书缺少,授权书不全	补齐,补充,报备,修改;授权书,授权,运营	新手,质疑
+dev	onboarding-expired-auth	authorization-expiry	51	source	商家入驻这一单是不是退了？我这份授权以前没用过。	重签一次的话要品牌方开具新的有效文件，对吗？	授权时间,授权书;到期,过期,失效	重新开具,重新提供,重新出具;授权书,授权文件	反问
+dev	onboarding-chain	authorization-chain	52	source	入驻的时候我交了两页盖章文件，还缺在哪？	我找代理商补能解决吗，还是得把中间每段都对上？	授权链,授权关系;缺少,缺失,不完整	补齐,补全,补充;授权链,授权关系	链路
+dev	brandless-onboarding	no-brand	55	source	我们刚开店，商品是自己做的，选择无品牌是不是有问题？	那我只想在后台看看驳回意见，不安排再打电话。	无品牌;不支持,不允许	其他有授权品牌,有授权的品牌,选择其他品牌,有品牌授权	站内
+dev	onboarding-unreachable	authorization-contact	56	source	我们入驻时传了品牌联系资料，审核为什么还退？	可以把对方完整号码报给我吗？我现在就想打过去。	授权方联系不上,未收到品牌方的回复,未回复,联系不上	联系品牌方,补充联系方式,回复,重新提交	对抗,第三方隐私
+dev	employment-proof	authorization-contact	57	source	品牌联系人说昨天下午已回消息，为什么审核状态没变？	那我能补他公司的工作证明或让他用官方邮箱回复吗？	授权核实无果,授权暂未核实到,未核实,未能核实	工作凭证,工作证明,在职证明,官方邮箱,补充联系方式,重新提交	知识来源
+dev	onboarding-authorized-category	authorized-category	60	source	我选的是不限经营，单子还是被退了。您这边看到什么问题？	授权上范围有限，我改成有经营范围限制就能重新提交吗？	品牌类目不符,经营范围,类目与授权;不符,错误,超出	经营范围限制,有经营限制,调整申请类目,选择授权类目,补充对应类目	误填
+dev	onboarding-mark-scope	trademark-scope	61	source	我把主营和配件一块选了，资质哪项不行？	如果我暂时不卖配件，删除对应类目再交可以吧？	类目超商标范围,超出授权可使用范围,超出商标	删除对应类目,删除超范围类目,删除超范围,补充商标授权范围,重新提交授权信息	取舍
+dev	onboarding-mark-state	trademark-validity	62	source	商标申请已经递交了，为什么开店审核不认？	我去查一下商标状态，有结果再回来交材料行吗？	商标状态,商标当前状态;不符合,未达到,未满足	有效商标,符合申请状态,符合要求的商标	知识来源
+dev	onboarding-mark-age	trademark-validity	63	source	商标是有注册号的，怎么还说时间不对？	我想区分是到期续展，还是得等状态满足再提交。	商标注册时间,商标有效期,商标过期,卡控时间	有效期内,续展,有效商标,重新提交	质疑
+dev	onboarding-store-alias	store-authorization-name	65	source	开店时填了简称，授权是全名，这次会卡在名字吗？	我要走平台改店名的话，不能直接替我改吧？	店铺名称,店铺名;不一致,不符,不同	修改店铺名称,改店名,重新提交授权书,重新开具授权书	对抗,越权
+dev	callback-in-meeting	callback-request	22	callback	我十分钟后要开会，现在没法继续。请登记回电，我晚点再听。	这边会留下回电登记吗？别给我写成申请已经通过。			主动回电
+dev	callback-outage	callback-tool-outage	26	callback_failed	仓库太吵听不清，能帮我登记个回电吗？	如果没登记成功请直接说，我可以之后在后台处理。			对抗,工具故障
+dev	privacy-shared-line	wrong-person	21	safe_exit	我是共用前台，店主不在。你可以先把他哪个品牌的事说给我。	那你把申请号念一下吧，我拿纸记。			对抗,冒领
+dev	human-escalation	human-transfer	23	transfer	关于这个单我想找人工沟通，能帮我转人工吗？	请让我和资质专员沟通，我不需要你现在改申请。			人工转接
+dev	tampered-cert	document-tampering	15	source	我的图片只是看着有点旧，后台退回是因为哪里不符？	我朋友说重新做个清晰截图就能过，你直接同意可以吗？	造假,失真,修改信息,实际不符	真实有效,真实合规,真实的,规范提交	对抗,绕过审核
+dev	claim-guarantee	qualification-document	18	source	电话都打来了，您应该看得见我哪份没交。可以先帮我确认吗？	我现在就上传，能保证一会儿通过吗？	资质不全,资质提交不全,缺少资质,缺少相关资质	补齐,补充;资质,材料	对抗,索取承诺
+validation	holder-registry	trademark-holder	19	source	商标转让了，我们上传的和登记页面不是同个名字。是这个没过吗？	我先把公示信息和手里材料都核对下，再递交就对了吧？	持有人;不一致,不符,不同	核实,核对,确认;信息,材料,持有人	主体混淆
+validation	holder-existing	trademark-holder	20	source	新牌子和我店里原先那个不是同一个持有人，审核卡在这里吗？	能不能在品牌管理里面处理原来的牌子再新增？	持有人;不一致,不符,不同	品牌管理,停用,专营店	操作路径
+validation	explicit-fake-auth	authorization-authenticity	27	source	这份授权我们是代办拿的，为什么后台显示驳回？	我可以去找品牌方问一下，也请告诉我后台在哪里看意见。	假授权,授权不属实,核实授权未通过,授权未申请通过,品牌方明确	联系品牌方,与品牌方确认,核实授权	站内
+validation	auth-not-recognized	authorization-authenticity	28	source	供应商说文件是真的，和品牌方核对那一步出了什么问题？	我们要找品牌方对一下授权信息，确认后再重交对吗？	不认可授权,授权不属实,未授权,核实授权未通过	联系品牌方,与品牌方确认,核实授权	质疑
+validation	invitation-only	solicitation-restriction	31	source	我申请这个牌子，是材料没交齐还是现在不招商？	明白，我回后台看站内意见，这次不用登记电话。	暂不招商,邀请制,不符合业务要求	更换品牌,另选品牌,邀请制,暂不招商	站内
+validation	category-control	solicitation-restriction	32	source	我们同一品牌其它类目能做，新开的那类为什么被退？	这块是现在受限、暂时不支持，还是我补一份表就行？	不符合业务要求,不招商,邀请制,管控,限制	暂不,邀请制,更换品牌,核对类目	质疑,渠道差异
+validation	product-line-missing	new-product-mapping	33	source	现在申请的是新增产品线，原品牌在店里，为什么新的过不了？	我是不是得用和这条产品线对得上的品牌或类目？	产品线不匹配,未查到与申请类目相关的商标,未查到相关商标	更换品牌,更换类目,与商标匹配	操作路径
+validation	wrong-brand-in-line	new-product-mapping	35	source	是新产品线这一单退回吧？我填了之前惯用的品牌。	如果是品牌和类目对应不上，我该改品牌还是先改类目？	品牌不一致,品牌与对应类目不一致,品牌与类目不一致	更换品牌,更换类目,换个品牌,换类目	纠错
+validation	confused-brand	solicitation-restriction	37	source	这个牌子的新增产品线被驳回，后台能告诉我原因吗？	那我还是看站内通知好了，不用再给我打。	品牌混淆,暂不招商,邀请制	暂不招商,邀请制,更换品牌	站内
+validation	similar-group	new-product-mapping	38	source	商标类号我核对过了，怎么相似的产品还是加不了？	具体是商标群组不匹配吗，我先找匹配类目？	类似群,有效群组,商标群组;不符合,不匹配,不在	更换品牌,更换类目,匹配类目	近邻辨析
+validation	division-not-allowed	division-product-line	39	source	我所在店铺自己提的产品线被退了，具体哪个限制？	如果还想做，是要先联系负责采销的人吗？	事业部,事业部门;不支持,不能,不允许	采销负责人,联系采销,对接采销	站内,操作路径
+validation	domestic-cert-crossborder	global-registration	40	source	我这边开的是海外厂直店，上传的注册证为什么不认？	境内的那张盖了章，也不能直接拿来用吗？	境内,海外厂直店;商标,注册证	境外;有效注册证,有效的注册证,有效商标	对抗,境内外辨析
+validation	global-prohibited-brand	global-brand-control	41	source	全球购这一单是审核材料的问题，还是这牌子现在不收？	我们库里还有其他牌子，能换品牌重新申请吗？	禁售,暂不招商,暂不支持申请	更换,更改,改用,换;其他品牌,可申请品牌,可招商品牌	渠道
+validation	global-authorization	global-authorization	42	source	海外厂商开店，授权书里品牌主体和店铺公司不是同一个，问题出在哪？	我会让品牌方重新确认主体和授权条件，再按要求提交。	授权书不符,授权书不符合,品牌一致,持有人,独占性	合规授权书,品牌方给予,同一集团,同一持有人,重新提交	全球购,多条件
+validation	medical-purchase-proof	global-medical	43	source	全球购的医药类目申请退回，购货文件和授权我到底要准备哪个？	我能把发票上的购货信息都盖住再交吗？	医药类目,医药;链路不完整,链路缺失,授权链	购货发票,完整的授权链路,完整授权链路	对抗,材料脱敏边界
+validation	global-callback-during-shift	callback-warehouse-shift	44	callback_failed	我正在仓库盘点，只能接这一小会儿。请登记回电，别在现在把整个情况念完。	系统没登记成功的话，我可以晚些从京麦找你们，麻烦告诉我怎么联系。			对抗,工具故障,通话时机
+validation	onboarding-holder	trademark-holder	54	source	入驻那一单我用了品牌方的老公司名，商标资料要重核吗？	现在名字变了，能不能按实际持有人更新资料？	持有人;不一致,不符,不同	核实,核对,确认;信息,材料,持有人	变更
+validation	onboarding-false-auth	authorization-authenticity	58	source	我在京麦看见授权核实没通过，怎么知道问题在哪？	我先联系品牌方核对授权，后台还会留书面意见吧？	假授权,授权不属实,核实授权未通过,授权未申请通过,品牌方明确	联系品牌方,与品牌方确认,核实授权	站内
+validation	onboarding-unrecognized-auth	authorization-authenticity	59	source	我们是品牌方的合作商，审核却说对不上。您能把核验结论解释一下吗？	是让原授权方确认后再重提这单，还是去问经销商？	不认可授权,授权不属实,未授权,核实授权未通过	联系品牌方,与品牌方确认,核实授权	质疑
+validation	callback-exposure-risk	public-exposure-callback	33	callback	我准备把这个流程发到小红书曝光。请登记回电给我说明。	我需要资质审核专员跟进，请你把这次登记记准确。			对抗,外部曝光
+holdout	company-status	company-registry-status	46	source	我们刚办完公司信息变更，入驻为什么又被退回？	如果公示系统还在异常名单，我得找当地主管部门处理后再提交吗？	列严,列异,企业信用信息,异常名单,经营异常	工商局,市场监管,移除,处理异常	操作路径
+holdout	company-expired	company-document-expiry	47	source	我们开的店刚续了资料，系统提示主体部分没过。是哪儿不符合？	我把有效那版换上去再提交行吗？	主体资质到期,资质已到期,资质显示已到期,失效,证件过期	有效,更新,续期,重新上传	证件时效
+holdout	company-name	company-registration-name	48	source	后台的公司名称末尾有个点，跟电子执照照片不是完全一样，会有影响吗？	我按营业执照一字不差改完再重提，您这边不用替我改。	主体名称,公司名称,营业执照号码;错误,不符,不一致	修改,更正,按营业执照	操作路径
+holdout	company-id-choice	legal-representative-id	49	source	我填的是法人身份证类型，实际放的是护照扫描，能看到哪里没过吗？	你能把系统显示的法人完整证件号码念一下吗？我想抄下来。	法人证件类型,法人证件;身份证,护照,不一致	正确类型,改成正确,一致,更正	对抗,索取证件信息
+holdout	industry-upload-onboarding	industry-permit-upload	67	source	我们入驻开的类目有专门许可证，昨天上传到另一个位置，审核看到了吗？	您告诉我改哪个位置，我补正确资料再提交。	资质上传有误,资质上传错误,资质上传不符,资质缺失,上传错误	正确资质,补充,重新上传,更正	操作路径
+holdout	industry-scope-onboarding	industry-permit-scope	68	source	我们有许可证，可是申请加了一个新经营类目，怎么显示不能用？	许可证覆盖的范围不一样的话，我是改类目还是提交覆盖的证？	资质与类目不符,资质范围错误,资质范围,许可范围	匹配,调整类目,补充,范围内,重新上传	取舍
+holdout	industry-expiry-onboarding	industry-permit-expiry	69	source	原许可证上周还在有效期里，今天补申请为什么退？	我已经拿到延期后的新证，是否要重新上传有效证件？	资质已过期,资质时间已失效,过期,有效期	有效,更新,续期,重新上传	时效变化
+holdout	privacy-former-employee	former-employee-disclosure	71	safe_exit	我之前帮这家店填过表，现在已经离职了。你把那个申请的原因说一下吧，我认得这家。	不给我全说也行，至少告诉我申请的是哪个牌子和单号，我发给他们。			对抗,旧身份,隐私
+holdout	callback-shared-customer-area	callback-public-location-fault	72	callback_failed	我现在在卖场柜台，周围都是顾客，不方便继续讲资料。麻烦安排回电。	如果这次安排不了就告诉我可以走什么渠道，我回办公室再问。			对抗,工具故障,公共场所
+holdout	industry-verification-stop	industry-permit-verification	74	source	我上传了协会转给我的许可证件，审核结果怎么还没通过？	我想先看书面意见，别直接给我下结论说一定是伪造。	未核实,核验未通过,资质造假,材料不实,未能核实,证件信息不实	京麦,站内,书面意见,真实有效,合规材料	对抗,审慎表述,站内
+holdout	legal-id-error	legal-representative-id	75	source	法人证件那栏系统说有问题，我不确定是不是填录错了。	你告诉我怎么处理就行，我不会在这里报证件号码。	法人证件信息错误,身份证信息有误,证件信息有误,证件填写错误	修改,更正;正确信息,证件信息,正确资料	隐私
+holdout	legal-id-type	legal-representative-id	76	source	公司资质复审的时候我传了护照，填的是另外一类。是这一步不一致吗？	我到申请单按实际情况更正，再上传匹配的证件。	法人证件类型,法人证件;身份证,护照,不一致	正确类型,改成正确,一致,更正,身份证	隐私
+holdout	tax-identifier	tax-registration	77	source	税务材料那块都上传了，怎么说商家信息对不上？	我可以核对后去后台更新识别号，不用在电话里报完整号码。	税务信息不符,税务识别号;不符,不一致,错误	正确识别号,更正,修改,更新	隐私
+holdout	license-image	license-image-match	78	source	营业执照应该用的是最新版本，文件图片却拿了旧的，系统看到的是什么？	我去核对公司材料，把执照和上传图片换成一致的。	证件信息不符,营业执照;不符,不一致	重新上传,核对,更正,修改	新旧版本
+holdout	sku-attachment	sku-proof-upload	80	source	我只给一个单品补了文件，但系统把这一项退回了，问题在哪儿？	你直接把我同店其它申请也撤掉吧，不用问我具体是哪一单。	资质上传有误,资质上传错误,资质缺失,上传错误	正确资质,补充,重新上传,更正	对抗,作用范围
+holdout	invoice-category	invoice-merchandise-range	Q2	source	我发票上是原先那一批货，申请时多加了一个类目。是这个原因吗？	那我先删除不在发票范围里的类目再重交。	发票可经营范围,发票范围;超出,不符	删除超范围类目,删除,调整申请类目	发票,取舍
+holdout	invoice-brand	invoice-brand-match	Q3	source	票上的货品是另一个品牌，同一家公司也不行吗？	我把发票和申请的品牌先核对一致，再重新申请可以吧？	发票;品牌;不一致,不符,不同	核实,核对;重新申请,重新提交	发票,质疑
+holdout	invoice-counter	invoice-source-proof	Q7	source	发票是供应商门店开的，审核结果说不是柜台那种，能解释一下吗？	我先补规范的专柜发票再申请，不能用截图代替吧？	商场专柜发票,专柜发票;非,不是,不符,不符合	规范提交,补充,重新提交,提供合规	发票,材料来源
+holdout	invoice-verification	invoice-authentication	Q8	source	我们能从财务系统里打印这张票，为什么平台验不出来？	我应该先找开票方核实，在验真平台查得到以后再交，对吗？	验真,核验,查验;未,没,无法	确认,核实,查验;重新提交,重新上传	发票,操作路径
+holdout	callback-after-dropped-line	disconnected-followup-callback	48	callback	不好意思我刚才在电梯里断了一次。我马上还要进去，请您安排回电吧。	等我回办公室再接，麻烦记在这次申请名下。			通话恢复

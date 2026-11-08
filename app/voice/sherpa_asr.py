@@ -27,14 +27,15 @@ class SherpaAsr:
             rule2_min_trailing_silence=0.8, rule3_min_utterance_length=15.0,
         )
 
-    async def start(self, session_id, *, sample_rate=16000, hotwords=None):
+    async def start(self, session_id, *, sample_rate=16000, hotwords=None, client_endpointing=False):
         if sample_rate != 16000 or hotwords:
             raise VoiceError("ASR_CONFIG", "ASR requires 16000 Hz; hotwords unsupported by greedy_search")
-        return SherpaAsrStream(self.recognizer, finish_padding_ms=self.finish_padding_ms)
+        return SherpaAsrStream(self.recognizer, finish_padding_ms=self.finish_padding_ms,
+                               client_endpointing=client_endpointing)
 
 
 class SherpaAsrStream:
-    def __init__(self, recognizer, *, finish_padding_ms: int = 300):
+    def __init__(self, recognizer, *, finish_padding_ms: int = 300, client_endpointing=False):
         self.recognizer = recognizer
         self.stream = recognizer.create_stream()
         self.queue = asyncio.Queue(maxsize=64)
@@ -44,6 +45,7 @@ class SherpaAsrStream:
         self.start_ms = 0
         self.last_text = ""
         self.finish_padding = np.zeros(finish_padding_ms * 16, dtype=np.float32)
+        self.client_endpointing = client_endpointing
 
     def _emit(self, event):
         # A slow consumer may miss partial revisions, never block finalization.
@@ -60,7 +62,8 @@ class SherpaAsrStream:
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
         text = self.recognizer.get_result(self.stream)
-        endpoint = finish or self.recognizer.is_endpoint(self.stream)
+        # The contest browser sends one explicit end per speech segment.
+        endpoint = finish or (not self.client_endpointing and self.recognizer.is_endpoint(self.stream))
         if endpoint and not finish:
             self.recognizer.reset(self.stream)
         return text, endpoint

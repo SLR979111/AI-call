@@ -4,7 +4,7 @@
  *
  * 唯一允许写全局时序的地方。规则：
  *  - 本地 VAD 只产生：电平、b0、打断预触发、speech_started（C2）
- *  - 端点（用户说完）由服务端 vad 裁决；前端 speech_ended 只报告"最后一个有声帧"
+ *  - 通用端点由服务端裁决；赛题模式使用前端连续静音和最后有声帧
  *  - 打断：duck（≤80ms）→ local_muted → 300ms 无持续语音则本地恢复（C3）
  */
 import { buildAudioFrame, now } from './protocol.js';
@@ -27,10 +27,15 @@ let ui;
 let muted = false;
 let inBarge = false;
 let bargeTimer = 0;
-let firstVoicedFrameSent = false;
 let lastSpeechEnd = 0;
 let timingTurn = null;
 let inputSource = 'mic';
+let audioSinceEnd = false;
+let contestEndpointing = false;
+/** @type {{pcm:Int16Array, frameSeq:number, monoMs:number, energyDb:number}[]} */
+const playbackPreRoll = [];
+/** @type {{pcm:Int16Array, frameSeq:number, monoMs:number, energyDb:number}[]} */
+const listeningPreRoll = [];
 
 ui = initUi({
   initialSource: !cfg.ENABLE_MIC || cfg.UPLINK_MODE === 'file' ? 'file' : 'mic',
@@ -51,12 +56,24 @@ ui = initUi({
   }
 });
 
+const contestConfig = fetch(`${cfg.APP_BASE}/contest/cases`).then(async (response) => {
+  if (!response.ok) return;
+  const catalog = await response.json();
+  vad.endFrames = Math.ceil(catalog.silence_ms / cfg.FRAME_MS);
+  vad.contestEndpointing = true;
+  contestEndpointing = true;
+  ui.setContestCases(catalog.cases, catalog.default_case_id);
+}).catch(error => console.warn('读取赛题场景失败', error));
+
 /* ============================ 通话生命周期 ============================ */
 
 async function startCall(source) {
   inputSource = source;
   lastSpeechEnd = 0;
   timingTurn = null;
+  audioSinceEnd = false;
+  playbackPreRoll.length = 0;
+  listeningPreRoll.length = 0;
   vad.reset();
   ui.setStarting();
   ui.status(source === 'mic' ? '请求麦克风权限…' : '准备录音回放…');
@@ -67,7 +84,8 @@ async function startCall(source) {
   }
 
   ui.status('建立会话…');
-  await client.startCall();
+  await contestConfig;
+  await client.startCall(ui.selectedCase());
   showConnected();
 }
 
@@ -92,6 +110,9 @@ function showConnected() {
 async function startDemoUplink(source) {
   if (fileUplink.running) throw new Error('当前录音还在回放');
   engine.stopCapture();
+  audioSinceEnd = false;
+  playbackPreRoll.length = 0;
+  listeningPreRoll.length = 0;
   vad.reset();
   const info = await fileUplink.load(source || cfg.DEMO_WAV);
   store.log(`回放音源 ${fileUplink.sourceLabel} ${info.durationMs}ms @${info.sampleRate}Hz`);
@@ -130,48 +151,70 @@ engine.onFrame = (f) => handleFrame(f);
  */
 function handleFrame(f) {
   if (cfg.TRANSPORT_PREF === 'rtc_pcm' && client.transport !== 'rtc_pcm') return;
-  // 1) 上行音频（仅 ws_pcm：WebRTC 期音频走 RTP，这里必须停发）
-  if (client.transport === 'ws_pcm' || client.transport === 'rtc_pcm') {
-    const flags = (muted ? 1 : 0) | (firstVoicedFrameSent ? 0 : 0);
-    const frame = buildAudioFrame({
-      frameSeq: client.frameSeq++,
-      clientMonoMs: f.monoMs,
-      flags,
-      pcm: f.pcm
-    });
-    client.sendAudioFrame(frame);
-  }
-
-  // 2) 本地 VAD
+  const playing = playback.isPlaying() && !playback.ducked;
   const r = vad.push({
-    energyDb: f.energyDb,
+    energyDb: muted ? -99 : f.energyDb,
     monoMs: f.monoMs,
-    playing: playback.isPlaying(),
+    playing,
     refDb: playback.refEnergyDb()
   });
   store.set({ db: r.db });
 
-  if (r.start != null) {
-    store.set({ b0: Math.round(r.start) });
-    client.speechStarted(r.start, r.db);
-    // 首帧标记（服务端可据此优先起 ASR）
-    firstVoicedFrameSent = true;
+  if (playing) {
+    listeningPreRoll.length = 0;
+    // 播报期等本地确认后才送语音，避免回声经 ASR 抢先打断。保留开口音频。
+    playbackPreRoll.push(f);
+    if (playbackPreRoll.length > vad.bargeFrames) playbackPreRoll.shift();
+    if (r.barge != null && triggerBarge('local_vad', r.barge, r.db)) {
+      for (const frame of playbackPreRoll) sendUplinkFrame(frame);
+      playbackPreRoll.length = 0;
+    }
+  } else {
+    playbackPreRoll.length = 0;
+    if (!contestEndpointing || audioSinceEnd) {
+      sendUplinkFrame(f);
+    } else {
+      // Retain the quiet onset while keeping continuous ambient silence out of ASR.
+      listeningPreRoll.push(f);
+      if (listeningPreRoll.length > 10) listeningPreRoll.shift();
+      if (r.start != null) {
+        for (const frame of listeningPreRoll) sendUplinkFrame(frame);
+        listeningPreRoll.length = 0;
+      }
+    }
+    if (r.start != null) {
+      store.set({ b0: Math.round(r.start) });
+      client.speechStarted(r.start, r.db);
+    }
   }
-  if (r.barge != null) triggerBarge('local_vad', r.barge);
   if (r.end != null) reportSpeechEnd(vad.lastVoicedMono);
 }
 
+/** @param {{pcm:Int16Array, monoMs:number}} f */
+function sendUplinkFrame(f) {
+  if (client.transport !== 'ws_pcm' && client.transport !== 'rtc_pcm') return;
+  client.sendAudioFrame(buildAudioFrame({
+    frameSeq: client.frameSeq++,
+    clientMonoMs: f.monoMs,
+    flags: muted ? 1 : 0,
+    pcm: f.pcm
+  }));
+  audioSinceEnd = true;
+}
+
 function reportSpeechEnd(lastVoiced) {
+  if (!audioSinceEnd) return;
+  audioSinceEnd = false;
   if (lastVoiced > lastSpeechEnd) lastSpeechEnd = lastVoiced;
   client.speechEnded(lastVoiced);
 }
 
 /* ============================ 打断（C2 / C3） ============================ */
 
-/** @param {'local_vad'|'manual'} source @param {number} [b0Hint] */
-function triggerBarge(source, b0Hint) {
-  if (inBarge) return;
-  if (!playback.isPlaying()) { store.log('当前未播放，忽略打断'); return; }
+/** @param {'local_vad'|'manual'} source @param {number} [b0Hint] @param {number} [db] */
+function triggerBarge(source, b0Hint, db = store.get().db) {
+  if (inBarge) return false;
+  if (!playback.isPlaying()) { store.log('当前未播放，忽略打断'); return false; }
   inBarge = true;
 
   const b0 = b0Hint != null ? b0Hint : (vad.b0Mono || now() - client.t0);
@@ -179,7 +222,7 @@ function triggerBarge(source, b0Hint) {
   const b3 = playback.duck();                                  // ≤80ms 内本地静音
   const stopLatency = Math.max(0, b3 - b0);
 
-  store.set({ b3: Math.round(b3), stopLatency: Math.round(stopLatency) });
+  store.set({ b0: Math.round(b0), b3: Math.round(b3), stopLatency: Math.round(stopLatency) });
   client.localMuted({
     b0Mono: b0, b3Mono: b3,
     playedMs: playback.playedMs(),
@@ -189,7 +232,7 @@ function triggerBarge(source, b0Hint) {
     turnId: playback.turnId,
     reason: source === 'manual' ? 'user_barge_button' : 'barge_in'
   });
-  if (source === 'manual') client.speechStarted(b0, store.get().db);
+  client.speechStarted(b0, db);
   store.log(`打断 source=${source} b0=${b0.toFixed(0)} b3=${b3.toFixed(0)} stop=${stopLatency.toFixed(1)}ms cursor=${JSON.stringify(cur)}`);
 
   // C3：**只有本地 VAD 判定的打断**才允许 300ms 后自恢复（"误打断"）。
@@ -212,6 +255,7 @@ function triggerBarge(source, b0Hint) {
   // 纯 UI 状态提示（不是业务话术）：让用户知道"该你说了"。
   // 真正的"打断后静默兜底话术"由服务端在 N 秒后以 agent_text + tts_* 下发（契约 §0 第 4 条）。
   store.set({ hint: '（已打断，正在等您继续说话…）' });
+  return true;
 }
 
 /* ============================ 服务端 → 本地 ============================ */

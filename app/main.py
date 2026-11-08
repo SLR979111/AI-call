@@ -68,6 +68,7 @@ class WsConnection:
 class CreateSessionRequest(BaseModel):
     mode: Literal["voice", "text"] = "text"
     scenario_id: str | None = None
+    case_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class TextTurnRequest(BaseModel):
@@ -307,10 +308,22 @@ async def metrics(request: Request) -> Response:
     return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
+@app.get("/contest/cases")
+async def contest_cases(request: Request) -> dict[str, Any]:
+    catalog = getattr(request.app.state, "contest_catalog", None)
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="contest mode is unavailable")
+    return catalog
+
+
 @app.post("/sessions")
 async def create_session(request: Request, body: CreateSessionRequest) -> dict[str, Any]:
     orc = _orc(request)
-    session = await orc.create_session(body.mode)
+    if body.case_id is not None:
+        catalog = getattr(request.app.state, "contest_catalog", None)
+        if catalog is None or all(case["id"] != body.case_id for case in catalog["cases"]):
+            raise HTTPException(status_code=422, detail="unknown contest case")
+    session = await orc.create_session(body.mode, case_id=body.case_id)
     session.token = secrets.token_urlsafe(16)
     return {
         "session_id": session.session_id,
@@ -668,7 +681,9 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                                                    {"reason": "audio_gap", "missing_frames": delta - 1})
                     last_seq = frame.seq
                     if asr is None:
-                        asr = await websocket.app.state.voice.start_asr(session_id)
+                        asr = await websocket.app.state.voice.start_asr(
+                            session_id, client_endpointing=session.case_id is not None,
+                        )
                         asr_task = asyncio.create_task(consume_asr(asr))
                     await asr.push(frame)
                     session.audio_frames += 1

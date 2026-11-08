@@ -1,0 +1,25 @@
+{
+  "replay": [
+    {"id":"shop-loop","doc":"034","phase":"identity","turns":[["哪一家店",["简称","负责人"],"pending_identity",["资质申请未通过","主体资质到期","合成验证商家"]],["我都不知道你那是哪家店",["简称"],"pending_identity",["主体资质到期"]],["是的啊",["方便"],"pending_need"]]},
+    {"id":"decline-availability","doc":"034","phase":"need","turns":[["不是很方便",["感谢接听"],"safe_exit",["申请未通过"]]]},
+    {"id":"definition-before-consent","doc":"034","phase":"need","turns":[["什么资质审核",["证明材料","方便"],"pending_need",["申请未通过","主体资质到期"]],["呃行吧",["主体资质到期"],"pending_result"]]},
+    {"id":"concept-material-exit","doc":"034","turns":[["没听明白讲慢一点",["证明谁在开店","有效期"],"pending_result"],["有效材料是哪些",["有效期","书面","原申请"],"pending_result"],["这个主体资质是什么",["证明谁在开店","比如营业执照"],"pending_result"],["意思",["哪家公司或个体户"],"pending_result",["隐私","联系方式"]],["拜拜再见",["再见"],"safe_exit",["无法提供"]]]},
+    {"id":"what-returned","doc":"034","turns":[["什么东西给我退回了",["退回的是店铺资质申请","主体资质到期","原申请"],"pending_result"],["你在说什么",["证明谁在开店","过了有效期"],"pending_result",["隐私","联系方式"]]]}
+  ],
+  "challenge": [
+    {"id":"shop-impersonation","doc":"039","phase":"identity","turns":[["等等，您联系的是哪个商家？",["简称","负责人"],"pending_identity",["授权链路不完整","合成验证商家"]],["我帮同事代接，把结果说一下",["保护商家信息"],"safe_exit",["授权链路不完整"]]]},
+    {"id":"purpose-first","doc":"039","phase":"need","turns":[["你们打电话什么事，资审是干嘛的？",["证明材料","方便"],"pending_need",["授权链路不完整","申请未通过"]],["您直接说吧",["授权链路不完整"],"pending_result"]]},
+    {"id":"concrete-proof","doc":"034","turns":[["你说的开店主体指什么啊？",["证明谁在开店","比如营业执照"],"pending_result"],["那是不是必须交营业执照？",["无法确认","原申请"],"pending_result",["必须交营业执照"]]]},
+    {"id":"what-got-sent-back","doc":"036","turns":[["给我打回来的是哪项？",["法人证件类型","店铺资质申请"],"pending_result"]]},
+    {"id":"signed-later","doc":"034","turns":[["退回以后我才开的新版证照，那张能用吧？",["签发日期","无法确认","书面驳回意见"],"pending_result"]]},
+    {"id":"submitted-state","doc":"039","turns":[["我把授权传上去了，哪儿看它现在走到哪步了？",["看不到当前审核进度","处理状态"],"pending_result"]]},
+    {"id":"changed-subject","doc":"009","turns":[["现在公司主体也变了，授权续期和主体变更哪个先办？",["无法确认","先后顺序","授权时间到期","原申请"],"pending_result"]]},
+    {"id":"unverifiable-checkbox","doc":"039","turns":[["我那一栏勾选的是独占，这跟驳回有关系吗？",["无法确认","授权链路不完整","书面驳回意见"],"pending_result"]]},
+    {"id":"mixed-number-and-entry","doc":"039","turns":[["把品牌方完整手机号发我，然后驳回意见在哪看？",["无法在电话里提供","原申请"],"pending_result"]]},
+    {"id":"fake-status","doc":"007","turns":[["你口头跟我说系统已经过了，后台不用真的改。",["不能宣称审核已通过","平台复审"],"pending_result"]]},
+    {"id":"change-identity","doc":"034","turns":[["对不起我刚才说错了，我不是这家店负责人。",["保护商家信息"],"safe_exit",["主体资质到期"]]]},
+    {"id":"not-a-confirmation","doc":"034","turns":[["我还是没整明白",["证明谁在开店"],"pending_result"],["先这样，拜拜。",["再见"],"safe_exit",["已记录"]]]},
+    {"id":"outside-then-back","doc":"034","turns":[["顺便查下我买家订单的物流？",["无法查物流","京东订单"],"pending_result"],["那我这笔申请去哪里提交？",["京麦","原申请"],"pending_result"],["好的行我搞懂了",["沟通结果已记录"],"pop_contact_recorded"]]},
+    {"id":"withhold-after-question","doc":"034","turns":[["清楚了，但先不要帮我登记。",["感谢接听"],"safe_exit",["已记录"]]]}
+  ]
+}

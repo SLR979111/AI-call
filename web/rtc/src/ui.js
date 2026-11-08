@@ -17,6 +17,7 @@ export function initUi(h) {
     `<li data-i="${i}"><span class="dot">${i + 1}</span><span>${label}</span></li>`).join('');
 
   const source = /** @type {HTMLSelectElement} */ ($('inputSource'));
+  const contestCase = /** @type {HTMLSelectElement} */ ($('contestCase'));
   source.value = h.initialSource;
   $('btnStart').addEventListener('click', () => h.onStart(source.value));
   $('btnHangup').addEventListener('click', () => h.onHangup());
@@ -44,13 +45,21 @@ export function initUi(h) {
   render(store.get());
 
   return {
+    setContestCases(cases, defaultId) {
+      for (const { id, label } of cases) contestCase.add(new Option(label, id));
+      contestCase.value = defaultId;
+      $('contestCases').hidden = false;
+    },
+    selectedCase() { return contestCase.value; },
     setStarting() {
       $('btnStart').disabled = true;
       source.disabled = true;
+      contestCase.disabled = true;
     },
     setConnected(ok, useFile = true) {
       $('btnStart').disabled = ok;
       source.disabled = ok;
+      contestCase.disabled = ok;
       $('btnHangup').disabled = !ok;
       $('btnMute').disabled = !ok;
       $('btnBarge').disabled = !ok;
