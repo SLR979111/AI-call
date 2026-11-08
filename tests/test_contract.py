@@ -347,17 +347,32 @@ def test_livekit_token_and_voice_status():
 @pytest.mark.asyncio
 async def test_llm_agent_tool_path():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={
-            "choices": [{"message": {"content": json.dumps({
-                "intent": "reschedule",
-                "reply": "可以帮您改约。",
-                "slots": {"order_id": "A12345678"},
-                "tool": "order_query",
-                "tool_args": {"order_id": "A12345678"},
-                "outcome": "rescheduled",
-            }, ensure_ascii=False)}}],
-            "usage": {"total_tokens": 20},
-        })
+        # Support streaming response for LLMAgent
+        content = json.dumps({
+            "intent": "reschedule",
+            "reply": "可以帮您改约。",
+            "slots": {"order_id": "A12345678"},
+            "tool": "order_query",
+            "tool_args": {"order_id": "A12345678"},
+            "outcome": "rescheduled",
+        }, ensure_ascii=False)
+        
+        # Check if streaming is requested
+        body = json.loads(request.content.decode())
+        if body.get("stream"):
+            # Return SSE format for streaming
+            lines = [
+                "data: " + json.dumps({"choices": [{"delta": {"content": content[:20]}}]}) + "\n",
+                "data: " + json.dumps({"choices": [{"delta": {"content": content[20:]}, "finish_reason": "stop"}], "usage": {"total_tokens": 20}}) + "\n",
+                "data: [DONE]\n",
+            ]
+            return httpx.Response(200, content="".join(lines).encode(), headers={"content-type": "text/event-stream"})
+        else:
+            # Non-streaming fallback
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": content}}],
+                "usage": {"total_tokens": 20},
+            })
 
     data = temp_dir()
     bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
