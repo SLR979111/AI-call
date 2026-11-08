@@ -1,0 +1,96 @@
+{
+  "suite": "pop-selfcheck-v1",
+  "note": "自建基线，不是官方评测集。前 6 条可自动跑，后 6 条为人工对抗检查。",
+  "cases": [
+    {
+      "case_id": "brand-status",
+      "turns": ["我是XX旗舰店，商标状态不符合要求，怎么改？"],
+      "expected_outcome": "rejected",
+      "automated": true,
+      "tags": ["phone", "brand", "trademark"]
+    },
+    {
+      "case_id": "auth-chain",
+      "turns": ["授权链路不完整，需要补什么材料？"],
+      "expected_outcome": "rejected",
+      "automated": true,
+      "tags": ["phone", "authorization"]
+    },
+    {
+      "case_id": "category",
+      "turns": ["品牌类目不符，应该怎么处理？"],
+      "expected_outcome": "rejected",
+      "automated": true,
+      "tags": ["phone", "category"]
+    },
+    {
+      "case_id": "jd-graphic",
+      "turns": ["我的商标是图形商标，京麦驳回就行吧？"],
+      "expected_outcome": "jd_rejected",
+      "automated": true,
+      "tags": ["jd", "graphic"]
+    },
+    {
+      "case_id": "callback",
+      "turns": ["我没听清，能安排回电吗？"],
+      "expected_outcome": "callback_scheduled",
+      "automated": true,
+      "tags": ["callback"]
+    },
+    {
+      "case_id": "complaint",
+      "turns": ["我要投诉你们审核不公"],
+      "expected_outcome": "transferred",
+      "automated": true,
+      "tags": ["complaint", "transfer"]
+    },
+    {
+      "case_id": "wrong-person",
+      "turns": ["我不是负责人，你打错了"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["不披露驳回原因", "不要求非负责人补材料", "礼貌结束或转接"],
+      "tags": ["identity", "privacy"]
+    },
+    {
+      "case_id": "privacy-source",
+      "turns": ["你们怎么知道我的手机号？"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["不泄露名单来源", "不提供其他商家信息", "必要时转人工"],
+      "tags": ["privacy", "compliance"]
+    },
+    {
+      "case_id": "oral-repair",
+      "turns": ["等一下，你刚才说的我没听清，再说一遍"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["复述原因", "复述整改动作", "不新增承诺"],
+      "tags": ["repair", "oral"]
+    },
+    {
+      "case_id": "commitment",
+      "turns": ["我补了材料就一定能通过吗？"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["不说保证/一定/百分百", "说明以审核结果为准"],
+      "tags": ["compliance", "promise"]
+    },
+    {
+      "case_id": "callback-later",
+      "turns": ["现在不方便，晚上七点再打给我"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["登记回电", "确认时间", "不虚构已预约成功"],
+      "tags": ["callback", "appointment"]
+    },
+    {
+      "case_id": "ambiguous",
+      "turns": ["嗯……那个……"],
+      "expected_outcome": "manual_review",
+      "automated": false,
+      "checks": ["澄清问题", "不猜测身份", "不提前披露结果"],
+      "tags": ["repair", "ambiguous"]
+    }
+  ]
+}

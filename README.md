@@ -496,6 +496,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 | [docs/11](docs/11-contract-v0.2-patch.md) | v0.2 / v0.2.1 契约补丁 |
 | [docs/12](docs/12-technical-proposal-draft.md) | 技术方案书初稿 |
 | [docs/16](docs/16-pop-audit-scenario.md) | POP 资质审核驳回外呼场景与数据映射 |
+| [docs/17](docs/17-competition-selfcheck.md) | 官方资料缺口、自建 Mock/评测/时延/合规基线 |
 | [docs/guides/development.md](docs/guides/development.md) | 开发、配置、接口、Docker |
 | [docs/guides/testing.md](docs/guides/testing.md) | 测试分层、指标点、分段执行 |
 | [web/rtc/README.md](web/rtc/README.md) | 新通话台使用说明 |

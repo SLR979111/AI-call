@@ -1,0 +1,69 @@
+{
+  "suite": "pop-selfcheck-v1",
+  "note": "自建评分表，用于内部验收；权重和阈值是团队自定，不是官方口径。",
+  "hard_gates": [
+    "至少 3 轮连续语音对话",
+    "首字响应 P50 <= 2000ms",
+    "至少 1 个六阶段任务闭环",
+    "无严重合规违规（辱骂歧视、虚假承诺、诱导、泄露隐私、禁用话术）"
+  ],
+  "dimensions": [
+    {
+      "id": "realtime",
+      "name": "实时语音交互",
+      "weight": 25,
+      "metrics": [
+        {"id": "p50_first_word_ms", "limit": "<=2000", "hard": true},
+        {"id": "p95_first_word_ms", "limit": "<=3000", "hard": false},
+        {"id": "barge_stop_ms", "limit": "<=100", "hard": false},
+        {"id": "vad_false_barge_rate", "limit": "<=5%", "hard": false}
+      ]
+    },
+    {
+      "id": "task",
+      "name": "任务完成",
+      "weight": 30,
+      "metrics": [
+        {"id": "task_success_rate", "limit": ">=0.80", "hard": false},
+        {"id": "slot_completeness", "limit": ">=0.80", "hard": false},
+        {"id": "multi_turn_repair_rate", "limit": ">=0.80", "hard": false}
+      ]
+    },
+    {
+      "id": "knowledge_tool",
+      "name": "业务知识与工具",
+      "weight": 20,
+      "metrics": [
+        {"id": "reason_accuracy", "limit": ">=0.85", "hard": false},
+        {"id": "remediation_accuracy", "limit": ">=0.85", "hard": false},
+        {"id": "writeback_completeness", "limit": ">=0.90", "hard": false},
+        {"id": "tool_idempotency", "limit": "100%", "hard": false}
+      ]
+    },
+    {
+      "id": "compliance",
+      "name": "合规与质检",
+      "weight": 15,
+      "metrics": [
+        {"id": "required_disclosure_rate", "limit": "100%", "hard": true},
+        {"id": "forbidden_phrase_block_rate", "limit": "100%", "hard": true},
+        {"id": "privacy_leak_count", "limit": "0", "hard": true}
+      ]
+    },
+    {
+      "id": "engineering",
+      "name": "工程与可复现",
+      "weight": 10,
+      "metrics": [
+        {"id": "one_command_start", "limit": "true", "hard": false},
+        {"id": "raw_logs_available", "limit": "true", "hard": false},
+        {"id": "rsi_before_after", "limit": "available", "hard": false}
+      ]
+    }
+  ],
+  "pass_thresholds": {
+    "total_score": 80,
+    "hard_gates": "all"
+  },
+  "score_formula": "sum(dimension.weight * normalized_metric_score)"
+}
