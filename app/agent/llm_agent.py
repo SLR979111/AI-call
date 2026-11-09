@@ -158,6 +158,13 @@ class LLMAgent:
                 continue
             
             if chunk.type == "sentence":
+                # The model is prompted to return JSON. A streaming boundary
+                # can fire inside that JSON; never send a JSON fragment to TTS.
+                # Keep the stream itself unchanged and only guard the consumer.
+                candidate = chunk.text.strip()
+                if candidate.startswith("{") or '"intent"' in candidate:
+                    accumulated_text += chunk.text + " "
+                    continue
                 # Stream sentence immediately to reduce latency
                 if not first_sentence_sent:
                     yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,

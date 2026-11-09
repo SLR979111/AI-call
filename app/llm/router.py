@@ -300,7 +300,10 @@ class LLMRouter:
                 sentence_buffer = ""
                 accumulated_text = ""
                 usage_data: dict[str, Any] = {}
-                tool_calls_data: list[dict[str, Any]] = []
+                # OpenAI streams tool calls as deltas keyed by index. Keep one
+                # accumulator per index so fragmented function.arguments are
+                # concatenated instead of overwritten by the last chunk.
+                tool_call_acc: dict[int, dict[str, Any]] = {}
                 
                 async with httpx.AsyncClient(transport=self.transport,
                                             timeout=provider.timeout_ms / 1000.0) as client:
@@ -358,7 +361,24 @@ class LLMRouter:
                             
                             # 处理 tool_calls
                             if "tool_calls" in delta:
-                                tool_calls_data = delta["tool_calls"]
+                                for position, tc in enumerate(delta["tool_calls"] or []):
+                                    index = tc.get("index", position)
+                                    if not isinstance(index, int):
+                                        index = position
+                                    item = tool_call_acc.setdefault(index, {
+                                        "id": "",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    })
+                                    if tc.get("id"):
+                                        item["id"] = tc["id"]
+                                    if tc.get("type"):
+                                        item["type"] = tc["type"]
+                                    fn = tc.get("function") or {}
+                                    if fn.get("name"):
+                                        item["function"]["name"] = fn["name"]
+                                    if fn.get("arguments"):
+                                        item["function"]["arguments"] += fn["arguments"]
                             
                             # 处理 usage（某些 provider 在最后一个 chunk 返回）
                             if "usage" in chunk_data:
@@ -378,6 +398,7 @@ class LLMRouter:
                 self.spent_cny += cost
                 self._failures = 0
                 self._open_until = 0.0
+                tool_calls_data = [tool_call_acc[i] for i in sorted(tool_call_acc)]
                 
                 # Emit tool call event
                 if tool_calls_data:

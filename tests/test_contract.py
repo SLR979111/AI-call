@@ -387,12 +387,54 @@ async def test_llm_agent_tool_path():
     session = await orc.create_session("text")
     result = await orc.handle_text(session.session_id, "帮我改一下订单", None)
     assert result["result"]["outcome"] == "rescheduled"
+    assert result["sentences"]
+    assert all('{"intent"' not in sentence for sentence in result["sentences"])
     events = bus.read_events(session.session_id)
     validate_events(events)
     types = [e["type"] for e in events]
     assert "ProviderCalled" in types
     assert "ToolCalled" in types
     assert "ToolReturned" in types
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_tool_call_arguments_accumulate():
+    """Tool-call arguments arrive in multiple deltas and must be concatenated."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert body.get("stream") is True
+        chunks = [
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call_1", "type": "function",
+                "function": {"name": "order_query", "arguments": '{"order_id":"A123'},
+            }]}}]},
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "function": {"arguments": '45678"}'},
+            }]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+             "usage": {"total_tokens": 20}},
+        ]
+        lines = "".join("data: " + json.dumps(c, ensure_ascii=False) + "\n" for c in chunks)
+        lines += "data: [DONE]\n"
+        return httpx.Response(200, content=lines.encode(), headers={"content-type": "text/event-stream"})
+
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    router = LLMRouter(
+        ProviderConfig("mock", "https://mock.test/v1", "k", "m"),
+        bus=bus, transport=httpx.MockTransport(handler),
+    )
+    agent = LLMAgent(router, ROOT / "knowledge" / "faq.json")
+    orc = Orchestrator(bus, agent, tools, ComplianceGuard(), "rel_test_001", "service_outbound")
+    session = await orc.create_session("text")
+    result = await orc.handle_text(session.session_id, "帮我查一下订单 A12345678", None)
+    events = bus.read_events(session.session_id)
+    called = [e for e in events if e["type"] == "ToolCalled"]
+    assert called, [e["type"] for e in events]
+    assert called[-1]["payload"]["args_redacted"]["order_id"] == "A12345678"
+    assert result["result"]["outcome"] != "tool_failed"
 
 
 def test_ws_tts_metadata_turn_result_and_hangup():
