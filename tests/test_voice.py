@@ -784,3 +784,12 @@ def test_real_application_asgi_voice_optional(provider, monkeypatch):
         root.relative_to(Path.cwd().resolve())
         root.mkdir(parents=True, exist_ok=True)
         (root / f"asgi-{provider}.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_fake_asr_accepts_client_endpointing():
+    """Contest mode passes client_endpointing to every ASR provider."""
+    stream = await FakeAsr().start("s_test", client_endpointing=True)
+    await stream.finish()
+    events = [event async for event in stream.events()]
+    assert events and events[0].kind == "final"

@@ -42,5 +42,8 @@ class FakeAsrStream:
 
 
 class FakeAsr:
-    async def start(self, session_id, *, sample_rate=16000, hotwords=None):
+    async def start(self, session_id, *, sample_rate=16000, hotwords=None,
+                    client_endpointing=False):
+        # Accept the contest-mode flag for API parity with SherpaAsr; the fake
+        # provider emits a single empty final and ignores endpointing entirely.
         return FakeAsrStream()
