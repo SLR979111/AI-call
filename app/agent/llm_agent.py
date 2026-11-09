@@ -123,7 +123,16 @@ class LLMAgent:
         from ..tools.gateway import ToolGateway
         available_tools = ToolGateway.to_openai_tools()
 
-        result = await self.router.complete(
+        # Use streaming response to reduce TTFT
+        sentence_id = 1
+        accumulated_text = ""
+        first_sentence_sent = False
+        decision: dict[str, Any] = {}
+        tool_calls_from_llm: list[dict[str, Any]] = []
+        llm_provider = ""
+        llm_model = ""
+        
+        async for chunk in self.router.complete_stream(
             msg_list,
             tools=available_tools,
             tool_choice="auto",
@@ -132,24 +141,50 @@ class LLMAgent:
             session_id=session_id,
             turn_id=turn_id,
             trace_id=trace_id,
-        )
+        ):
+            cancel.check()
+            
+            if chunk.type == "error":
+                # Handle LLM errors
+                yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                       "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
+                yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
+                       "slots": {}, "result": {"error": chunk.error}}
+                return
+            
+            if chunk.type == "first_token":
+                llm_provider = chunk.provider
+                llm_model = chunk.model
+                continue
+            
+            if chunk.type == "sentence":
+                # The model is prompted to return JSON. A streaming boundary
+                # can fire inside that JSON; never send a JSON fragment to TTS.
+                # Keep the stream itself unchanged and only guard the consumer.
+                candidate = chunk.text.strip()
+                if candidate.startswith("{") or '"intent"' in candidate:
+                    accumulated_text += chunk.text + " "
+                    continue
+                # Stream sentence immediately to reduce latency
+                if not first_sentence_sent:
+                    yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
+                           "text": chunk.text, "final": False}
+                    first_sentence_sent = True
+                    sentence_id += 1
+                accumulated_text += chunk.text + " "
+                continue
+            
+            if chunk.type == "done":
+                accumulated_text = chunk.text or accumulated_text.strip()
+                tool_calls_from_llm = chunk.tool_calls or []
+                llm_provider = chunk.provider
+                llm_model = chunk.model
+                break
         
         # Append user message to history
         history.append({"role": "user", "content": text})
-        cancel.check()
-        
-        # Handle LLM errors
-        if not result.ok:
-            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
-                   "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
-            yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
-                   "slots": {}, "result": {"error": result.error}}
-            return
         
         # Parse decision: prefer Function Calling, fallback to JSON mode
-        decision: dict[str, Any] = {}
-        tool_calls_from_llm = result.tool_calls or []
-        
         if tool_calls_from_llm:
             # Function Calling path: LLM returned structured tool calls
             # For simplicity, use first tool call (multi-tool support can be added later)
@@ -162,14 +197,15 @@ class LLMAgent:
             
             decision = {
                 "intent": "tool_call",
-                "reply": result.text or "我来帮您查询一下。",
+                "reply": accumulated_text or "我来帮您查询一下。",
                 "tool": tool_name,
                 "tool_args": tool_args,
                 "outcome": "tool_called"
             }
         else:
             # JSON mode fallback (for LLMs without Function Calling)
-            decision = parse_json_object(result.text) or {}
+            decision = parse_json_object(accumulated_text) or {}
+        
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
@@ -185,16 +221,17 @@ class LLMAgent:
                 if slot_name in engine.pack.slots:
                     engine.set_slot(slot_name, slot_value)
         
-        sentence_id = 1
         # Use Flow Engine's suggested utterance if available, otherwise LLM's reply
         if flow_result and flow_result.get("say"):
             reply = flow_result["say"]
         else:
             reply = str(decision.get("reply") or "好的，我明白了。")
         
-        yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
-               "text": reply, "final": decision.get("tool") is None}
-        sentence_id += 1
+        # Only send reply if we haven't sent it via streaming
+        if not first_sentence_sent:
+            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
+                   "text": reply, "final": decision.get("tool") is None}
+            sentence_id += 1
         cancel.check()
 
         tool = decision.get("tool")
@@ -222,7 +259,7 @@ class LLMAgent:
 
         outcome = str(decision.get("outcome") or ("tool_failed" if tool and not (tool_result or {}).get("ok")
                                                   else "completed"))
-        result_payload: dict[str, Any] = {"llm_provider": result.provider, "model": result.model}
+        result_payload: dict[str, Any] = {"llm_provider": llm_provider, "model": llm_model}
         if chunks:
             result_payload["citation"] = chunks[0].citation()
         
