@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -8,6 +9,7 @@ from ..cancel import CancelToken
 from ..flow.pack import FlowPack
 from ..llm.router import LLMRouter, messages, parse_json_object
 from ..rag.knowledge import KnowledgeBase
+from .reply_stream import ReplyExtractor
 
 SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象，不要 Markdown。
 字段：
@@ -53,13 +55,19 @@ class LLMAgent:
     """
 
     def __init__(self, router: LLMRouter, knowledge_path: Path | None = None,
-                 flow_pack: FlowPack | None = None, max_history_turns: int = 10) -> None:
+                 flow_pack: FlowPack | None = None, max_history_turns: int = 10,
+                 stream_mode: str | None = None) -> None:
         self.router = router
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
         self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
         self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
         self.max_history_turns = max_history_turns
+        # buffered: parse the complete JSON before speaking (safe default).
+        # reply: emit only the natural-language `reply` field from the stream.
+        self.stream_mode = (stream_mode or os.getenv("LLM_STREAM_MODE", "buffered")).strip().lower()
+        if self.stream_mode not in {"buffered", "reply"}:
+            raise ValueError("LLM_STREAM_MODE must be buffered or reply")
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
         """Initialize session with empty conversation history and Flow Engine."""
@@ -131,6 +139,8 @@ class LLMAgent:
         tool_calls_from_llm: list[dict[str, Any]] = []
         llm_provider = ""
         llm_model = ""
+        reply_extractor = ReplyExtractor() if self.stream_mode == "reply" else None
+        streamed_reply = ""
         
         async for chunk in self.router.complete_stream(
             msg_list,
@@ -157,10 +167,26 @@ class LLMAgent:
                 llm_model = chunk.model
                 continue
             
+            if chunk.type == "token":
+                # Reply mode extracts only the JSON `reply` value from tokens;
+                # raw JSON is never passed to TTS. Buffered mode keeps the
+                # existing complete-JSON validation path.
+                if reply_extractor is not None:
+                    value = reply_extractor.feed(chunk.text)
+                    if value and not first_sentence_sent:
+                        streamed_reply = value
+                        yield {"kind": "sentence", "reply_id": reply_id,
+                               "sentence_id": sentence_id, "text": value, "final": False}
+                        first_sentence_sent = True
+                        sentence_id += 1
+                continue
+
             if chunk.type == "sentence":
-                # The model is prompted to return JSON. A streaming boundary
-                # can fire inside that JSON; never send a JSON fragment to TTS.
-                # Keep the stream itself unchanged and only guard the consumer.
+                if self.stream_mode == "reply":
+                    # In reply mode token chunks are the source of truth; the
+                    # sentence chunks contain the raw JSON wrapper.
+                    continue
+                # Buffered mode: never send a partial JSON object to TTS.
                 candidate = chunk.text.strip()
                 if candidate.startswith("{") or '"intent"' in candidate:
                     accumulated_text += chunk.text + " "

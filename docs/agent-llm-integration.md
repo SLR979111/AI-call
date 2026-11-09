@@ -113,7 +113,19 @@ LLM_SECONDARY_NAME=qwen
 LLM_TIMEOUT_MS=3000
 LLM_PRICE_PER_1K_CNY=0.002
 LLM_DAILY_BUDGET_CNY=100
+
+# 流式模式：buffered（默认，完整 JSON 后说话）| reply（只流式输出 reply 字段）
+LLM_STREAM_MODE=buffered
 ```
+
+### 2.2 流式双模式
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| `buffered` | 收完整 JSON，解析 intent/slots/tool/outcome 后再发言 | 默认；工具、回电、合规场景优先 |
+| `reply` | 从 JSON token 流中只提取并下发 `reply` 自然语言字段 | 无工具/低风险问答；首次响应更快 |
+
+`reply` 模式不会把 JSON 包装或 `{"intent"...}` 发给 TTS。两种模式共用 `tool_calls` 按 index 累加和完整 JSON 校验。
 
 ### 2.2 切换 Fake/LLM Agent
 

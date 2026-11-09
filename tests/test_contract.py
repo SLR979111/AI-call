@@ -437,6 +437,47 @@ async def test_llm_stream_tool_call_arguments_accumulate():
     assert result["result"]["outcome"] != "tool_failed"
 
 
+@pytest.mark.asyncio
+async def test_llm_stream_reply_mode_only_natural_language():
+    """reply mode must emit only the reply field, never the JSON wrapper."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        content = json.dumps({
+            "intent": "faq",
+            "reply": "可以帮您改约。",
+            "slots": {},
+            "outcome": "answered",
+        }, ensure_ascii=False)
+        chunks = [
+            {"choices": [{"delta": {"content": content[:18]}}]},
+            {"choices": [{"delta": {"content": content[18:]}, "finish_reason": "stop"}],
+             "usage": {"total_tokens": 20}},
+            "[DONE]",
+        ]
+        body = "".join(
+            ("data: " + (c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)) + chr(10))
+            for c in chunks
+        )
+        return httpx.Response(200, content=body.encode(),
+                              headers={"content-type": "text/event-stream"})
+
+    data = temp_dir()
+    bus = EventBus(data, "rel_test_001", "clock-test", mode="text")
+    mock = MockBusiness()
+    tools = ToolGateway(data, mock, bus)
+    router = LLMRouter(
+        ProviderConfig("mock", "https://mock.test/v1", "k", "m"),
+        bus=bus, transport=httpx.MockTransport(handler),
+    )
+    agent = LLMAgent(router, ROOT / "knowledge" / "faq.json", stream_mode="reply")
+    orc = Orchestrator(bus, agent, tools, ComplianceGuard(), "rel_test_001", "service_outbound")
+    session = await orc.create_session("text")
+    result = await orc.handle_text(session.session_id, "帮我改一下订单", None)
+    assert result["sentences"]
+    assert all('{"intent"' not in sentence for sentence in result["sentences"])
+    assert any("可以帮您改约" in sentence for sentence in result["sentences"])
+
+
+
 def test_ws_tts_metadata_turn_result_and_hangup():
     with TestClient(app) as client:
         created = client.post("/sessions", json={"mode": "text"}).json()
