@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -8,48 +9,49 @@ from ..cancel import CancelToken
 from ..flow.pack import FlowPack
 from ..llm.router import LLMRouter, messages, parse_json_object
 from ..rag.knowledge import KnowledgeBase
+from .reply_stream import ReplyExtractor
 
-SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象，不要 Markdown。
-字段：
+SYSTEM_PROMPT = """浣犳槸鐢佃瘽澶栧懠瀹㈡湇鏁板瓧鍛樺伐銆傚彧杈撳嚭涓€涓?JSON 瀵硅薄锛屼笉瑕?Markdown銆?
+瀛楁锛?
 - intent: confirm|deny|unclear|order_query|reschedule|faq|transfer|other
-- reply: 要对用户说的一句话（首句尽量 <=20 字，口语化）
-- slots: 对象，已知的订单号/时间等
-- tool: 可选，order.query|order.reschedule|ticket.create|lead.query
-- tool_args: 对象，仅当 tool 存在
+- reply: 瑕佸鐢ㄦ埛璇寸殑涓€鍙ヨ瘽锛堥鍙ュ敖閲?<=20 瀛楋紝鍙ｈ鍖栵級
+- slots: 瀵硅薄锛屽凡鐭ョ殑璁㈠崟鍙?鏃堕棿绛?
+- tool: 鍙€夛紝order.query|order.reschedule|ticket.create|lead.query
+- tool_args: 瀵硅薄锛屼粎褰?tool 瀛樺湪
 - outcome: rescheduled|answered|transferred|completed|tool_failed
-- citation: 可选，知识来源 id
+- citation: 鍙€夛紝鐭ヨ瘑鏉ユ簮 id
 
-规则：
-- 不承诺无法保证的结果，不使用“保证/一定/绝对/百分百”。
-- 用户要求人工/投诉时，intent=transfer。
-- 信息不足时先追问，不要编造订单信息。
+瑙勫垯锛?
+- 涓嶆壙璇烘棤娉曚繚璇佺殑缁撴灉锛屼笉浣跨敤鈥滀繚璇?涓€瀹?缁濆/鐧惧垎鐧锯€濄€?
+- 鐢ㄦ埛瑕佹眰浜哄伐/鎶曡瘔鏃讹紝intent=transfer銆?
+- 淇℃伅涓嶈冻鏃跺厛杩介棶锛屼笉瑕佺紪閫犺鍗曚俊鎭€?
 """
 
-POP_SYSTEM_PROMPT = """你是京东 POP 商家资质审核驳回外呼专员。只输出一个 JSON 对象，不要 Markdown。
-字段：
+POP_SYSTEM_PROMPT = """浣犳槸浜笢 POP 鍟嗗璧勮川瀹℃牳椹冲洖澶栧懠涓撳憳銆傚彧杈撳嚭涓€涓?JSON 瀵硅薄锛屼笉瑕?Markdown銆?
+瀛楁锛?
 - intent: confirm|ask_reason|ask_action|jd_reject|callback|complaint|unclear
-- reply: 一句口语化回复（首句尽量 <=20 字）
+- reply: 涓€鍙ュ彛璇寲鍥炲锛堥鍙ュ敖閲?<=20 瀛楋級
 - slots: {request_id, brand, reject_l1, reject_l2, reject_l3, handling_mode, remediation}
-- tool: 可选，callback.create（登记回电任务）
-- tool_args: 对象，仅当 tool 存在
+- tool: 鍙€夛紝callback.create锛堢櫥璁板洖鐢典换鍔★級
+- tool_args: 瀵硅薄锛屼粎褰?tool 瀛樺湪
 - outcome: rejected|jd_rejected|callback_scheduled|transferred|completed
-- citation: 可选，知识来源 id
+- citation: 鍙€夛紝鐭ヨ瘑鏉ユ簮 id
 
-规则：
-- 先确认商家/店铺身份，再说明驳回原因和整改动作。
-- 原因必须来自知识库；不要编造三级分类或品牌信息。
-- 电话场景：说明原因、整改动作、重新提交路径；京麦驳回场景：明确站内驳回、不强制回电。
-- 商家要求回电/没听清：登记 callback.create；投诉/转人工：transfer。
-- 不承诺“补了就一定通过”；不泄露其他商家信息。
-- 单句超过 2000 字符时先概括，不要截断。
-- 若系统提供了本单业务上下文，说明原因/整改时必须使用其中的 request_id、brand、reject_l1/l2/l3，不要泛化成“具体审核项”。
+瑙勫垯锛?
+- 鍏堢‘璁ゅ晢瀹?搴楅摵韬唤锛屽啀璇存槑椹冲洖鍘熷洜鍜屾暣鏀瑰姩浣溿€?
+- 鍘熷洜蹇呴』鏉ヨ嚜鐭ヨ瘑搴擄紱涓嶈缂栭€犱笁绾у垎绫绘垨鍝佺墝淇℃伅銆?
+- 鐢佃瘽鍦烘櫙锛氳鏄庡師鍥犮€佹暣鏀瑰姩浣溿€侀噸鏂版彁浜よ矾寰勶紱浜害椹冲洖鍦烘櫙锛氭槑纭珯鍐呴┏鍥炪€佷笉寮哄埗鍥炵數銆?
+- 鍟嗗瑕佹眰鍥炵數/娌″惉娓咃細鐧昏 callback.create锛涙姇璇?杞汉宸ワ細transfer銆?
+- 涓嶆壙璇衡€滆ˉ浜嗗氨涓€瀹氶€氳繃鈥濓紱涓嶆硠闇插叾浠栧晢瀹朵俊鎭€?
+- 鍗曞彞瓒呰繃 2000 瀛楃鏃跺厛姒傛嫭锛屼笉瑕佹埅鏂€?
+- 鑻ョ郴缁熸彁渚涗簡鏈崟涓氬姟涓婁笅鏂囷紝璇存槑鍘熷洜/鏁存敼鏃跺繀椤讳娇鐢ㄥ叾涓殑 request_id銆乥rand銆乺eject_l1/l2/l3锛屼笉瑕佹硾鍖栨垚鈥滃叿浣撳鏍搁」鈥濄€?
 """
 
 
-_AFFIRMATIVE_MARKERS = ("可以", "方便", "好的", "好", "行", "没问题", "是", "对", "嗯", "负责人", "听明白", "知道")
+_AFFIRMATIVE_MARKERS = ("鍙互", "鏂逛究", "濂界殑", "濂?, "琛?, "娌￠棶棰?, "鏄?, "瀵?, "鍡?, "璐熻矗浜?, "鍚槑鐧?, "鐭ラ亾")
 _FLOW_HINTS = {
-    "IDENTITY_CONFIRM": "当前只做身份确认。用户说可以/方便/是/对/好/嗯/负责人时，intent=confirm，reply 用一句简短确认；不要再次复述驳回问题。",
-    "CONFIRM_ACTION": "用户说可以/好/对时，intent=confirm；不要重复上一句。",
+    "IDENTITY_CONFIRM": "褰撳墠鍙仛韬唤纭銆傜敤鎴疯鍙互/鏂逛究/鏄?瀵?濂?鍡?璐熻矗浜烘椂锛宨ntent=confirm锛宺eply 鐢ㄤ竴鍙ョ畝鐭‘璁わ紱涓嶈鍐嶆澶嶈堪椹冲洖闂銆?,
+    "CONFIRM_ACTION": "鐢ㄦ埛璇村彲浠?濂?瀵规椂锛宨ntent=confirm锛涗笉瑕侀噸澶嶄笂涓€鍙ャ€?,
 }
 
 
@@ -68,7 +70,8 @@ class LLMAgent:
 
     def __init__(self, router: LLMRouter, knowledge_path: Path | None = None,
                  flow_pack: FlowPack | None = None, max_history_turns: int = 10,
-                 case_context: dict[str, Any] | None = None) -> None:
+                 case_context: dict[str, Any] | None = None,
+                 stream_mode: str | None = None) -> None:
         self.router = router
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
@@ -76,6 +79,11 @@ class LLMAgent:
         self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
         self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
         self.max_history_turns = max_history_turns
+        # buffered: parse the complete JSON before speaking (safe default).
+        # reply: emit only the natural-language `reply` field from the stream.
+        self.stream_mode = (stream_mode or os.getenv("LLM_STREAM_MODE", "buffered")).strip().lower()
+        if self.stream_mode not in {"buffered", "reply"}:
+            raise ValueError("LLM_STREAM_MODE must be buffered or reply")
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
         """Initialize session with empty conversation history and Flow Engine."""
@@ -99,19 +107,19 @@ class LLMAgent:
 
         # Add flow context if available
         if flow_state:
-            context += f"\n\n当前流程状态：{flow_state}"
+            context += f"\n\n褰撳墠娴佺▼鐘舵€侊細{flow_state}"
 
         if slots:
-            context += f"\n已知信息：{json.dumps(slots, ensure_ascii=False)}"
+            context += f"\n宸茬煡淇℃伅锛歿json.dumps(slots, ensure_ascii=False)}"
 
         # Real contest context: without these fields the local LLM cannot know
         # which merchant/rejection is being discussed.
         if self.case_context:
-            context += "\n本单业务上下文：" + json.dumps(self.case_context, ensure_ascii=False)
+            context += "\n鏈崟涓氬姟涓婁笅鏂囷細" + json.dumps(self.case_context, ensure_ascii=False)
 
         if self.flow_pack:
             states = ", ".join(self.flow_pack.states.keys())
-            context += f"\n\n业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
+            context += f"\n\n涓氬姟娴佺▼鐘舵€侀泦鍚堬細{states}锛涘叆鍙ｏ細{self.flow_pack.entry}銆?
 
         return context
 
@@ -128,13 +136,13 @@ class LLMAgent:
         # Retrieve conversation history
         history = self.sessions.setdefault(session_id, [])
 
-        # A short "可以/方便/好" is a state transition, not a knowledge query.
+        # A short "鍙互/鏂逛究/濂? is a state transition, not a knowledge query.
         # Retrieving top-2 docs for it injects unrelated POP documents and makes
         # small models repeat the opening question.
         affirmative = flow_state in {"IDENTITY_CONFIRM", "CONFIRM_ACTION"} and _is_affirmative(text)
         chunks = [] if affirmative else self.knowledge.search(text, top_k=2)
         context = "\n".join(f"[{c.doc_id}] {c.title}: {c.content}" for c in chunks)
-        user_prompt = text if not context else f"用户说：{text}\n可能相关的知识：\n{context}"
+        user_prompt = text if not context else f"鐢ㄦ埛璇达細{text}\n鍙兘鐩稿叧鐨勭煡璇嗭細\n{context}"
 
         # Build messages with history
         msg_list = [{"role": "system", "content": self._system(flow_state, slots)}]
@@ -155,6 +163,8 @@ class LLMAgent:
         tool_calls_from_llm: list[dict[str, Any]] = []
         llm_provider = ""
         llm_model = ""
+        reply_extractor = ReplyExtractor() if self.stream_mode == "reply" else None
+        streamed_reply = ""
 
         async for chunk in self.router.complete_stream(
             msg_list,
@@ -171,7 +181,7 @@ class LLMAgent:
             if chunk.type == "error":
                 # Handle LLM errors
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
-                       "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
+                       "text": "鎶辨瓑锛屾垜杩欒竟鏆傛椂娌″惉娓咃紝鎮ㄥ啀璇翠竴閬嶅ソ鍚楋紵", "final": True}
                 yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
                        "slots": {}, "result": {"error": chunk.error}}
                 return
@@ -181,10 +191,26 @@ class LLMAgent:
                 llm_model = chunk.model
                 continue
 
+            if chunk.type == "token":
+                # Reply mode extracts only the JSON `reply` value from tokens;
+                # raw JSON is never passed to TTS. Buffered mode keeps the
+                # existing complete-JSON validation path.
+                if reply_extractor is not None:
+                    value = reply_extractor.feed(chunk.text)
+                    if value and not first_sentence_sent:
+                        streamed_reply = value
+                        yield {"kind": "sentence", "reply_id": reply_id,
+                               "sentence_id": sentence_id, "text": value, "final": False}
+                        first_sentence_sent = True
+                        sentence_id += 1
+                continue
+
             if chunk.type == "sentence":
-                # The model is prompted to return JSON. A streaming boundary
-                # can fire inside that JSON; never send a JSON fragment to TTS.
-                # Keep the stream itself unchanged and only guard the consumer.
+                if self.stream_mode == "reply":
+                    # In reply mode token chunks are the source of truth; the
+                    # sentence chunks contain the raw JSON wrapper.
+                    continue
+                # Buffered mode: never send a partial JSON object to TTS.
                 candidate = chunk.text.strip()
                 if candidate.startswith("{") or '"intent"' in candidate:
                     accumulated_text += chunk.text + " "
@@ -221,7 +247,7 @@ class LLMAgent:
 
             decision = {
                 "intent": "tool_call",
-                "reply": accumulated_text or "我来帮您查询一下。",
+                "reply": accumulated_text or "鎴戞潵甯偍鏌ヨ涓€涓嬨€?,
                 "tool": tool_name,
                 "tool_args": tool_args,
                 "outcome": "tool_called"
@@ -230,7 +256,7 @@ class LLMAgent:
             # JSON mode fallback (for LLMs without Function Calling)
             decision = parse_json_object(accumulated_text) or {}
 
-        # Small local models often label "可以" as unclear even when the flow
+        # Small local models often label "鍙互" as unclear even when the flow
         # state is explicitly waiting for confirmation. Keep the state machine
         # authoritative and prevent the same opening question from repeating.
         if affirmative:
@@ -238,14 +264,14 @@ class LLMAgent:
             current_reply = str(decision.get("reply", ""))
             ctx = self.case_context
             if flow_state == "IDENTITY_CONFIRM" and ctx.get("request_id") and ctx.get("reject_l3"):
-                # Use the real case instead of a context-free "好的，感谢确认".
+                # Use the real case instead of a context-free "濂界殑锛屾劅璋㈢‘璁?.
                 decision["reply"] = (
-                    f"好的，{ctx.get('brand', '您')}的申请单{ctx['request_id']}，"
-                    f"驳回在{ctx.get('reject_l1', '')}/{ctx.get('reject_l2', '')}，"
-                    f"原因是{ctx['reject_l3']}。需要按驳回意见补充或修正材料后重新提交。"
+                    f"濂界殑锛寋ctx.get('brand', '鎮?)}鐨勭敵璇峰崟{ctx['request_id']}锛?
+                    f"椹冲洖鍦▄ctx.get('reject_l1', '')}/{ctx.get('reject_l2', '')}锛?
+                    f"鍘熷洜鏄瘂ctx['reject_l3']}銆傞渶瑕佹寜椹冲洖鎰忚琛ュ厖鎴栦慨姝ｆ潗鏂欏悗閲嶆柊鎻愪氦銆?
                 )
-            elif not current_reply or "想跟您确认" in current_reply or "方便现在说明" in current_reply:
-                decision["reply"] = "好的，感谢确认。"
+            elif not current_reply or "鎯宠窡鎮ㄧ‘璁? in current_reply or "鏂逛究鐜板湪璇存槑" in current_reply:
+                decision["reply"] = "濂界殑锛屾劅璋㈢‘璁ゃ€?
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
@@ -263,11 +289,11 @@ class LLMAgent:
 
         # With a real case context, the LLM's reply carries the concrete
         # request/brand/rejection details. Do not overwrite it with the flow
-        # pack's generic "具体审核项" sentence.
+        # pack's generic "鍏蜂綋瀹℃牳椤? sentence.
         if flow_result and flow_result.get("say") and not self.case_context:
             reply = flow_result["say"]
         else:
-            reply = str(decision.get("reply") or (flow_result or {}).get("say") or "好的，我明白了。")
+            reply = str(decision.get("reply") or (flow_result or {}).get("say") or "濂界殑锛屾垜鏄庣櫧浜嗐€?)
 
         # Only send reply if we haven't sent it via streaming
         if not first_sentence_sent:
@@ -286,13 +312,13 @@ class LLMAgent:
             cancel.check()
             if tool_result.get("ok"):
                 data = tool_result.get("data") or {}
-                summary = str(data.get("message") or data.get("ticket_id") or "已经为您处理好了。")
+                summary = str(data.get("message") or data.get("ticket_id") or "宸茬粡涓烘偍澶勭悊濂戒簡銆?)
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
                        "text": summary, "final": True}
                 sentence_id += 1
             else:
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
-                       "text": "抱歉，业务系统暂时没有响应，我先帮您登记，稍后人工跟进。",
+                       "text": "鎶辨瓑锛屼笟鍔＄郴缁熸殏鏃舵病鏈夊搷搴旓紝鎴戝厛甯偍鐧昏锛岀◢鍚庝汉宸ヨ窡杩涖€?,
                        "final": True}
                 sentence_id += 1
                 await tools.invoke("ticket.create",

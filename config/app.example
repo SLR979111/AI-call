@@ -19,6 +19,11 @@ POP_CONTEST_CONTEXT={"request_id":"Q983001","brand":"演示品牌","reject_l1":"
 # ---------------------------------------------------------------------------
 AGENT_PROVIDER=fake
 
+# LLM streaming mode:
+# buffered = parse complete JSON before speaking (safe default)
+# reply    = stream only the natural-language reply field
+LLM_STREAM_MODE=buffered
+
 # Primary LLM Provider (required when AGENT_PROVIDER=llm)
 LLM_PRIMARY_BASE_URL=https://api.deepseek.com/v1
 LLM_PRIMARY_API_KEY=
