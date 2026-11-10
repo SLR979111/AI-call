@@ -161,7 +161,18 @@ async def lifespan(app: FastAPI):
     )
     if os.getenv("AGENT_PROVIDER", "fake").strip().lower() == "llm":
         from .agent.llm_agent import LLMAgent
-        agent: Any = LLMAgent(llm, knowledge_path, flowpack)
+        # 8084/LLM experiment path: inject the real POP case context instead of
+        # making the model guess from the knowledge base.
+        case_context: dict[str, Any] = {}
+        raw_context = os.getenv("POP_CONTEST_CONTEXT", "").strip()
+        if raw_context:
+            try:
+                parsed = json.loads(raw_context)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("POP_CONTEST_CONTEXT must be a JSON object") from exc
+            if isinstance(parsed, dict):
+                case_context = parsed
+        agent: Any = LLMAgent(llm, knowledge_path, flowpack, case_context=case_context)
     elif settings.scenario_id == "pop_qualification_audit":
         agent = PopAuditAgent(knowledge_path)
     else:

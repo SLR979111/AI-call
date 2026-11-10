@@ -42,7 +42,21 @@ POP_SYSTEM_PROMPT = """你是京东 POP 商家资质审核驳回外呼专员。�
 - 商家要求回电/没听清：登记 callback.create；投诉/转人工：transfer。
 - 不承诺“补了就一定通过”；不泄露其他商家信息。
 - 单句超过 2000 字符时先概括，不要截断。
+- 若系统提供了本单业务上下文，说明原因/整改时必须使用其中的 request_id、brand、reject_l1/l2/l3，不要泛化成“具体审核项”。
 """
+
+
+_AFFIRMATIVE_MARKERS = ("可以", "方便", "好的", "好", "行", "没问题", "是", "对", "嗯", "负责人", "听明白", "知道")
+_FLOW_HINTS = {
+    "IDENTITY_CONFIRM": "当前只做身份确认。用户说可以/方便/是/对/好/嗯/负责人时，intent=confirm，reply 用一句简短确认；不要再次复述驳回问题。",
+    "CONFIRM_ACTION": "用户说可以/好/对时，intent=confirm；不要重复上一句。",
+}
+
+
+def _is_affirmative(text: str) -> bool:
+    """Short affirmative replies must not be sent through unrelated RAG."""
+    clean = text.strip()
+    return len(clean) <= 16 and any(marker in clean for marker in _AFFIRMATIVE_MARKERS)
 
 
 class LLMAgent:
@@ -53,10 +67,12 @@ class LLMAgent:
     """
 
     def __init__(self, router: LLMRouter, knowledge_path: Path | None = None,
-                 flow_pack: FlowPack | None = None, max_history_turns: int = 10) -> None:
+                 flow_pack: FlowPack | None = None, max_history_turns: int = 10,
+                 case_context: dict[str, Any] | None = None) -> None:
         self.router = router
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
+        self.case_context = dict(case_context or {})
         self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
         self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
         self.max_history_turns = max_history_turns
@@ -64,34 +80,39 @@ class LLMAgent:
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
         """Initialize session with empty conversation history and Flow Engine."""
         self.sessions[session_id] = []
-        
+
         # Initialize Flow Engine if flow_pack is provided
         if flow_pack and self.flow_pack:
             from ..flow.pack import FlowEngine
             self.flow_engines[session_id] = FlowEngine(self.flow_pack)
             self.flow_engines[session_id].start()
-        
+
         return None
 
     def _system(self, flow_state: str = "", slots: dict[str, Any] | None = None) -> str:
         """Build system prompt with context."""
         if not slots:
             slots = {}
-        
+
         # Base prompt: choose the scenario-specific contract.
         context = POP_SYSTEM_PROMPT if (self.flow_pack and self.flow_pack.id == "pop_qualification_audit") else SYSTEM_PROMPT
-        
+
         # Add flow context if available
         if flow_state:
             context += f"\n\n当前流程状态：{flow_state}"
-        
+
         if slots:
             context += f"\n已知信息：{json.dumps(slots, ensure_ascii=False)}"
-        
+
+        # Real contest context: without these fields the local LLM cannot know
+        # which merchant/rejection is being discussed.
+        if self.case_context:
+            context += "\n本单业务上下文：" + json.dumps(self.case_context, ensure_ascii=False)
+
         if self.flow_pack:
             states = ", ".join(self.flow_pack.states.keys())
             context += f"\n\n业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
-        
+
         return context
 
     async def handle(self, req: dict[str, Any], cancel: CancelToken,
@@ -103,22 +124,25 @@ class LLMAgent:
         session_id = req.get("session_id", "s_dev")
         flow_state = str(req.get("flow_state", ""))
         slots = req.get("slots", {})
-        
+
         # Retrieve conversation history
         history = self.sessions.setdefault(session_id, [])
-        
-        # RAG knowledge retrieval
-        chunks = self.knowledge.search(text, top_k=2)
+
+        # A short "可以/方便/好" is a state transition, not a knowledge query.
+        # Retrieving top-2 docs for it injects unrelated POP documents and makes
+        # small models repeat the opening question.
+        affirmative = flow_state in {"IDENTITY_CONFIRM", "CONFIRM_ACTION"} and _is_affirmative(text)
+        chunks = [] if affirmative else self.knowledge.search(text, top_k=2)
         context = "\n".join(f"[{c.doc_id}] {c.title}: {c.content}" for c in chunks)
         user_prompt = text if not context else f"用户说：{text}\n可能相关的知识：\n{context}"
-        
+
         # Build messages with history
         msg_list = [{"role": "system", "content": self._system(flow_state, slots)}]
         # Keep only recent history (last N turns = 2N messages)
         recent_history = history[-(self.max_history_turns * 2):]
         msg_list.extend(recent_history)
         msg_list.append({"role": "user", "content": user_prompt})
-        
+
         # Get available tools for Function Calling
         from ..tools.gateway import ToolGateway
         available_tools = ToolGateway.to_openai_tools()
@@ -131,7 +155,7 @@ class LLMAgent:
         tool_calls_from_llm: list[dict[str, Any]] = []
         llm_provider = ""
         llm_model = ""
-        
+
         async for chunk in self.router.complete_stream(
             msg_list,
             tools=available_tools,
@@ -143,7 +167,7 @@ class LLMAgent:
             trace_id=trace_id,
         ):
             cancel.check()
-            
+
             if chunk.type == "error":
                 # Handle LLM errors
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
@@ -151,12 +175,12 @@ class LLMAgent:
                 yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
                        "slots": {}, "result": {"error": chunk.error}}
                 return
-            
+
             if chunk.type == "first_token":
                 llm_provider = chunk.provider
                 llm_model = chunk.model
                 continue
-            
+
             if chunk.type == "sentence":
                 # The model is prompted to return JSON. A streaming boundary
                 # can fire inside that JSON; never send a JSON fragment to TTS.
@@ -173,17 +197,17 @@ class LLMAgent:
                     sentence_id += 1
                 accumulated_text += chunk.text + " "
                 continue
-            
+
             if chunk.type == "done":
                 accumulated_text = chunk.text or accumulated_text.strip()
                 tool_calls_from_llm = chunk.tool_calls or []
                 llm_provider = chunk.provider
                 llm_model = chunk.model
                 break
-        
+
         # Append user message to history
         history.append({"role": "user", "content": text})
-        
+
         # Parse decision: prefer Function Calling, fallback to JSON mode
         if tool_calls_from_llm:
             # Function Calling path: LLM returned structured tool calls
@@ -194,7 +218,7 @@ class LLMAgent:
                 tool_args = json.loads(first_call["function"]["arguments"])
             except (TypeError, ValueError):
                 tool_args = {}
-            
+
             decision = {
                 "intent": "tool_call",
                 "reply": accumulated_text or "我来帮您查询一下。",
@@ -205,7 +229,23 @@ class LLMAgent:
         else:
             # JSON mode fallback (for LLMs without Function Calling)
             decision = parse_json_object(accumulated_text) or {}
-        
+
+        # Small local models often label "可以" as unclear even when the flow
+        # state is explicitly waiting for confirmation. Keep the state machine
+        # authoritative and prevent the same opening question from repeating.
+        if affirmative:
+            decision["intent"] = "confirm"
+            current_reply = str(decision.get("reply", ""))
+            ctx = self.case_context
+            if flow_state == "IDENTITY_CONFIRM" and ctx.get("request_id") and ctx.get("reject_l3"):
+                # Use the real case instead of a context-free "好的，感谢确认".
+                decision["reply"] = (
+                    f"好的，{ctx.get('brand', '您')}的申请单{ctx['request_id']}，"
+                    f"驳回在{ctx.get('reject_l1', '')}/{ctx.get('reject_l2', '')}，"
+                    f"原因是{ctx['reject_l3']}。需要按驳回意见补充或修正材料后重新提交。"
+                )
+            elif not current_reply or "想跟您确认" in current_reply or "方便现在说明" in current_reply:
+                decision["reply"] = "好的，感谢确认。"
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
@@ -220,13 +260,15 @@ class LLMAgent:
             for slot_name, slot_value in decision.get("slots", {}).items():
                 if slot_name in engine.pack.slots:
                     engine.set_slot(slot_name, slot_value)
-        
-        # Use Flow Engine's suggested utterance if available, otherwise LLM's reply
-        if flow_result and flow_result.get("say"):
+
+        # With a real case context, the LLM's reply carries the concrete
+        # request/brand/rejection details. Do not overwrite it with the flow
+        # pack's generic "具体审核项" sentence.
+        if flow_result and flow_result.get("say") and not self.case_context:
             reply = flow_result["say"]
         else:
-            reply = str(decision.get("reply") or "好的，我明白了。")
-        
+            reply = str(decision.get("reply") or (flow_result or {}).get("say") or "好的，我明白了。")
+
         # Only send reply if we haven't sent it via streaming
         if not first_sentence_sent:
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
@@ -262,21 +304,21 @@ class LLMAgent:
         result_payload: dict[str, Any] = {"llm_provider": llm_provider, "model": llm_model}
         if chunks:
             result_payload["citation"] = chunks[0].citation()
-        
+
         # Include Flow Engine state in result
         if engine:
             result_payload["flow_snapshot"] = engine.snapshot()
-        
+
         # Append assistant reply to history
         assistant_reply = decision.get("reply", "")
         if tool_result and tool_result.get("ok"):
             data = tool_result.get("data") or {}
             assistant_reply += " " + str(data.get("message") or data.get("ticket_id") or "")
         history.append({"role": "assistant", "content": assistant_reply})
-        
+
         # Trim history to max turns
         if len(history) > self.max_history_turns * 2:
             self.sessions[session_id] = history[-(self.max_history_turns * 2):]
-        
+
         yield {"kind": "end", "reply_id": reply_id, "outcome": outcome,
                "slots": decision.get("slots") or {}, "result": result_payload}

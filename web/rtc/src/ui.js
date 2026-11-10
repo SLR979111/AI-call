@@ -106,6 +106,11 @@ function render(s) {
     box.scrollTop = box.scrollHeight;
   }
 
+  // 最新自主回复：只展示最后一条已完成的 agent 文本
+  const latest = [...s.lines].reverse().find((l) => l.who === 'agent' && l.text && l.final);
+  const latestEl = $('latestReply');
+  if (latestEl) latestEl.textContent = latest ? latest.text : (s.phase === 'connected' ? '等待数字员工回复…' : '等待通话…');
+
   // 估算标记（C6：tts_alignment=false 时游标是估算，必须显式标注）
   const anyEst = Object.values(s.replies || {}).some((r) => r.estimated);
   $('estimateBadge').textContent = anyEst ? '（游标：估算，tts_alignment=false）' : '';

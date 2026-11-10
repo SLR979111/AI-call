@@ -50,6 +50,13 @@
   .kv b{color:var(--fg);font-weight:500}
   #log{height:150px;overflow:auto;font:11.5px/1.5 ui-monospace,Consolas,monospace;color:var(--dim);
     background:#0b0e12;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap}
+  #backendEvents{height:180px;overflow:auto;font:11px/1.45 ui-monospace,Consolas,monospace;color:var(--dim);
+    background:#0b0e12;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;margin-top:6px}
+  .latest{background:linear-gradient(145deg,#152232,#111820);border:1px solid #2b4a68;border-radius:10px;
+    padding:12px 14px;margin-bottom:10px}
+  .latest .label{font-size:11px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
+  #latestReply{font-size:17px;line-height:1.55;margin-top:5px;min-height:1.5em;color:#e6edf3}
+  .backend{font-size:12px;color:var(--dim)}
   .meter{height:6px;background:#0b0e12;border-radius:3px;overflow:hidden;margin-top:6px}
   .meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .06s linear}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -74,6 +81,10 @@
 <main>
   <section>
     <h2>实时字幕 <span class="hint" id="estimateBadge"></span></h2>
+    <div class="latest">
+      <div class="label">最新自主回复 / 数字员工</div>
+      <div id="latestReply">等待通话…</div>
+    </div>
     <div id="transcript"></div>
   </section>
 
@@ -94,6 +105,17 @@
     <section>
       <h2>结果</h2>
       <div id="result"><span class="hint">未回写</span></div>
+    </section>
+    <section>
+      <h2>后端实时</h2>
+      <div class="kv"><span>APP_BASE</span><b id="backendBase">—</b></div>
+      <div class="kv"><span>session</span><b id="backendSession">—</b></div>
+      <div class="kv"><span>turn / state</span><b id="backendTurn">—</b></div>
+      <div class="kv"><span>flow</span><b id="backendFlow">—</b></div>
+      <div class="kv"><span>ASR / TTS</span><b id="backendVoice">—</b></div>
+      <div class="kv"><span>event count</span><b id="backendEventCount">0</b></div>
+      <div class="kv"><span>last event</span><b id="backendLastEvent">—</b></div>
+      <pre id="backendEvents">等待服务端事件…</pre>
     </section>
     <section>
       <h2>调试</h2>

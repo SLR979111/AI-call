@@ -19,12 +19,30 @@ uvicorn app.main:app --reload --port 8081
 
 | 地址 | 用途 |
 |---|---|
-| <http://localhost:8081/> | 旧版最小 Demo（文本输入 + 浏览器 TTS） |
-| <http://localhost:8081/rtc/> | cx 新通话台（麦克风/文件回灌，零依赖 ESM） |
-| <http://localhost:8081/healthz> | 健康检查 |
-| <http://localhost:8081/docs> | OpenAPI |
+| <http://localhost:8081/> | 开发主应用：旧版最小 Demo（文本输入 + 浏览器 TTS） |
+| <http://localhost:8081/rtc/> | 开发主应用：cx 新通话台（麦克风/文件回灌，零依赖 ESM） |
+| <http://localhost:8081/healthz> | 开发主应用健康检查 |
+| <http://localhost:8091/rtc/> | **比赛演示入口**：`scripts/serve_pop_contest.py`，POP 场景/音频预热 |
+| <http://localhost:8091/healthz> | 比赛入口健康检查 |
 
 `/rtc/` 接真后端时默认同源，直接开即可；页面与后端不同源时才加 `?app=http://HOST:PORT`。无麦克风用页面上的“无麦回放”。
+
+### 比赛入口 8091
+
+`scripts/serve_pop_contest.py` 默认端口是 **8091**，不是 8081。典型启动：
+
+```powershell
+python scripts/serve_pop_contest.py `
+  --asr-model models/asr `
+  --tts-model models/melo `
+  --output data/contest-run `
+  --port 8091
+```
+
+8081 用于开发/主应用联调；8091 用于比赛演示。两者可同时启动，不要混用端口。
+
+**8091 必须用同源 API**：不要给 8091 页面加 `?app=http://127.0.0.1:8081`。
+如果页面右侧 `APP_BASE` 显示 `query 覆盖`，说明请求被显式改到了 8081，看到的就不是 8091 的会话。8091 默认 `APP_BASE=location.origin`，应显示 `same-origin`。
 
 ## 2. 常用 Make 目标
 

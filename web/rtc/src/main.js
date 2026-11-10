@@ -36,6 +36,9 @@ let contestEndpointing = false;
 const playbackPreRoll = [];
 /** @type {{pcm:Int16Array, frameSeq:number, monoMs:number, energyDb:number}[]} */
 const listeningPreRoll = [];
+let backendSince = 0;
+let backendCount = 0;
+let backendTimer = 0;
 
 ui = initUi({
   initialSource: !cfg.ENABLE_MIC || cfg.UPLINK_MODE === 'file' ? 'file' : 'mic',
@@ -87,6 +90,71 @@ async function startCall(source) {
   await contestConfig;
   await client.startCall(ui.selectedCase());
   showConnected();
+  startBackendProbe();
+}
+
+function stopBackendProbe() {
+  if (backendTimer) clearInterval(backendTimer);
+  backendTimer = 0;
+}
+
+function startBackendProbe() {
+  stopBackendProbe();
+  backendSince = 0;
+  backendCount = 0;
+  const sid = store.get().sessionId;
+  if (!sid) return;
+  const byId = (id) => document.getElementById(id);
+  if (byId('backendBase')) {
+    const src = cfg.APP_BASE_SOURCE === 'query' ? 'query 覆盖' : 'same-origin';
+    byId('backendBase').textContent = `${cfg.APP_BASE} · ${src}`;
+  }
+  if (byId('backendSession')) byId('backendSession').textContent = sid;
+  if (byId('backendEvents')) byId('backendEvents').textContent = '等待服务端事件…';
+  if (byId('backendEventCount')) byId('backendEventCount').textContent = '0';
+  if (byId('backendLastEvent')) byId('backendLastEvent').textContent = '—';
+  fetch(`${cfg.APP_BASE}/voice/status`).then((r) => r.json()).then((d) => {
+    const el = byId('backendVoice');
+    if (el) el.textContent = `${d.asr?.provider || '—'} / ${d.tts?.provider || '—'}`;
+  }).catch(() => {});
+  backendTimer = window.setInterval(pollBackend, 700);
+  void pollBackend();
+}
+
+async function pollBackend() {
+  const sid = store.get().sessionId;
+  if (!sid) return;
+  try {
+    const res = await fetch(`${cfg.APP_BASE}/sessions/${sid}/events?since_seq=${backendSince}`);
+    if (!res.ok) return;
+    const text = await res.text();
+    const lines = text.split('\n').filter(Boolean);
+    const events = [];
+    for (const line of lines) {
+      try { events.push(JSON.parse(line)); } catch { /* ignore partial */ }
+    }
+    if (!events.length) return;
+    const byId = (id) => document.getElementById(id);
+    const box = byId('backendEvents');
+    const old = box ? box.textContent.split('\n').filter(Boolean) : [];
+    for (const e of events) {
+      if (e.seq != null) backendSince = Math.max(backendSince, Number(e.seq));
+      const p = e.payload || {};
+      const detail = p.text || p.state || p.tool || p.decision || p.outcome || '';
+      old.push(`${e.seq ?? '?'} ${e.type}${detail ? ' · ' + String(detail).slice(0, 90) : ''}`);
+    }
+    backendCount += events.length;
+    if (box) {
+      box.textContent = old.slice(-80).join('\n');
+      box.scrollTop = box.scrollHeight;
+    }
+    if (byId('backendEventCount')) byId('backendEventCount').textContent = String(backendCount);
+    const last = events[events.length - 1];
+    if (byId('backendLastEvent')) byId('backendLastEvent').textContent = last?.type || '—';
+    const s = store.get();
+    if (byId('backendTurn')) byId('backendTurn').textContent = `${s.turnId || '—'} / ${s.turnState || '—'}`;
+    if (byId('backendFlow')) byId('backendFlow').textContent = s.flowState || '—';
+  } catch { /* transient */ }
 }
 
 function showConnected() {
@@ -124,6 +192,7 @@ async function startDemoUplink(source) {
 }
 
 function hangup() {
+  stopBackendProbe();
   fileUplink.stop();
   playback.stopNow();
   engine.stopCapture();
@@ -307,6 +376,7 @@ client.addEventListener('server-error', (ev) => {
 });
 
 client.addEventListener('ended', (ev) => {
+  stopBackendProbe();
   fileUplink.stop();
   playback.stopNow();
   engine.stopCapture();
@@ -315,6 +385,7 @@ client.addEventListener('ended', (ev) => {
 });
 
 client.addEventListener('expired', () => {
+  stopBackendProbe();
   playback.stopNow();
   ui.setConnected(false);
   ui.status('会话过期，请重新开始', 'err');

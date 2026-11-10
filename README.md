@@ -17,6 +17,74 @@ Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联�
 
 ---
 
+## 0. 当前四个入口（先看这里）
+
+| 入口 | 定位 | 当前链路 | 状态 |
+|---|---|---|---|
+| **8081** | 主开发 / 稳定级联 | 真实 sherpa ASR → 规则 Agent → Melo TTS | 可演示；规则回复 |
+| **8091** | 比赛入口 | `serve_pop_contest.py`，POP 六阶段 + Resilient 规则 | 可演示；不调用 LLM |
+| **8084** | LLM Agent 实验 | sherpa → `LLMAgent` + Qwen3-4B → Melo | 可对话；5–14s，未达实时 |
+| **8096** | 伪双工 Mock Lab | `MockDuplexProvider` 事件协议，无真实音频 | 协议实验；独立分支 |
+
+### 当前链路
+
+```text
+浏览器麦克风
+  → WebSocket ws_pcm 16k
+  → sherpa ASR
+  → Orchestrator（turn / cancel / timeout）
+  → Agent
+      ├─ 规则：PopCompetitionAgent（81/91）
+      └─ LLM：LLMAgent + Qwen3-4B（84）
+  → Compliance / ToolGateway
+  → Melo CPU TTS
+  → PCM 下行 → 浏览器播放
+```
+
+**81/91/84 都是半双工级联，不是真双工。**
+当前不是 LiveKit/WebRTC，也没有真实双工模型；`/rtc` 仍是“用户说完 → ASR → Agent → TTS”。
+
+### LiveKit 归谁 / 现在缺它做不了什么
+
+| 项 | 负责人 |
+|---|---|
+| LiveKit Server、媒体服务、TURN/AEC 接入 | **天命**（按 [docs/03](docs/03-interface-contract-v0.1.md) 的媒体服务职责） |
+| LiveKit 客户端 SDK、前端入房、客户端 VAD/播放埋点 | **cx** |
+| 服务端业务/Agent/ASR/TTS | 不由 cx 负责服务端媒体 |
+
+当前 LiveKit **未配置、未启动**，`aiortc` 也未安装。没有它：
+
+- 能做：本地 `ws_pcm` 级联、真实 sherpa/Melo、三轮 POP 流程、事件面板；
+- 不能做：正式 WebRTC 媒体面、TURN/NAT 穿透、浏览器 AEC/回声验收、真实网络抖动下的打断；
+- 不能宣称“真双工”或“比赛 WebRTC 已完成”；
+- 不能把 8096 的 Mock 当成 LiveKit 替代品。
+
+### 路线划分（A/B 保留，C 为实验）
+
+```text
+A. 稳定级联：81 主开发 / 91 比赛；真实语音 + 规则 Agent
+B. 伪双工实验：8096 + feature/duplex-adapter；只有 Mock 事件协议
+C. LLM 实验：84；Agent 接入，不是双工
+```
+
+**默认走 A，B 仅作备选，C 仅作实验。**
+81/91 不默认启用伪双工，`DUPLEX_PROVIDER=off`；8096 需要手动启动；A/B 不合并，84 不是双工。
+
+### 当前任务
+
+1. **AI 接入**：84 已注入真实 `request_id/brand/reject_l1/l2/l3`，确认词和复读已修；
+2. **回复速度**：当前 5–14 秒，目标 P50 ≤2 秒，未完成；
+3. **双路线**：81/91 稳定级联保留，8096 伪双工独立保留；
+4. **许可证**：ASR 权重、Melo 数据授权、NVIDIA/LGPL/GCC 等按 [docs/20](docs/20-license-checklist.md) 推进。
+
+启动与实验说明：
+
+- 81/91 见 [§9 启动](#9-启动)
+- 84 见 [docs/22](docs/22-ai-integration-status.md)
+- 8096 属 `feature/duplex-adapter` 本地 worktree，不在 81/91 主链路
+
+---
+
 ## 1. 架构图
 
 ```mermaid
@@ -277,7 +345,7 @@ flowchart TB
 | M1 接入 | HTTP/WS、静态页、`/rtc`、`ws_url` 带 token、503 降级 | ✅ Fake 路径 |
 | M2 语音 | sherpa 流式 ASR、Qwen3/Melo、真实 PCM、分组/时长/取消 | ✅ 开发环境已验证；目标容器待验收 |
 | M3 编排 | Session/Turn、取消、超时、打断、`turn_aborted` | ✅ |
-| M4 Agent | FakeAgent、PopAuditAgent、LLMAgent（Mock 验证）、RAG、Flow Pack | ✅ 代码；🟡 真实 Key |
+| M4 Agent | FakeAgent、PopAuditAgent、LLMAgent（Qwen3-4B 本地实验、上下文/Function Calling/RAG）、Flow Pack | ✅ 代码；🟡 真实 Key/速度 |
 | M5 Tool Gateway | Schema、幂等、超时、1 次重试、审计、`callback.create` | ✅ |
 | M6 合规 | 禁语 REWRITE、隐私 BLOCK、转人工、事件 | ✅ 规则待外置 |
 | M7 事件 | JSONL + SQLite、`seq`、`TurnLatency t0..t9`、回放 | ✅ |
@@ -289,6 +357,8 @@ flowchart TB
 | 测试 | 原契约测试 + provider/ASR/TTS/取消测试、4 组前端 | 见 [生产语音指南](docs/guides/production-voice.md) |
 
 ## 5. 最近一次更新
+
+**2026-11-10：四个入口与 84 LLM 实验**。新增 84 `LLMAgent` 真实 POP 上下文注入、确认词/复读修复、短确认跳过无关 RAG；8084 可完成“可以 → 说明具体驳回项”的上下文对话。当前 84 仍为 5–14 秒/轮，未达可用速度。前端新增最新自主回复与后端事件面板；8091 比赛入口、8096 伪双工 Mock 分别保留。
 
 **2026-11-07：本地 CPU 真语音链路**。sherpa ASR + Melo CPU TTS 在 Python 3.11 / ONNX Runtime 1.28 下跑通；新增 `app/voice/ort_runtime.py` 预加载本地 ORT，避免 Windows System32 旧 DLL；新增 `scripts/run_local_voice.ps1`。模型与 `.web311`/`.venv311` 均不提交仓库。
 
@@ -321,6 +391,9 @@ flowchart TB
 | 语音 | 授权产品音色、目标 GPU 容器、噪声 ASR/麦克风验收、分组句内精确对齐 | SinCircle | 真机说一句 → 声学首字 P50 有数 |
 | 媒体 | LiveKit Server、前端入房、TURN、AEC/打断 | cx / SinCircle | `/rtc/` 真 WebRTC 通话 |
 | Agent | 真实 LLM Key、Function Calling、场景 Prompt、多轮改写 | pseudonym | 真实任务成功率 |
+| 84 AI 接入 | 84 上下文/确认链路验证；回复速度从 5–14s 降到 P50 ≤2s | pseudonym + 天命 | 84 三轮真机；时延有数 |
+| 双路线 | A 稳定级联（81/91）保持；B 伪双工（8096/Mock）独立保留，不合并 | 天命 | A 可交付，B 不阻断 A |
+| 许可证 | ASR 权重、Melo 数据授权、NVIDIA/LGPL/GCC、依赖锁 | 天命/SinCircle | 见 docs/20 P0 |
 | 业务 | 官方 POP 场景已落地；真实资质系统/工单写回、更多二级分类覆盖 | pseudonym | 真实单据写回 + 场景覆盖 |
 | 合规 | 规则外置 `rules.yaml`、质检报告、红队用例 | pseudonym | 严重违规 0 |
 | 评测 | 30/20/20 用例、LLM-as-Judge、模拟用户、留出集 | 湖中日月 | 可复现评测报告 |
@@ -328,7 +401,7 @@ flowchart TB
 | 交付 | 主办方干净机、模型/端口/离线验证 | 天命 | 一键启动 + 健康 |
 | 提交 | 真机数据、测试音频、5min 视频、3/7min 答辩 | 全员 | 提交包完整 |
 
-优先顺序：**LLM Key → 真实业务写回 → 评测/RSI → 交付/提交物**。
+优先顺序：**84 AI 接入+速度 → 许可证 P0 → 真实业务写回 → 评测/RSI → 交付/提交物**；双路线 A/B 并行保留，不互相阻塞。
 
 ## 7. 当前测试
 
@@ -482,9 +555,12 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 打开：
 
 - 旧 Demo：<http://127.0.0.1:8081/>
-- 新通话台：<http://127.0.0.1:8081/rtc/>
-- 健康检查：<http://127.0.0.1:8081/healthz>
-- 语音 readiness：<http://127.0.0.1:8081/voice/status>
+- 开发通话台：<http://127.0.0.1:8081/rtc/>
+- 开发健康检查：<http://127.0.0.1:8081/healthz>
+- 开发语音 readiness：<http://127.0.0.1:8081/voice/status>
+- **比赛入口：<http://127.0.0.1:8091/rtc/>**（`scripts/serve_pop_contest.py` 默认端口）
+- LLM 实验：<http://127.0.0.1:8084/rtc/>（Qwen3-4B，慢，实验用）
+- 伪双工 Mock：<http://127.0.0.1:8096/>（独立分支，无真实音频）
 
 本地 venv、配置项、接口表、Docker 镜像/代理排障见 [开发指南](docs/guides/development.md)。
 
@@ -499,6 +575,10 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 | [docs/12](docs/12-technical-proposal-draft.md) | 技术方案书初稿 |
 | [docs/16](docs/16-pop-audit-scenario.md) | POP 资质审核驳回外呼场景与数据映射 |
 | [docs/17](docs/17-competition-selfcheck.md) | 官方资料缺口、自建 Mock/评测/时延/合规基线 |
+| [docs/20](docs/20-license-checklist.md) | 许可证缺口、责任人和交付前清单 |
+| [docs/21](docs/21-license-milestone.md) | 许可证合规 milestone 与 issue 清单 |
+| [docs/22](docs/22-ai-integration-status.md) | 84 Agent 接入调试、速度目标、双路线 |
+| [licenses/README.md](licenses/README.md) | 第三方许可证原文与 NVIDIA/LGPL/GCC 声明 |
 | [docs/guides/development.md](docs/guides/development.md) | 开发、配置、接口、Docker |
 | [docs/guides/testing.md](docs/guides/testing.md) | 测试分层、指标点、分段执行 |
 | [web/rtc/README.md](web/rtc/README.md) | 新通话台使用说明 |
