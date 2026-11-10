@@ -1,7 +1,7 @@
 # 23 · LiveKit 接入
 
 > 目标：用 LiveKit 替换当前 `ws_pcm` 媒体面。
-> 当前状态：Server / Token / 浏览器入房已完成；**ASR/Agent/TTS 音频桥未接**。
+> 当前状态：Server / Token / 浏览器入房 / 服务端 Orchestrator 音频桥已完成；主通话台尚未切换。
 
 ## 1. 已启动
 
@@ -60,32 +60,47 @@ POST /sessions
 
 页面显示 Room、Local participant、Participants、Remote audio。
 
-## 4. 服务端媒体桥（MVP）
+## 4. 服务端媒体桥
 
 已新增：
 
 ```text
-scripts/livekit_bridge.py       # 入房、订阅麦克风、sherpa ASR、Melo TTS 回推
+scripts/livekit_bridge.py       # 入房、订阅麦克风、sherpa ASR、Orchestrator/Agent、Melo TTS 回推
 scripts/livekit_publish_wav.py  # 测试用 16k WAV 发布器
 ```
 
-验证结果：
+桥接的是现有真实链路，不另写业务：
 
 ```text
-LiveKit track → AudioStream(16k) → sherpa ASR
-→ 识别文本 "给我做个介绍哈" / "什么我想说的是呢"
-→ Melo TTS → LiveKit AudioSource(48k)
+LiveKit 音频
+→ AudioStream(16k)
+→ sherpa ASR
+→ Orchestrator
+→ PopCompetitionAgent / Compliance / ToolGateway
+→ Melo TTS
+→ LiveKit AudioSource
 ```
 
-当前桥是 **ASR echo TTS**，用于验证媒体链路，**还没有接 Orchestrator/Agent/Tool/Compliance**。
+已实测：
+
+```text
+Agent 主动开场：
+"您好，我是京东商家资质审核AI客服。本次通话会录音。请问您是这家店的负责人吗？"
+
+测试音频：
+LiveKit track → ASR "对我做了介绍哈什么我想说的是呢..."
+→ Orchestrator/POP Agent
+→ 追问身份 "请问您是这家店的负责人吗？"
+→ Melo TTS 回推
+```
 
 ## 5. 还没做的
 
-- LiveKit 音频桥接现有 Orchestrator/Agent（当前是 echo）；
-- 打断/AEC/48k 重采样策略；
 - 前端主通话台切换 LiveKit（目前仅测试页）；
+- 打断/AEC/48k 重采样策略；
 - 多房间/并发；
-- 正式环境 TLS/TURN。
+- 正式环境 TLS/TURN；
+- qwen TTS 资产未就位，桥当前用 Melo。
 
 ## 6. 责任
 

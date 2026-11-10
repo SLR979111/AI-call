@@ -42,9 +42,9 @@ Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联�
 ```
 
 **81/91/84 都是半双工级联，不是真双工。**
-当前不是 LiveKit/WebRTC，也没有真实双工模型；`/rtc` 仍是“用户说完 → ASR → Agent → TTS”。
+主 `/rtc` 仍是“用户说完 → ASR → Agent → TTS”；LiveKit 已有独立测试页和服务端桥，但尚未替换主入口。
 
-### LiveKit 归谁 / 现在缺它做不了什么
+### LiveKit 归谁 / 当前到哪一步
 
 | 项 | 负责人 |
 |---|---|
@@ -52,11 +52,19 @@ Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联�
 | LiveKit 客户端 SDK、前端入房、客户端 VAD/播放埋点 | **cx** |
 | 服务端业务/Agent/ASR/TTS | 不由 cx 负责服务端媒体 |
 
-当前 LiveKit **未配置、未启动**，`aiortc` 也未安装。没有它：
+当前已完成：
 
-- 能做：本地 `ws_pcm` 级联、真实 sherpa/Melo、三轮 POP 流程、事件面板；
-- 不能做：正式 WebRTC 媒体面、TURN/NAT 穿透、浏览器 AEC/回声验收、真实网络抖动下的打断；
-- 不能宣称“真双工”或“比赛 WebRTC 已完成”；
+- LiveKit Server 1.13.11 已启动（devkey/secret）；
+- Token 接口可用；
+- `/rtc/livekit-test.html` 可入房、发布麦克风；
+- `scripts/livekit_bridge.py` 已把 LiveKit 音频接入现有 Orchestrator/POP Agent/Melo TTS；
+- 服务端 Agent 会主动开场。
+
+当前还没做：
+
+- 主 `/rtc` 切换 LiveKit；
+- AEC/TURN/真实网络抖动；
+- 真双工模型；
 - 不能把 8096 的 Mock 当成 LiveKit 替代品。
 
 ### 路线划分（A/B 保留，C 为实验）
@@ -82,7 +90,7 @@ C. LLM 实验：84；Agent 接入，不是双工
 - 81/91 见 [§9 启动](#9-启动)
 - 84 见 [docs/22](docs/22-ai-integration-status.md)
 - 8096 属 `feature/duplex-adapter` 本地 worktree，不在 81/91 主链路
-- LiveKit 媒体测试：<http://127.0.0.1:8085/rtc/livekit-test.html>（只入房/麦克风，未接 ASR 桥）
+- LiveKit 媒体测试：<http://127.0.0.1:8085/rtc/livekit-test.html>（入房 + 服务端 Orchestrator/POP Agent 桥）
 
 ---
 
@@ -579,7 +587,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 | [docs/20](docs/20-license-checklist.md) | 许可证缺口、责任人和交付前清单 |
 | [docs/21](docs/21-license-milestone.md) | 许可证合规 milestone 与 issue 清单 |
 | [docs/22](docs/22-ai-integration-status.md) | 84 Agent 接入调试、速度目标、双路线 |
-| [docs/23](docs/23-livekit.md) | LiveKit Server/Token/入房测试与音频桥缺口 |
+| [docs/23](docs/23-livekit.md) | LiveKit Server/Token/入房/服务端 Orchestrator 桥 |
 | [licenses/README.md](licenses/README.md) | 第三方许可证原文与 NVIDIA/LGPL/GCC 声明 |
 | [docs/guides/development.md](docs/guides/development.md) | 开发、配置、接口、Docker |
 | [docs/guides/testing.md](docs/guides/testing.md) | 测试分层、指标点、分段执行 |

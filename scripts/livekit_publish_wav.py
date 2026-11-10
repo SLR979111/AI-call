@@ -30,7 +30,10 @@ async def run(args: argparse.Namespace) -> None:
     samples = 320
     frame_bytes = samples * 2
     for offset in range(0, len(pcm), frame_bytes):
-        frame = rtc.AudioFrame(pcm[offset:offset + frame_bytes], 16000, 1, samples)
+        chunk = pcm[offset:offset + frame_bytes]
+        if len(chunk) < frame_bytes:
+            chunk += b"\x00" * (frame_bytes - len(chunk))
+        frame = rtc.AudioFrame(chunk, 16000, 1, samples)
         await source.capture_frame(frame)
         await asyncio.sleep(0.02)
     print("published", len(pcm) // 2, "samples", flush=True)
