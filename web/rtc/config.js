@@ -52,3 +52,6 @@
   };
   window.__AICALL_CONFIG__ = cfg;
 })();
+
+// 运行时换肤：注入 ./theme-inject.js（不改 DOM、不进 release 指纹；?theme=off 可关闭）
+import('./theme-inject.js');
