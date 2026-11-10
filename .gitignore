@@ -25,6 +25,9 @@ ENV/
 .uvpython/
 .uvdata/
 .tmp/
+.livekit-deps/
+.livekit311/
+web/rtc/node_modules/
 /tools/
 build/
 dist/

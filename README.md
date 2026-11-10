@@ -82,6 +82,7 @@ C. LLM 实验：84；Agent 接入，不是双工
 - 81/91 见 [§9 启动](#9-启动)
 - 84 见 [docs/22](docs/22-ai-integration-status.md)
 - 8096 属 `feature/duplex-adapter` 本地 worktree，不在 81/91 主链路
+- LiveKit 媒体测试：<http://127.0.0.1:8085/rtc/livekit-test.html>（只入房/麦克风，未接 ASR 桥）
 
 ---
 
@@ -353,7 +354,7 @@ flowchart TB
 | M9 Registry/RSI | candidate → production → previous、bootstrap 门禁 | ✅ 代码；🟡 真实候选 |
 | POP 场景 | 68 条主表场景、52 条话术、11 组 QA、28 条追问、三级分类、电话/京麦分流 | ✅ 知识库/Flow/评测 |
 | 前端 | 旧 Demo + `/rtc` 通话台、打断修复、无麦回放 | ✅ |
-| 交付 | CPU app + GPU sidecar profile、离线模型挂载 | ✅ Compose 校验；新镜像待构建验收 |
+| 交付 | CPU app + GPU sidecar profile、离线模型挂载 | ✅ CPU/Qwen 镜像已构建；模型仍挂载 |
 | 测试 | 原契约测试 + provider/ASR/TTS/取消测试、4 组前端 | 见 [生产语音指南](docs/guides/production-voice.md) |
 
 ## 5. 最近一次更新
@@ -578,6 +579,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 | [docs/20](docs/20-license-checklist.md) | 许可证缺口、责任人和交付前清单 |
 | [docs/21](docs/21-license-milestone.md) | 许可证合规 milestone 与 issue 清单 |
 | [docs/22](docs/22-ai-integration-status.md) | 84 Agent 接入调试、速度目标、双路线 |
+| [docs/23](docs/23-livekit.md) | LiveKit Server/Token/入房测试与音频桥缺口 |
 | [licenses/README.md](licenses/README.md) | 第三方许可证原文与 NVIDIA/LGPL/GCC 声明 |
 | [docs/guides/development.md](docs/guides/development.md) | 开发、配置、接口、Docker |
 | [docs/guides/testing.md](docs/guides/testing.md) | 测试分层、指标点、分段执行 |

@@ -19,6 +19,6 @@
 
 - Dockerfile `apt-get install ... libgomp1`；
 - NumPy/OpenBLAS 可能携带 `libgfortran`；
-- 具体版本待镜像锁定后回填。
+- 实际镜像版本：`libgomp1 14.2.0-19`（app/qwen 镜像）；未安装 libgfortran。
 
 > 本说明不是法律意见；最终条款以 GCC Runtime Exception 原文为准。

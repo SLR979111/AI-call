@@ -20,7 +20,7 @@ libsndfile 采用 **LGPL-2.1-or-later**。全文见同目录 `libsndfile-LGPL-2.
 
 - Docker 基础镜像 apt `libsndfile1`（见 `services/qwen_tts/Dockerfile`）；
 - `soundfile` wheel 可能自带 `_soundfile_data/libsndfile*`；
-- 具体版本待交付镜像锁定后回填。
+- 实际镜像版本：`libsndfile1 1.2.2-2+deb13u1`（qwen 镜像）。
 
 ## 替换/重链接
 

@@ -1,6 +1,6 @@
 # 第三方许可证原文与声明
 
-本目录保存交付包需要随附的第三方许可证原文/声明。完整组件清单见 [THIRD_PARTY.md](../THIRD_PARTY.md)，交付行动项见 [docs/20-license-checklist.md](../docs/20-license-checklist.md)。
+本目录保存交付包需要随附的第三方许可证原文/声明。两个 Dockerfile 均会复制本目录到 `/app/licenses`。完整组件清单见 [THIRD_PARTY.md](../THIRD_PARTY.md)，交付行动项见 [docs/20-license-checklist.md](../docs/20-license-checklist.md)。
 
 | 文件 | 覆盖组件 | 许可证/性质 | 义务 |
 |---|---|---|---|
