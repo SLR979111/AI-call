@@ -141,11 +141,14 @@ class ToolGateway:
                 return tool
         return name
 
-    def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None) -> None:
+    def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None,
+                 business_gateway: Any | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.mock = mock or MockBusiness()
         self.bus = bus
+        # Business gateway for real system integration
+        self.business_gateway = business_gateway
         self._db_path = self.data_dir / "index" / "tools.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
