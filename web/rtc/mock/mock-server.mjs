@@ -29,6 +29,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  // .mjs 必须显式声明：浏览器只接受 JS MIME 的 ES module，
+  // 缺这一条会让 livekit-test.html 与 vendor/livekit-client.esm.mjs 直接 import 失败。
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8', '.wav': 'audio/wav'
 };

@@ -293,7 +293,9 @@ main > aside > section:nth-of-type(1) > h2::before{content:"RUN STATE"}
 main > aside > section:nth-of-type(2) > h2::before{content:"SLOTS"}
 main > aside > section:nth-of-type(3) > h2::before{content:"COMPLIANCE"}
 main > aside > section:nth-of-type(4) > h2::before{content:"RESULT"}
-main > aside > section:nth-of-type(5) > h2::before{content:"DEBUG"}
+main > aside > section:nth-of-type(5) > h2::before{content:"BACKEND"}
+main > aside > section:nth-of-type(6) > h2::before{content:"MEDIA"}
+main > aside > section:nth-of-type(7) > h2::before{content:"DEBUG"}
 
 /* ===========================================================================
    6. 字幕区：复刻 .chat-log + .message + .bubble
@@ -311,7 +313,8 @@ main > aside > section:nth-of-type(5) > h2::before{content:"DEBUG"}
 }
 
 /* 空态提示（对应 web/index.html 的 .empty-state）。ui.js 在无字幕时把
-   innerHTML 置空，:empty 正好命中；有字幕之后自动消失。纯 CSS，无 DOM 改动 */
+   innerHTML 置空，:empty 正好命中；有字幕之后自动消失。纯 CSS，无 DOM 改动。
+   连上之后不能还喊"点开始通话"，所以按 ui.js 打的 data-state / data-lk 分三种语境 */
 #transcript:empty::before{
   content:"点击「开始通话」建立会话，然后说话或用下方输入框回车发送";
   margin:auto;
@@ -319,6 +322,36 @@ main > aside > section:nth-of-type(5) > h2::before{content:"DEBUG"}
   font-size:12.5px;
   line-height:1.7;
   text-align:center;
+}
+#transcript[data-state="connected"]:empty::before{
+  content:"已连接，等待数字员工开口…";
+}
+/* LiveKit 媒体面：语音走 WebRTC，字幕依赖服务端把 ASR/Agent 事件桥接回房间 */
+#transcript[data-state="connected"][data-lk="1"]:empty::before{
+  content:"LiveKit 媒体面已入房：语音走 WebRTC，字幕需等服务端把 ASR/Agent 事件桥接回房间";
+}
+
+/* 「最新自主回复」卡（index.html 自带的深色块）在纸色主题里像块补丁，
+   改成和 .line.agent 同族的浅色卡 + 赤陶左条 */
+.latest{
+  background:linear-gradient(180deg,#fffdf9,#f8f2e7) !important;
+  border:1px solid oklch(0.885 0.018 76) !important;
+  border-left:3px solid oklch(0.62 0.17 42) !important;
+  border-radius:16px !important;
+  padding:14px 16px !important;
+  box-shadow:0 3px 14px rgba(64,48,36,.035);
+}
+.latest .label{
+  color:oklch(0.53 0.175 39) !important;
+  font-family:var(--font-mono) !important;
+  font-size:9.5px !important;
+  font-weight:700;
+  letter-spacing:.16em !important;
+}
+#latestReply{
+  color:oklch(0.235 0.022 52) !important;
+  font-size:17px !important;
+  line-height:1.6 !important;
 }
 
 .line{

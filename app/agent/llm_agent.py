@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -11,47 +11,47 @@ from ..llm.router import LLMRouter, messages, parse_json_object
 from ..rag.knowledge import KnowledgeBase
 from .reply_stream import ReplyExtractor
 
-SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象,不要 Markdown。
-字段:
+SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象，不要 Markdown。
+字段：
 - intent: confirm|deny|unclear|order_query|reschedule|faq|transfer|other
-- reply: 要对用户说的一句话(首句尽量 <=20 字,口语化)
-- slots: 对象,已知的订单号/时间等
-- tool: 可选,order.query|order.reschedule|ticket.create|lead.query
-- tool_args: 对象,仅当 tool 存在
+- reply: 要对用户说的一句话（首句尽量 <=20 字，口语化）
+- slots: 对象，已知的订单号/时间等
+- tool: 可选，order.query|order.reschedule|ticket.create|lead.query
+- tool_args: 对象，仅当 tool 存在
 - outcome: rescheduled|answered|transferred|completed|tool_failed
-- citation: 可选,知识来源 id
+- citation: 可选，知识来源 id
 
-规则:
-- 不承诺无法保证的结果,不使用"保证/一定/绝对/百分百"。
-- 用户要求人工/投诉时,intent=transfer。
-- 信息不足时先追问,不要编造订单信息。
+规则：
+- 不承诺无法保证的结果，不使用“保证/一定/绝对/百分百”。
+- 用户要求人工/投诉时，intent=transfer。
+- 信息不足时先追问，不要编造订单信息。
 """
 
-POP_SYSTEM_PROMPT = """你是京东 POP 商家资质审核驳回外呼专员。只输出一个 JSON 对象,不要 Markdown。
-字段:
+POP_SYSTEM_PROMPT = """你是京东 POP 商家资质审核驳回外呼专员。只输出一个 JSON 对象，不要 Markdown。
+字段：
 - intent: confirm|ask_reason|ask_action|jd_reject|callback|complaint|unclear
-- reply: 一句口语化回复(首句尽量 <=20 字)
+- reply: 一句口语化回复（首句尽量 <=20 字）
 - slots: {request_id, brand, reject_l1, reject_l2, reject_l3, handling_mode, remediation}
-- tool: 可选,callback.create(登记回电任务)
-- tool_args: 对象,仅当 tool 存在
+- tool: 可选，callback.create（登记回电任务）
+- tool_args: 对象，仅当 tool 存在
 - outcome: rejected|jd_rejected|callback_scheduled|transferred|completed
-- citation: 可选,知识来源 id
+- citation: 可选，知识来源 id
 
-规则:
-- 先确认商家/店铺身份,再说明驳回原因和整改动作。
-- 原因必须来自知识库;不要编造三级分类或品牌信息。
-- 电话场景:说明原因、整改动作、重新提交路径;京度驳回场景:明确站内驳回、不强制回电。
-- 商家要求回电/没听清:登记 callback.create;投诉/转人工:transfer。
-- 不承诺"补了就一定通过";不泄露其他商家信息。
-- 单句超过 2000 字符时先概括,不要截断。
-- 若系统提供了本单业务上下文,说明原因/整改时必须使用其中的 request_id、brand、reject_l1/l2/l3,不要泛化成"具体审核项"。
+规则：
+- 先确认商家/店铺身份，再说明驳回原因和整改动作。
+- 原因必须来自知识库；不要编造三级分类或品牌信息。
+- 电话场景：说明原因、整改动作、重新提交路径；京麦驳回场景：明确站内驳回、不强制回电。
+- 商家要求回电/没听清：登记 callback.create；投诉/转人工：transfer。
+- 不承诺“补了就一定通过”；不泄露其他商家信息。
+- 单句超过 2000 字符时先概括，不要截断。
+- 若系统提供了本单业务上下文，说明原因/整改时必须使用其中的 request_id、brand、reject_l1/l2/l3，不要泛化成“具体审核项”。
 """
 
 
 _AFFIRMATIVE_MARKERS = ("可以", "方便", "好的", "好", "行", "没问题", "是", "对", "嗯", "负责人", "听明白", "知道")
 _FLOW_HINTS = {
-    "IDENTITY_CONFIRM": "当前只做身份确认。用户说可以/方便/是/对/好/嗯/负责人时,intent=confirm,reply 用一句简短确认;不要再次复述驳回问题。",
-    "CONFIRM_ACTION": "用户说可以/好/对时,intent=confirm;不要重复上一句。",
+    "IDENTITY_CONFIRM": "当前只做身份确认。用户说可以/方便/是/对/好/嗯/负责人时，intent=confirm，reply 用一句简短确认；不要再次复述驳回问题。",
+    "CONFIRM_ACTION": "用户说可以/好/对时，intent=confirm；不要重复上一句。",
 }
 
 
@@ -76,14 +76,14 @@ class LLMAgent:
         self.knowledge = KnowledgeBase(knowledge_path)
         self.flow_pack = flow_pack
         self.case_context = dict(case_context or {})
-        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
-        self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
-        self.max_history_turns = max_history_turns
         # buffered: parse the complete JSON before speaking (safe default).
         # reply: emit only the natural-language `reply` field from the stream.
         self.stream_mode = (stream_mode or os.getenv("LLM_STREAM_MODE", "buffered")).strip().lower()
         if self.stream_mode not in {"buffered", "reply"}:
             raise ValueError("LLM_STREAM_MODE must be buffered or reply")
+        self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
+        self.flow_engines: dict[str, Any] = {}  # session_id -> FlowEngine instance
+        self.max_history_turns = max_history_turns
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
         """Initialize session with empty conversation history and Flow Engine."""
@@ -107,19 +107,19 @@ class LLMAgent:
 
         # Add flow context if available
         if flow_state:
-            context += f"\n\n当前流程状态:{flow_state}"
+            context += f"\n\n当前流程状态：{flow_state}"
 
         if slots:
-            context += f"\n已知信息:{json.dumps(slots, ensure_ascii=False)}"
+            context += f"\n已知信息：{json.dumps(slots, ensure_ascii=False)}"
 
         # Real contest context: without these fields the local LLM cannot know
         # which merchant/rejection is being discussed.
         if self.case_context:
-            context += "\n本单业务上下文:" + json.dumps(self.case_context, ensure_ascii=False)
+            context += "\n本单业务上下文：" + json.dumps(self.case_context, ensure_ascii=False)
 
         if self.flow_pack:
             states = ", ".join(self.flow_pack.states.keys())
-            context += f"\n\n业务流程状态集合:{states};入口:{self.flow_pack.entry}。"
+            context += f"\n\n业务流程状态集合：{states}；入口：{self.flow_pack.entry}。"
 
         return context
 
@@ -142,7 +142,7 @@ class LLMAgent:
         affirmative = flow_state in {"IDENTITY_CONFIRM", "CONFIRM_ACTION"} and _is_affirmative(text)
         chunks = [] if affirmative else self.knowledge.search(text, top_k=2)
         context = "\n".join(f"[{c.doc_id}] {c.title}: {c.content}" for c in chunks)
-        user_prompt = text if not context else f"用户说:{text}\n可能相关的知识:\n{context}"
+        user_prompt = text if not context else f"用户说：{text}\n可能相关的知识：\n{context}"
 
         # Build messages with history
         msg_list = [{"role": "system", "content": self._system(flow_state, slots)}]
@@ -181,7 +181,7 @@ class LLMAgent:
             if chunk.type == "error":
                 # Handle LLM errors
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
-                       "text": "抱歉,我这边暂时没听清,您再说一遍好吗?", "final": True}
+                       "text": "抱歉，我这边暂时没听清，您再说一遍好吗？", "final": True}
                 yield {"kind": "end", "reply_id": reply_id, "outcome": "llm_failed",
                        "slots": {}, "result": {"error": chunk.error}}
                 return
@@ -264,14 +264,14 @@ class LLMAgent:
             current_reply = str(decision.get("reply", ""))
             ctx = self.case_context
             if flow_state == "IDENTITY_CONFIRM" and ctx.get("request_id") and ctx.get("reject_l3"):
-                # Use the real case instead of a context-free "好的,感谢确认"。
+                # Use the real case instead of a context-free "好的，感谢确认".
                 decision["reply"] = (
-                    f"好的,{ctx.get('brand', '您')}的申请单{ctx['request_id']},"
-                    f"驳回在{ctx.get('reject_l1', '')}/{ctx.get('reject_l2', '')},"
+                    f"好的，{ctx.get('brand', '您')}的申请单{ctx['request_id']}，"
+                    f"驳回在{ctx.get('reject_l1', '')}/{ctx.get('reject_l2', '')}，"
                     f"原因是{ctx['reject_l3']}。需要按驳回意见补充或修正材料后重新提交。"
                 )
             elif not current_reply or "想跟您确认" in current_reply or "方便现在说明" in current_reply:
-                decision["reply"] = "好的,感谢确认。"
+                decision["reply"] = "好的，感谢确认。"
         intent = str(decision.get("intent", "other"))
         if intent == "transfer":
             yield {"kind": "transfer", "reply_id": reply_id, "reason": "user_request", "queue": "human"}
@@ -293,7 +293,7 @@ class LLMAgent:
         if flow_result and flow_result.get("say") and not self.case_context:
             reply = flow_result["say"]
         else:
-            reply = str(decision.get("reply") or (flow_result or {}).get("say") or "好的,我明白了。")
+            reply = str(decision.get("reply") or (flow_result or {}).get("say") or "好的，我明白了。")
 
         # Only send reply if we haven't sent it via streaming
         if not first_sentence_sent:
@@ -318,7 +318,7 @@ class LLMAgent:
                 sentence_id += 1
             else:
                 yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": sentence_id,
-                       "text": "抱歉,业务系统暂时没有响应,我先帮您登记,稍后人工跟进。",
+                       "text": "抱歉，业务系统暂时没有响应，我先帮您登记，稍后人工跟进。",
                        "final": True}
                 sentence_id += 1
                 await tools.invoke("ticket.create",

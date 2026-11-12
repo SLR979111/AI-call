@@ -10,6 +10,7 @@
 import {
   CLIENT_EVENTS, CLIENT_VERSION, C2S, PROTOCOL_VERSION, S2C, makeSeq, now
 } from './protocol.js';
+import { LiveKitTransport } from './livekit.js';
 import * as store from './store.js';
 
 export class SessionClient extends EventTarget {
@@ -38,6 +39,13 @@ export class SessionClient extends EventTarget {
     this.frameSeq = 0;
     this.rtcPeer = null;
     this.rtcChannel = null;
+    /** LiveKit 媒体面（音视频只走它，控制消息仍走上面的 ws） */
+    this.livekit = new LiveKitTransport(cfg);
+    /** @type {(() => MediaStreamTrack|null)|null} 由 main.js 注入：复用 audio-engine 已采集的麦克风 track */
+    this.micTrackProvider = null;
+    /** @type {HTMLElement|null} 远端音频挂载点 */
+    this.livekitSink = null;
+    this.wireLiveKit();
   }
 
   /** client_mono_ms：距会话开始的单调毫秒 */
@@ -134,6 +142,7 @@ export class SessionClient extends EventTarget {
     this.rtcPeer = null;
     this.rtcChannel = null;
     this.transport = 'ws_pcm';
+    void this.livekit.stop();          // WS 断了就不该继续占着房间
     clearInterval(this.pingTimer);
     store.set({ phase: 'error' });
     if (ev.code === 4401) {                      // G6：会话过期，禁止无限重连
@@ -251,6 +260,7 @@ export class SessionClient extends EventTarget {
       this.setTransport('ws_pcm', '按配置走兼容层');
       return;
     }
+    // auto / webrtc / livekit：先要 token，拿不到或入房失败都回退 ws_pcm
     const fallback = setTimeout(() => {
       this.setTransport('ws_pcm', '媒体未配置（超时回落）');
     }, 3000);
@@ -259,12 +269,101 @@ export class SessionClient extends EventTarget {
       clearTimeout(fallback);
       this.removeEventListener('media-ready', h);
       const p = ev.detail || {};
-      this.setTransport(p.transport === 'livekit' ? 'livekit' : 'ws_pcm', '');
-      this.dispatchEvent(new CustomEvent('media-ready', { detail: p }));
+      if (p.provider === 'livekit' && p.url && p.token) { void this.startLiveKit(p); return; }
+      this.setTransport('ws_pcm', '媒体未配置（C1 回落）');
     };
     this.addEventListener('media-ready', h);
     this.send(C2S.MEDIA_REQUEST, {});
   }
+
+  /* ============================ LiveKit 媒体面 ============================ */
+
+  /** 把 LiveKitTransport 的事件接到会话事件上（只接一次） */
+  wireLiveKit() {
+    const lk = this.livekit;
+    lk.addEventListener('stats', (ev) => {
+      this.dispatchEvent(new CustomEvent('livekit-stats', { detail: ev.detail }));
+    });
+    lk.addEventListener('remote-audio', (ev) => {
+      this.dispatchEvent(new CustomEvent('livekit-remote-audio', { detail: ev.detail }));
+    });
+    lk.addEventListener('audio-blocked', (ev) => {
+      if (ev.detail && ev.detail.blocked) {
+        store.log('livekit 远端音频被浏览器自动播放策略挂起，等待用户手势');
+      }
+      this.dispatchEvent(new CustomEvent('livekit-audio-blocked', { detail: ev.detail }));
+    });
+    lk.addEventListener('warn', (ev) => {
+      store.log(`livekit warn ${ev.detail && ev.detail.reason}: ${ev.detail && ev.detail.message}`);
+    });
+    // 房间意外断开：不能"静默变哑"，必须回退 ws_pcm 并告知服务端
+    lk.addEventListener('disconnected', (ev) => {
+      if (this.transport !== 'livekit') return;
+      const message = (ev.detail && ev.detail.reason) || 'LIVEKIT_DISCONNECTED';
+      store.log(`livekit 断开（${message}）→ 回落 ws_pcm`);
+      this.degrade('livekit', 'LIVEKIT_DISCONNECTED', { message });
+      this.setTransport('ws_pcm', 'LiveKit 断开，回落兼容层');
+      this.dispatchEvent(new CustomEvent('transport-switched', {
+        detail: { to: 'ws_pcm', reason: 'livekit_disconnected' }
+      }));
+    });
+  }
+
+  /**
+   * 入房。任何一步失败都不抛给调用方，而是走 `transport_degraded → ws_pcm`：
+   * 比赛现场不允许"LiveKit 一挂整通电话就没声音"。
+   * @param {{url:string, token:string, room?:string, provider?:string}} p media_ready 的 payload
+   */
+  async startLiveKit(p) {
+    const micTrack = this.micTrackProvider ? this.micTrackProvider() : null;
+    store.log(`livekit 入房 room=${p.room || '—'} url=${p.url}`);
+    this.dispatchEvent(new CustomEvent('livekit-connecting', { detail: { url: p.url, room: p.room || '' } }));
+    try {
+      const stats = await this.livekit.connect({
+        url: p.url,
+        token: p.token,
+        micTrack,
+        container: this.livekitSink,
+      });
+      this.setTransport('livekit', 'WebRTC 入房');
+      store.log(`livekit 入房成功 room=${stats.room || '—'} via=${stats.publishedVia || '—'} aec=${JSON.stringify(stats.aec)}`);
+      this.dispatchEvent(new CustomEvent('livekit-connected', { detail: stats }));
+      this.dispatchEvent(new CustomEvent('transport-switched', {
+        detail: { to: 'livekit', provider: 'livekit' }
+      }));
+      return stats;
+    } catch (e) {
+      const message = e && e.message ? e.message : String(e);
+      // 把错误码（消息前缀，如 LIVEKIT_SDK_LOAD_FAILED）直接当作降级原因，
+      // 服务端日志里就能一眼看出是"没 token"还是"SDK 加载失败"还是"入房被拒"。
+      const code = (/^([A-Z][A-Z0-9_]{3,}):/.exec(message) || [])[1] || 'LIVEKIT_CONNECT_FAILED';
+      store.log(`livekit 入房失败（${code}）→ 回落 ws_pcm：${message}`);
+      this.degrade('livekit', code, { message });
+      this.setTransport('ws_pcm', 'LiveKit 失败，回落兼容层');
+      this.dispatchEvent(new CustomEvent('livekit-failed', { detail: { code, message } }));
+      this.dispatchEvent(new CustomEvent('transport-switched', {
+        detail: { to: 'ws_pcm', reason: 'livekit_failed', code, message }
+      }));
+      return null;
+    }
+  }
+
+  /** 媒体面是否正在出声（打断门控用） */
+  livekitIsPlaying() {
+    return this.transport === 'livekit' && this.livekit.isPlaying();
+  }
+
+  /** @returns {number} b3：本地静音生效的单调时刻 */
+  duckLiveKit() {
+    this.livekit.duck();
+    return this.mono();
+  }
+
+  unduckLiveKit() { return this.livekit.unduck(); }
+
+  resumeLiveKitAudio() { return this.livekit.resumeAudio(); }
+
+  livekitStats() { return this.livekit.stats(); }
 
   waitForRtcPcm() {
     return new Promise((resolve, reject) => {
@@ -595,6 +694,7 @@ export class SessionClient extends EventTarget {
     clearInterval(this.pingTimer);
     const ws = this.ws;
     const peer = this.rtcPeer;
+    void this.livekit.stop();          // 先退房，避免远端还能听见我们
     setTimeout(() => { peer?.close(); ws?.close(); }, 200);
   }
 }

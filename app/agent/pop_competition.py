@@ -68,7 +68,14 @@ def identity_answer(text: str) -> str:
     if IDENTITY_NO.search(text) or _WRONG_PERSON.search(text) or _FORMER_CONTACT.search(text):
         return "denied"
     answer = re.sub(rf"{SPEAK}$", "", text)
-    if not UNCERTAIN.search(answer) and (re.fullmatch(YES, answer) or IDENTITY.fullmatch(answer)):
+    # Natural speech often appends "方便/您说/现在" after the role declaration.
+    # Match the identity phrase as a prefix instead of requiring the whole turn
+    # to be exactly "我是负责人".
+    if not UNCERTAIN.search(answer) and (
+        re.fullmatch(YES, answer)
+        or re.fullmatch(r"(?:可以|行|好(?:的)?)", answer)
+        or IDENTITY.search(answer)
+    ):
         return "confirmed"
     return "unclear"
 
@@ -163,8 +170,18 @@ class PopCompetitionAgent(PopStrategyAgent):
             yield {"kind": "transfer", "reply_id": reply, "reason": "user_request", "queue": "human"}
             return
         elif state.phase == "open":
-            sentences = [OPENING, RECORDING]
-            outcome, stage = "pending_identity", ("OPEN", "identity")
+            # The first user turn may already say "我是负责人，方便". Do not
+            # throw that identity away and ask the same question again. A bare
+            # "可以" is not an identity answer at the opening; it only means
+            # assent after the identity question.
+            first_identity = identity_answer(text) == "confirmed" and IDENTITY.search(normalize_answer(text))
+            if text.strip() and first_identity:
+                yield {"kind": "stage", "reply_id": reply, "stage": "IDENTITY_CONFIRM"}
+                state.phase = "need"
+                sentences, outcome, stage = [ASK_AVAILABILITY], "pending_need", None
+            else:
+                sentences = [OPENING, RECORDING]
+                outcome, stage = "pending_identity", ("OPEN", "identity")
         elif state.phase == "identity":
             if answer == "confirmed":
                 yield {"kind": "stage", "reply_id": reply, "stage": "IDENTITY_CONFIRM"}
