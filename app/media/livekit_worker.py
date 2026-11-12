@@ -64,6 +64,8 @@ class LiveKitBridge:
         self.conn = BridgeConnection(self)
         self.asr = None
         self.asr_task: asyncio.Task | None = None
+        self.transcript_task: asyncio.Task | None = None
+        self.transcripts: asyncio.Queue[str] = asyncio.Queue(maxsize=32)
         self.sent_audio = 0
         self.stopped = False
 
@@ -76,6 +78,7 @@ class LiveKitBridge:
         rtc = self.rtc
         self.asr = await self.voice.start_asr(self.session_id)
         self.asr_task = asyncio.create_task(self._consume_asr())
+        self.transcript_task = asyncio.create_task(self._consume_transcripts())
 
         @self.room.on("track_subscribed")
         def on_track(track, publication, participant) -> None:
@@ -102,11 +105,27 @@ class LiveKitBridge:
             async for event in self.asr.events():
                 if event.kind == "final" and event.text.strip():
                     print(f"[livekit-bridge] asr: {event.text}", flush=True)
-                    await self.orc.handle_text(self.session_id, event.text, self.conn)
+                    # Never await the Agent while the media/ASR consumer is the
+                    # same task: a slow turn fills the ASR queue and loses later
+                    # utterances. Queue the final and let a separate worker run
+                    # turns in order.
+                    await self.transcripts.put(event.text)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             print(f"[livekit-bridge] asr consumer failed: {type(exc).__name__}: {exc}", flush=True)
+
+    async def _consume_transcripts(self) -> None:
+        while True:
+            text = await self.transcripts.get()
+            try:
+                await self.orc.handle_text(self.session_id, text, self.conn)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[livekit-bridge] transcript worker failed: {type(exc).__name__}: {exc}", flush=True)
+            finally:
+                self.transcripts.task_done()
 
     async def _consume_track(self, track: Any, identity: str) -> None:
         print(f"[livekit-bridge] subscribe {identity}", flush=True)
@@ -125,6 +144,8 @@ class LiveKitBridge:
         self.stopped = True
         if self.asr_task:
             self.asr_task.cancel()
+        if self.transcript_task:
+            self.transcript_task.cancel()
         if self.asr:
             await self.asr.close()
         await self.room.disconnect()
