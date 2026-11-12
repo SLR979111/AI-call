@@ -111,6 +111,11 @@ function render(s) {
   const latestEl = $('latestReply');
   if (latestEl) latestEl.textContent = latest ? latest.text : (s.phase === 'connected' ? '等待数字员工回复…' : '等待通话…');
 
+  // 空态提示要有语境：连上之后不该再喊"点开始通话"；LiveKit 模式字幕来源不同
+  const boxEl = $('transcript');
+  boxEl.dataset.state = s.phase;
+  boxEl.dataset.lk = s.transport === 'livekit' ? '1' : '0';
+
   // 估算标记（C6：tts_alignment=false 时游标是估算，必须显式标注）
   const anyEst = Object.values(s.replies || {}).some((r) => r.estimated);
   $('estimateBadge').textContent = anyEst ? '（游标：估算，tts_alignment=false）' : '';
@@ -163,6 +168,39 @@ function render(s) {
   $('ttfb').textContent = s.ttfb == null ? '—' : `${Math.round(s.ttfb)}ms`;
   $('downlink').textContent = s.downlink || '—';
   $('log').textContent = (s.logs || []).slice(-60).join('\n');
+
+  // LiveKit 媒体面（入房 / 播放 / AEC）——元素缺失时不炸，便于老页面继续用
+  const lk = s.livekit || {};
+  setText('lkState', livekitStateText(lk));
+  setText('lkRoom', lk.room || '—');
+  setText('lkAudio', lk.audioElements
+    ? `${lk.audioElements} 条${lk.remoteAudio ? ' · ' + lk.remoteAudio : ''}${lk.ducked ? '（打断静音）' : ''}`
+    : '—');
+  setText('lkAec', aecText(lk.aec));
+}
+
+/** @param {string} id @param {string} text */
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+/** @param {any} lk */
+function livekitStateText(lk) {
+  const map = { idle: '未启用', connecting: '连接中', connected: '已入房', closed: '已断开', reconnecting: '重连中' };
+  const base = map[lk.state] || lk.state || '未启用';
+  if (lk.state !== 'connected') return lk.error ? `${base} · ${lk.error}` : base;
+  const via = lk.publishedVia === 'shared-track' ? '共用采集轨'
+    : lk.publishedVia === 'sdk-device' ? 'SDK 采集' : '—';
+  return `${base} · ${lk.participants || 1} 人 · ${via}${lk.autoPlayBlocked ? ' · 待启用声音' : ''}`;
+}
+
+/** @param {any} aec */
+function aecText(aec) {
+  if (!aec || aec.echoCancellation == null) return '—';
+  const on = (v) => (v ? '' : 'no-');
+  return `${on(aec.echoCancellation)}AEC · ${on(aec.noiseSuppression)}NS · ${on(aec.autoGainControl)}AGC`
+    + (aec.sampleRate ? ` · ${aec.sampleRate}Hz` : '');
 }
 
 /** @param {string} s */

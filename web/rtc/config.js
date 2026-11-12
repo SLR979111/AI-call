@@ -28,9 +28,20 @@
     SCENARIO_ID: q.get('scenario') || 'service_outbound',
     RELEASE_ID: q.get('release') || null,
 
-    /** 传输偏好：webrtc | ws_pcm | auto。
-     *  W1：/rtc 返回 MEDIA_NOT_CONFIGURED(503) → 静默回落 ws_pcm（C1） */
-    TRANSPORT_PREF: q.get('transport') || 'ws_pcm',
+    /** 传输偏好：auto | livekit | webrtc（=livekit）| ws_pcm | rtc_pcm
+     *  auto   —— 先要 LiveKit token；拿到就入房。MEDIA_NOT_CONFIGURED / 入房失败 /
+     *            超时一律静默回落 ws_pcm（C1 + G4），不影响通话可用性。
+     *  ws_pcm —— 不尝试 LiveKit（无 LiveKit Server 时的确定性路径）。
+     *  rtc_pcm—— 竞赛路径的 WebRTC DataChannel，与 LiveKit 无关。 */
+    TRANSPORT_PREF: q.get('transport') || 'auto',
+
+    /** LiveKit 客户端 SDK：懒加载，ws_pcm 用户不会下载这 1.4MB。
+     *  ?lkSdk= 可覆盖（测试 / 灰度）；默认用 web/rtc/vendor/ 里的随仓库副本。 */
+    LIVEKIT_SDK_URL: q.get('lkSdk') || null,
+    LIVEKIT_CONNECT_TIMEOUT_MS: 8000,
+    /** 采集约束必须与 audio-engine 的 getUserMedia 一致，
+     *  否则「VAD 判定那条轨」和「发给服务端那条轨」就不是同一份，AEC 也白给 */
+    LIVEKIT_AUDIO: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 
     /** 下行播放形态：auto | speech | pcm
      *  auto：tts_started 后 400ms 内收到 audio_chunk 用 pcm，否则用 speechSynthesis

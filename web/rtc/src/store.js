@@ -46,7 +46,22 @@ const state = {
   ttfb: null,
   downlink: '—',
   rtt: null,
-  logs: /** @type {string[]} */ ([])
+  logs: /** @type {string[]} */ ([]),
+
+  // LiveKit 媒体面（cx：客户端 SDK / 入房 / 播放 / AEC）
+  livekit: /** @type {any} */ ({
+    state: 'idle',            // idle | connecting | connected | closed
+    room: '',
+    identity: '',
+    participants: 0,
+    remoteAudio: '',
+    audioElements: 0,
+    ducked: false,
+    publishedVia: null,       // shared-track | sdk-device
+    autoPlayBlocked: false,
+    aec: /** @type {any} */ ({}),
+    error: ''
+  })
 };
 
 const subs = new Set();
@@ -155,6 +170,11 @@ export function resetForNewCall() {
     turnId: '', turnState: 'CONNECTING', flowState: '—', slots: {}, flowHighWater: -1,
     lines: [], partialUser: '', replies: {}, currentReplyId: '',
     compliance: [], tools: {}, result: null, hint: '',
-    db: -99, b0: null, b3: null, stopLatency: null, ttfb: null, downlink: '—', rtt: null
+    db: -99, b0: null, b3: null, stopLatency: null, ttfb: null, downlink: '—', rtt: null,
+    livekit: {
+      state: 'idle', room: '', identity: '', participants: 0, remoteAudio: '',
+      audioElements: 0, ducked: false, publishedVia: null, autoPlayBlocked: false,
+      aec: {}, error: ''
+    }
   });
 }

@@ -72,28 +72,91 @@ node web/rtc/test/uplink-file.mjs
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `app` | **同源**（`location.origin`） | 后端基地址；只在页面与后端不同源时覆盖，如 `?app=http://192.168.1.20:8081` |
-| `transport` | `auto` | `webrtc` \| `ws_pcm` \| `auto`；`auto` 遇 `MEDIA_NOT_CONFIGURED` 静默回落（C1） |
+| `transport` | `auto` | `auto` \| `livekit` \| `webrtc`(=livekit) \| `ws_pcm` \| `rtc_pcm`；`auto` 先要 LiveKit token，拿不到 / 入房失败 / 超时静默回落 `ws_pcm`（C1 + G4） |
 | `downlink` | `auto` | `speech`（W1 Fake）\| `pcm`（W2 真 TTS）\| `auto`（400ms 内见 `audio_chunk` 用 pcm） |
+| `lkSdk` | `./vendor/livekit-client.esm.mjs` | 覆盖 LiveKit SDK 地址（测试 / 灰度用） |
 | `mic` | 开 | `mic=0` 无麦模式（只用按钮联调与字幕） |
 | `uplink` | `auto` | `auto` \| `mic` \| `file`；`auto` 在无麦克风时自动切回放音源 |
 | `wav` | `./fixtures/demo_16k.wav` | 回放音源路径（4s：二段有声+二段静音，够 VAD/打断跑两轮） |
 | `scenario` | `service_outbound` | 透传给 `POST /sessions` |
+| `theme` | 开 | `theme=off` 关掉 `theme-inject.js` 的运行时换肤 |
+
+## 二点五、LiveKit 媒体面（入房 / 播放 / AEC）
+
+主通话台已接 LiveKit，`ws_pcm` 作为永久回退保留。两者是**同一层的两种传输**，
+业务代码不按传输分支：字幕与控制消息始终走 WebSocket，只有音频走 WebRTC。
+
+```text
+session_ready → media_request ──► media_ready{provider:livekit, url, room, token}
+                                     │
+                     ┌───────────────┴────────────────┐
+                入房成功                          任一步失败
+                     │                                │
+        transport=livekit                    transport_degraded → ws_pcm
+        · 发布麦克风（复用采集轨）              · 立刻可用，通话不中断
+        · 订阅远端音频 → <audio>
+        · AEC/NS/AGC 来自 getUserMedia 约束
+```
+
+**四条实现要点**
+
+1. **SDK 懒加载**：`vendor/livekit-client.esm.mjs` 有 1.4MB，`ws_pcm` 用户不该为它付下载
+   代价；用动态 `import()` 才能把「SDK 缺失 / 加载失败」变成可捕获异常 → 回退。
+   静态 import 失败会让整条模块图崩掉，页面直接白屏。
+2. **麦克风只采一次**：把 `audio-engine` 已拿到的 `MediaStreamTrack` 直接
+   `new LocalAudioTrack(track, undefined, true)` 发布，不二次 `getUserMedia`。
+   `userProvidedTrack=true` 让 SDK 不 stop/重建它，VAD 那条采集图不受影响；
+   **AEC/NS/AGC 是 `getUserMedia` 时的约束**，共用同一条 track 才保证
+   「VAD 判定的声音」和「发给服务端的声音」是同一份。
+3. **打断只静音不销毁**：`duck()` 把远端 `<audio>` 置 `muted`，流继续走、解码不丢；
+   `unduck()` 立刻恢复，与 `playback.js` 的 G11「误打断要能续播」同语义。
+   打断门控同时认 `playback.isPlaying()` **和** `livekit.isPlaying()`，
+   否则 LiveKit 模式下 VAD 永远以为「对方没说话」。
+4. **失败必须可追溯**：`transport_degraded.reason` 直接用错误码前缀
+   （`LIVEKIT_TOKEN_MISSING` / `LIVEKIT_SDK_LOAD_FAILED` / `LIVEKIT_CONNECT_TIMEOUT` /
+   `LIVEKIT_CONNECT_FAILED` / `LIVEKIT_PUBLISH_FAILED`），服务端日志能一眼分清是哪种失败。
+
+右侧「媒体 / LiveKit」卡片实时显示入房状态、房间名、远端音频条数，以及
+`getSettings()` 报回来的**实际生效**的 AEC/NS/AGC 与采样率 —— 请求约束不代表浏览器采纳了，
+只有 getSettings 才是能验收的口径。
+
+```text
+http://127.0.0.1:8091/rtc/?transport=auto&downlink=pcm   有 LiveKit Server 时
+http://127.0.0.1:8091/rtc/?transport=ws_pcm              确定性兼容路径
+http://127.0.0.1:8091/rtc/?theme=off                     关掉换肤
+```
+
+**已知边界（需要服务端 / 桥接配合，见 [docs/23-livekit.md](../../docs/23-livekit.md) 的责任划分）**
+
+- `scripts/livekit_bridge.py` 目前只把 TTS 音频推回房间，**不回传
+  `transcript/agent_text/tts_*` 事件**，所以 LiveKit 模式下字幕区为空、`#latestReply`
+  停在占位文案。客户端已把空态文案按 `data-lk` 区分，但真正的字幕要桥接侧下发
+  （DataChannel 或事件回传接口）。
+- 桥接侧 `send_json` 还是打印桩，收不到 `local_muted` / 取消指令，所以 LiveKit 模式下的
+  打断目前只做到**本地静音**（停止时延仍可测），服务端 TTS 不会因此停。
+- 自动播放策略：入房时若被挂起，客户端提示一句并挂一次性 `pointerdown` 解锁，不自动重试。
+
 
 ## 三、目录
 
 ```
 web/
 ├─ index.html                 # 通话台（单页，无框架）
-├─ config.js                  # 运行期配置（C5：APP_BASE=8081）
+├─ config.js                  # 运行期配置（C5：APP_BASE=8081）+ 换肤挂载
+├─ theme-inject.js            # 运行时换肤（注入 <style>，不改 DOM、不进 release 指纹）
+├─ livekit-test.html          # LiveKit 媒体面最小测试页（只验浏览器 ↔ Server）
 ├─ fixtures/demo_16k.wav      # 无麦回放音源（4s，两段有声两段静音）
+├─ vendor/livekit-client.esm.mjs  # LiveKit 客户端 SDK 随仓库副本（懒加载，2.23.0）
 ├─ mock/mock-server.mjs       # 零依赖 Mock：静态 + /sessions + 手写 WS
 ├─ mock/smoke.mjs             # 契约冒烟（21 项）
 ├─ test/golden-replay.mjs     # 真实抓包回放（16 项）
 ├─ test/pcm-path.mjs          # 下行 PCM 路径（19 项，stub AudioContext）
 ├─ test/uplink-file.mjs       # 无麦回放泵（10 项）
+├─ test/livekit.mjs           # LiveKit 入房 / 播放 / 打断 / 回退（21 项，假 SDK）
 └─ src/
    ├─ protocol.js             # 契约 v0.2.1 唯一编码层（消息名/枚举/音频帧头/base64）
-   ├─ session.js              # 唯一 WebSocket 出口：建会话→hello→分发→上行
+   ├─ session.js              # 唯一 WebSocket 出口：建会话→hello→分发→上行 + 传输协商
+   ├─ livekit.js              # LiveKit 媒体面：入房 / 发布麦克风 / 播放远端音频 / 打断静音
    ├─ audio-engine.js         # 单例 AudioContext + 采集图（唯一 new AudioContext）
    ├─ capture-worklet.js      # 16k/20ms/320 样本 + 精确降采样（Safari 兜底）
    ├─ uplink-file.js          # 无麦回放源（与麦克风同形的采集帧）

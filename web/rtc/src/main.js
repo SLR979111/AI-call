@@ -23,6 +23,15 @@ const playback = new Playback(engine, cfg, client);
 const vad = new LocalVad(cfg);
 const fileUplink = new FileUplink(engine, cfg);
 
+// LiveKit 复用 audio-engine 已经采集的那条麦克风 track（AEC 在 getUserMedia 时就申请了）。
+// 这样「VAD 判定的声音」和「发给服务端的声音」是同一份，不会出现双份 getUserMedia。
+client.micTrackProvider = () => {
+  const s = /** @type {any} */ (engine).stream;
+  return s ? s.getAudioTracks()[0] || null : null;
+};
+// 远端音频挂载点（index.html 里的隐藏容器；缺失时 livekit.js 会自己建一个）
+client.livekitSink = document.getElementById('lkAudioSink');
+
 let ui;
 let muted = false;
 let inBarge = false;
@@ -220,12 +229,16 @@ engine.onFrame = (f) => handleFrame(f);
  */
 function handleFrame(f) {
   if (cfg.TRANSPORT_PREF === 'rtc_pcm' && client.transport !== 'rtc_pcm') return;
-  const playing = playback.isPlaying() && !playback.ducked;
+  // LiveKit 模式下 agent 的声音来自房间音频，playback 不会播任何东西，
+  // 所以双讲门控要用 livekit 的出声状态，否则 VAD 会一直以为「对方没说话」。
+  const lkPlaying = client.livekitIsPlaying();
+  const playing = (playback.isPlaying() && !playback.ducked) || lkPlaying;
   const r = vad.push({
     energyDb: muted ? -99 : f.energyDb,
     monoMs: f.monoMs,
     playing,
-    refDb: playback.refEnergyDb()
+    // LiveKit 没有 PCM 缓冲可测参考电平，沿用 playback 在 speech 形态下的估算值
+    refDb: lkPlaying ? -20 : playback.refEnergyDb()
   });
   store.set({ db: r.db });
 
@@ -283,12 +296,15 @@ function reportSpeechEnd(lastVoiced) {
 /** @param {'local_vad'|'manual'} source @param {number} [b0Hint] @param {number} [db] */
 function triggerBarge(source, b0Hint, db = store.get().db) {
   if (inBarge) return false;
-  if (!playback.isPlaying()) { store.log('当前未播放，忽略打断'); return false; }
+  const pcmPlaying = playback.isPlaying();
+  const lkPlaying = client.livekitIsPlaying();
+  if (!pcmPlaying && !lkPlaying) { store.log('当前未播放，忽略打断'); return false; }
   inBarge = true;
 
   const b0 = b0Hint != null ? b0Hint : (vad.b0Mono || now() - client.t0);
-  const cur = playback.cursor();
-  const b3 = playback.duck();                                  // ≤80ms 内本地静音
+  const cur = pcmPlaying ? playback.cursor() : null;
+  // 两种传输都只做「本地静音」：pcm 压增益、LiveKit 静音 <audio>，都不丢缓冲
+  const b3 = pcmPlaying ? playback.duck() : client.duckLiveKit();
   const stopLatency = Math.max(0, b3 - b0);
 
   store.set({ b0: Math.round(b0), b3: Math.round(b3), stopLatency: Math.round(stopLatency) });
@@ -312,7 +328,10 @@ function triggerBarge(source, b0Hint, db = store.get().db) {
     bargeTimer = window.setTimeout(() => {
       if (playback.aborted) { inBarge = false; return; }      // 服务端已取消：不恢复
       if (!vad.isStillSpeaking()) {
-        const resumed = playback.unduck();
+        const resumedPcm = playback.unduck();
+        // LiveKit 侧：duck 只是静音 <audio>，恢复等于解静音，音频流没断过
+        const resumedLk = client.livekitStats().ducked ? client.unduckLiveKit() : false;
+        const resumed = resumedPcm || resumedLk;
         store.log(resumed ? '误打断：从下一句继续（不重播半句）' : '误打断：无未播内容，保持停止');
       }
       inBarge = false;
@@ -341,9 +360,57 @@ client.addEventListener('tts-completed', (ev) => {
 });
 client.addEventListener('pcm', (ev) => playback.pcm(ev.detail));
 
-client.addEventListener('media-ready', () => {
-  // W2：此处接 LiveKit 入房；W1 由 requestMedia 的回落逻辑置 ws_pcm
-  store.log('media_ready（W2 接 LiveKit）');
+/* ============================ LiveKit 媒体面（入房 / 播放 / AEC） ============================ */
+
+client.addEventListener('media-ready', (ev) => {
+  const p = ev.detail || {};
+  store.log(`media_ready provider=${p.provider || '—'} room=${p.room || '—'}`);
+});
+
+client.addEventListener('livekit-connecting', (ev) => {
+  const room = ev.detail && ev.detail.room;
+  store.set({ livekit: { ...store.get().livekit, state: 'connecting', room: room || '' } });
+  ui.status(`正在加入 LiveKit 房间${room ? ' ' + room : ''}…`);
+});
+
+client.addEventListener('livekit-connected', (ev) => {
+  const s = ev.detail || {};
+  store.set({ livekit: s });
+  const aec = s.aec || {};
+  const parts = [
+    aec.echoCancellation ? 'AEC 开' : 'AEC 关',
+    s.publishedVia === 'shared-track' ? '共用采集轨' : 'SDK 采集',
+    aec.sampleRate ? `${aec.sampleRate}Hz` : '',
+  ].filter(Boolean);
+  ui.status(`LiveKit 已入房（${parts.join(' · ')}）`, 'ok');
+  // 自动播放策略：入房瞬间可能被挂起，等用户下一次点击再解锁（不自动重试，避免打脸）
+  if (s.autoPlayBlocked) {
+    ui.status('LiveKit 已入房，点一下页面任意位置启用声音', 'err');
+    document.addEventListener('pointerdown', () => {
+      client.resumeLiveKitAudio().then((ok) => {
+        if (ok) { ui.status('声音已启用', 'ok'); store.log('livekit 音频已解锁'); }
+      });
+    }, { once: true });
+  }
+});
+
+client.addEventListener('livekit-failed', (ev) => {
+  const msg = (ev.detail && ev.detail.message) || '未知错误';
+  store.set({ livekit: { ...store.get().livekit, state: 'idle', error: msg } });
+  ui.status(`LiveKit 入房失败，已回落 ws_pcm：${msg}`, 'err');
+});
+
+client.addEventListener('livekit-audio-blocked', (ev) => {
+  if (ev.detail && ev.detail.blocked) store.log('livekit 远端音频被自动播放策略挂起');
+});
+
+client.addEventListener('livekit-remote-audio', (ev) => {
+  const d = ev.detail || {};
+  store.log(`livekit 订阅到远端音频 ${d.identity || '—'}（共 ${d.attached} 条）`);
+});
+
+client.addEventListener('livekit-stats', (ev) => {
+  store.set({ livekit: ev.detail });
 });
 
 client.addEventListener('cancel', (ev) => {
