@@ -27,7 +27,8 @@
 
 ```text
 代码/镜像：已就绪
-权重：下载中，解压后 4.54GB
+权重：已下载、三卷 sha256 校验通过、已解压到 models/qwen（约 4.23GB）
+配置：tts_model_type=base / tts_model_size=1b7 / tokenizer=qwen3_tts_tokenizer_12hz
 参考音频/逐字转写/授权：未就绪
 P0：授权音频未到位前不得对外启用 qwen 音色
 ```

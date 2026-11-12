@@ -45,7 +45,7 @@
 | 15b | Prompt / Function Calling / Agent 依赖 | ⚠️ | **pseudonym** | 天命 | 记录 Prompt 资产、工具依赖、数据边界 |
 | 16 | 评测/Judge/RSI 外部依赖 | ⚠️ | **湖中日月** | 天命 | 记录 judge 服务/数据来源许可；合成数据声明 |
 | 17 | 前端第三方依赖 | ✅ | **cx** | — | 当前零依赖；新增时更新 THIRD_PARTY |
-| 18 | Qwen3-TTS 权重/参考音频 | ⚠️ | **SinCircle** | 天命 | 权重按 Model Card 保存许可；`data/voice/reference.wav` + 逐字转写 + 录音授权未到位前不得启用 |
+| 18 | Qwen3-TTS 权重/参考音频 | ⚠️ | **SinCircle** | 天命 | 权重已下载/校验/解压（4.23GB）；`data/voice/reference.wav` + 逐字转写 + 录音授权未到位前不得启用 |
 
 ## 4. 交付包责任
 
