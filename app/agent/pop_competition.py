@@ -171,8 +171,11 @@ class PopCompetitionAgent(PopStrategyAgent):
             return
         elif state.phase == "open":
             # The first user turn may already say "我是负责人，方便". Do not
-            # throw that identity away and ask the same question again.
-            if text.strip() and identity_answer(text) == "confirmed":
+            # throw that identity away and ask the same question again. A bare
+            # "可以" is not an identity answer at the opening; it only means
+            # assent after the identity question.
+            first_identity = identity_answer(text) == "confirmed" and IDENTITY.search(normalize_answer(text))
+            if text.strip() and first_identity:
                 yield {"kind": "stage", "reply_id": reply, "stage": "IDENTITY_CONFIRM"}
                 state.phase = "need"
                 sentences, outcome, stage = [ASK_AVAILABILITY], "pending_need", None
