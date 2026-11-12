@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from .eval.runner import EvalCase, EvalRunner
 from .flow.pack import FlowPack, FlowPackError
 from .llm.router import LLMRouter
 from .media.livekit import create_livekit_token
+from .media.livekit_worker import BridgeRegistry
 from .orchestrator import Orchestrator, SessionState
 from .registry import Registry, RegistryError
 from .rsi.gate import GateConfig, compare as rsi_compare
@@ -226,9 +228,11 @@ async def lifespan(app: FastAPI):
     app.state.evals = {}
     app.state.voice = voice
     app.state.pop_store = pop_store
+    app.state.livekit_bridges = BridgeRegistry(app)
     try:
         yield
     finally:
+        await app.state.livekit_bridges.stop_all()
         if pop_store is not None:
             pop_store.close()
         bus.close()
@@ -278,7 +282,17 @@ async def rtc_token(request: Request, session_id: str) -> dict[str, Any]:
         _orc(request).get_session(session_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="session not found")
-    return _rtc_payload(session_id)
+    payload = _rtc_payload(session_id)
+    # The LiveKit bridge must join the same room/session as the browser. This
+    # endpoint is the single place both sides obtain that room.
+    if _bool("LIVEKIT_BRIDGE", "0"):
+        try:
+            await request.app.state.livekit_bridges.start(session_id, payload["room"])
+        except Exception as exc:
+            # Keep the media token usable even if the optional bridge/SDK fails;
+            # the browser can still join, and the existing ws_pcm path remains.
+            print(f"[livekit-bridge] start failed: {type(exc).__name__}: {exc}", flush=True)
+    return payload
 
 
 @app.post("/sessions/{session_id}/token")
@@ -380,6 +394,7 @@ async def cancel_turn(request: Request, session_id: str, body: CancelRequest) ->
 
 @app.post("/sessions/{session_id}/end")
 async def end_session(request: Request, session_id: str) -> dict[str, Any]:
+    await request.app.state.livekit_bridges.stop(session_id)
     try:
         await _orc(request).end_session(session_id)
     except KeyError:
@@ -629,6 +644,10 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         return
     conn = WsConnection(websocket)
     await orc.attach(session_id, conn)
+    # The LiveKit bridge may be started before or after this WS attaches.
+    _bridge = getattr(websocket.app.state, "livekit_bridges", None)
+    if _bridge is not None and session_id in _bridge.bridges:
+        _bridge.bridges[session_id].browser_ws = conn
     tasks: set[asyncio.Task] = set()
     asr = None
     asr_task = None
@@ -833,6 +852,9 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
 
 
 if WEB_DIR.exists():
+    # Python's Windows mimetypes registry often maps .mjs to text/plain, which
+    # makes browsers reject the LiveKit ESM import. Serve it as JavaScript.
+    mimetypes.add_type("text/javascript", ".mjs")
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 else:
     @app.get("/", response_class=HTMLResponse)
