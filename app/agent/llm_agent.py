@@ -315,6 +315,12 @@ class LLMAgent:
             if engine and engine.current == "OPEN":
                 engine.current = "IDENTITY_CONFIRM"
             flow_result = engine.apply_intent("confirm") if engine else None
+            # The identity script already contains the reason and remediation.
+            # Advance past REASON/REMEDIATION so the next "好" is not a repeat.
+            if engine and engine.current == "REASON":
+                engine.apply_intent("confirm")
+            if engine and engine.current == "REMEDIATION":
+                engine.apply_intent("confirm")
             script = self._identity_script()
             history.append({"role": "user", "content": text})
             history.append({"role": "assistant", "content": script})

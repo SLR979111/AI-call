@@ -78,8 +78,8 @@ def test_agent_advances_short_affirmatives_without_reasking_identity():
             return snapshot.get("state", state)
 
         state = await turn("是的", "IDENTITY_CONFIRM", 1)
-        assert state == "REASON"
-        for n in range(2, 7):
+        assert state == "CONFIRM_ACTION"
+        for n in range(2, 5):
             state = await turn("好", state, n)
 
     asyncio.run(scenario())
