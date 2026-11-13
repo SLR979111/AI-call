@@ -8,7 +8,7 @@ Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联�
 
 | 现在能做什么 | 现在还不能做什么 |
 |---|---|
-| 3 轮任务闭环、POP 资质驳回（电话/京麦）、FAQ、转人工；真实 PCM ASR/TTS | 授权产品音色、真机麦克风声学验收 |
+| 3 轮任务闭环、POP 资质驳回（电话/京麦）、FAQ、转人工；真实 PCM ASR/TTS、**向量语义搜索** | 授权产品音色、真机麦克风声学验收 |
 | 打断（barge-in）、停止播报、`turn_aborted` | 真实 LiveKit 媒体面 |
 | 工具校验/幂等/重试/审计、回电工单、合规拦截 | 真实云 LLM 意图/Function Calling |
 | JSONL + SQLite 事件、时延、回放、评测、RSI | 真实业务系统写回、真机声学时延 |
@@ -355,7 +355,7 @@ flowchart TB
 | M1 接入 | HTTP/WS、静态页、`/rtc`、`ws_url` 带 token、503 降级 | ✅ Fake 路径 |
 | M2 语音 | sherpa 流式 ASR、Qwen3/Melo、真实 PCM、分组/时长/取消 | ✅ 开发环境已验证；目标容器待验收 |
 | M3 编排 | Session/Turn、取消、超时、打断、`turn_aborted` | ✅ |
-| M4 Agent | FakeAgent、PopAuditAgent、LLMAgent（Qwen3-4B 本地实验、上下文/Function Calling/RAG）、Flow Pack | ✅ 代码；🟡 真实 Key/速度 |
+| M4 Agent | FakeAgent、PopAuditAgent、LLMAgent（Qwen3-4B 本地实验、上下文/Function Calling/RAG）、**向量语义搜索**、Flow Pack | ✅ 代码；🟡 真实 Key/速度 |
 | M5 Tool Gateway | Schema、幂等、超时、1 次重试、审计、`callback.create` | ✅ |
 | M6 合规 | 禁语 REWRITE、隐私 BLOCK、转人工、事件 | ✅ 规则待外置 |
 | M7 事件 | JSONL + SQLite、`seq`、`TurnLatency t0..t9`、回放 | ✅ |
@@ -367,6 +367,8 @@ flowchart TB
 | 测试 | 原契约测试 + provider/ASR/TTS/取消测试、4 组前端 | 见 [生产语音指南](docs/guides/production-voice.md) |
 
 ## 5. 最近一次更新
+
+**2026-11-13：新增知识库向量语义搜索功能**。集成 BGE-small-zh 模型与 ChromaDB，实现基于语义的知识检索与自动 TF-IDF 回退，支持向量索引持久化与生产环境预构建。
 
 **2026-11-10：四个入口与 84 LLM 实验**。新增 84 `LLMAgent` 真实 POP 上下文注入、确认词/复读修复、短确认跳过无关 RAG；8084 可完成“可以 → 说明具体驳回项”的上下文对话。当前 84 仍为 5–14 秒/轮，未达可用速度。前端新增最新自主回复与后端事件面板；8091 比赛入口、8096 伪双工 Mock 分别保留。
 
