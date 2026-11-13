@@ -7,7 +7,7 @@
 
 | 入口 | 状态 | 说明 |
 |---|---|---|
-| 8081 | 运行中，`/healthz=200` | 旧进程，未加载本轮新提交 |
+| 8081 | 运行中，`/healthz=200` | Docker 容器 `aicall-app-1`，镜像 `aicall-app:local`（13 天前构建），未加载当前 master |
 | 8091 | 未监听 | 比赛入口，尚未启动 |
 | 8087 | 实验入口，`/healthz=200` | 不纳入正式主干 |
 
@@ -28,10 +28,11 @@ result: completed
 ```text
 [ ] 当前工作区干净，git status 无未提交业务代码
 [ ] 当前 master 已包含本轮身份/合规提交
-[ ] 已记录旧 8081 PID
-[ ] 已保存旧 8081 启动命令/环境变量（不含密钥入库）
+[ ] 已记录 8081 容器名/镜像 ID/端口映射
+[ ] 已保存当前 `docker compose config`（不含密钥入库）
 [ ] 已确认 8087 不占用 8081 端口
-[ ] 已准备回滚提交号
+[ ] 已准备旧镜像 ID 作为回滚点
+[ ] 已记录当前 master commit
 [ ] 已通知使用 8081 的人，避免通话中断
 ```
 
@@ -40,9 +41,10 @@ result: completed
 ### 3.1 启动前
 
 ```powershell
-# 记录旧进程
-$old = Get-NetTCPConnection -LocalPort 8081 -State Listen | Select-Object -First 1 -ExpandProperty OwningProcess
-Write-Host "old 8081 PID=$old"
+# 8081 是 Docker 容器，不是本地 python；不要 Stop-Process
+docker ps --filter name=aicall-app-1 --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'
+docker inspect aicall-app-1 --format 'image={{.Image}} health={{.State.Health.Status}}'
+docker compose config *> H:\aicall\data\formal-compose-snapshot.txt
 
 # 记录当前提交
 git rev-parse HEAD
@@ -54,8 +56,10 @@ git status --short
 只停 8081，不动 8087/8091：
 
 ```powershell
-Stop-Process -Id $old -Force
-# 用既有正式启动方式启动 8081；不要用 8087 的 start 脚本
+# 先备份旧镜像，构建新镜像，再重建 app 容器
+docker tag aicall-app:local aicall-app:rollback-$(Get-Date -Format yyyyMMdd-HHmm)
+docker compose build app
+docker compose up -d app
 ```
 
 ### 3.3 启动后检查
@@ -153,17 +157,18 @@ playback_measured=true
 回滚动作：
 
 ```text
-1. 停新 8081
-2. 用旧 PID 对应的启动命令启动旧版本
-3. curl /healthz
-4. 用 Python 文本 smoke 验证
-5. 记录回滚提交号和原因
+1. 停止新 app 容器
+2. 用旧镜像 ID 重新打 tag 为 aicall-app:local
+3. docker compose up -d app
+4. curl /healthz
+5. 用 Python 文本 smoke 验证
+6. 记录回滚镜像 ID/提交号和原因
 ```
 
 ## 6. 本轮已知限制
 
 ```text
-8081 当前仍是旧进程，未加载本轮新提交
+8081 当前是 Docker 容器 `aicall-app-1`，镜像 13 天前构建，未加载当前 master
 8091 未启动
 test_contract.py / test_voice.py 受本机 numpy 环境限制未跑
 8087 的 99 个非语音测试通过，不代表 8081 音频已验证
@@ -174,8 +179,9 @@ test_contract.py / test_voice.py 受本机 numpy 环境限制未跑
 ```text
 日期：
 执行人：
-8081 旧 PID：
-8081 新 PID：
+8081 旧镜像 ID：
+8081 新镜像 ID：
+8081 容器名：
 master commit：
 8081 healthz：
 8087 healthz：
