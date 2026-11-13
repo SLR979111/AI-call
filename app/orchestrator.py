@@ -560,6 +560,10 @@ class Orchestrator:
                     )
                 else:
                     await self._emit_turn_latency(session, turn)
+                if result.get("outcome") == "wrong_contact":
+                    # Wrong-contact identity: play the short apology, then end
+                    # the call instead of returning to LISTENING.
+                    asyncio.create_task(self.end_session(session_id, "wrong_contact"))
                 return {
                     "turn_id": turn.turn_id,
                     "reply_id": turn.reply_id,
