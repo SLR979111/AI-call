@@ -171,6 +171,30 @@ class LLMAgent:
         }
 
     @staticmethod
+    def _is_denial(text: str) -> bool:
+        compact = re.sub(r"[\s，,。.!！?？]", "", text or "")
+        if compact in {
+            "不是", "不对", "不是本人", "我不是", "打错了", "你打错了",
+            "不是负责人", "不是老板", "找错了", "不是这家店",
+        }:
+            return True
+        return any(marker in compact for marker in (
+            "不是本人", "不是负责人", "不是店铺负责人", "不是老板",
+            "不是这家店", "打错了", "找错了", "我不是",
+        ))
+
+    @staticmethod
+    def _is_identity_confirm(text: str) -> bool:
+        compact = re.sub(r"[\s，,。.!！?？]", "", text or "")
+        if not compact:
+            return False
+        return compact in {
+            "是", "是的", "对", "对的", "没错", "是我", "我就是", "我是本人",
+            "是本人", "我是负责人", "我是店铺负责人", "是的我是", "对我是",
+            "是的我是店铺负责人", "对我是店铺负责人", "是的呀", "对对",
+        }
+
+    @staticmethod
     def _limit_reply(reply: str, limit: int = 50) -> str:
         if len(reply) <= limit:
             return reply
@@ -235,10 +259,33 @@ class LLMAgent:
                    "slots": dict(slots), "result": {"llm_provider": "rule", "model": "closing"}}
             return
 
+        if flow_state == "IDENTITY_CONFIRM" and self._is_denial(text):
+            closing = "抱歉，打扰了。后续如有需要可联系京东商家客服，再见。"
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": closing})
+            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                   "text": closing, "final": True, "filler": False}
+            yield {"kind": "end", "reply_id": reply_id, "outcome": "wrong_contact",
+                   "slots": dict(slots), "result": {"llm_provider": "rule", "model": "identity-denied"}}
+            return
+
         # A short "可以/方便/好" is a state transition, not a knowledge query.
         # Retrieving top-2 docs for it injects unrelated POP documents and makes
         # small models repeat the opening question.
-        affirmative = flow_state in {"IDENTITY_CONFIRM", "CONFIRM_ACTION"} and _is_affirmative(text)
+        affirmative = (
+            self._is_identity_confirm(text) if flow_state == "IDENTITY_CONFIRM"
+            else (flow_state == "CONFIRM_ACTION" and _is_affirmative(text))
+        )
+        if flow_state == "IDENTITY_CONFIRM" and not affirmative:
+            reask = "抱歉，我需要先确认一下，请问您是店铺负责人吗？"
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": reask})
+            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                   "text": reask, "final": True, "filler": False}
+            yield {"kind": "end", "reply_id": reply_id, "outcome": "pending_identity",
+                   "slots": dict(slots), "result": {"llm_provider": "rule", "model": "identity-reask"}}
+            return
+
         if affirmative and flow_state == "IDENTITY_CONFIRM":
             # Identity is now confirmed. Only from this point may the case
             # details be disclosed. Use a deterministic first script so the

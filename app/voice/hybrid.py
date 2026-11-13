@@ -22,6 +22,8 @@ STATIC_TEXTS = {
     "您可以在商家后台的资质管理里更新。": "backend_update.wav",
     "审核一般需要一到三个工作日。": "review_time.wav",
     "好的，祝您生意兴隆，再见。": "closing.wav",
+    "抱歉，打扰了。后续如有需要可联系京东商家客服，再见。": "denial.wav",
+    "抱歉，我需要先确认一下，请问您是店铺负责人吗？": "identity_reask.wav",
 }
 
 
