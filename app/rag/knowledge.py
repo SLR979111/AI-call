@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]")
 
@@ -32,23 +35,107 @@ class Chunk:
 
 
 class KnowledgeBase:
-    """Tiny local retrieval layer: token overlap + length normalization.
+    """Hybrid retrieval: semantic vector search + TF-IDF fallback.
 
-    No embedding model is required for the fake skeleton; the interface is the
-    same one a bge-m3/vector implementation will fill later.
+    When sentence-transformers and chromadb are installed, uses BGE embeddings
+    for semantic search. Falls back to TF-IDF token matching otherwise.
+    
+    The interface is unchanged: .search(query, top_k) returns Chunk objects.
     """
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        vector_enabled: bool = True,
+        vector_min_score: float = 0.65,
+    ) -> None:
+        """Initialize the knowledge base.
+        
+        Args:
+            path: Path to the JSON knowledge file. If None, uses default docs.
+            vector_enabled: Whether to try enabling vector search.
+            vector_min_score: Minimum similarity score for vector results (0-1).
+        """
         self.path = path
         self.docs: list[dict[str, Any]] = []
         self._df: dict[str, int] = {}
+        self.vector_min_score = vector_min_score
+        
+        # Load JSON knowledge
         if path and path.exists():
             self.docs = json.loads(path.read_text(encoding="utf-8"))
         if not self.docs:
             self.docs = self._default_docs()
+        
+        # Build TF-IDF index
         for doc in self.docs:
             for token in set(tokenize(doc.get("title", "") + " " + doc.get("content", ""))):
                 self._df[token] = self._df.get(token, 0) + 1
+        
+        # Try to initialize vector search
+        self._vector_store = None
+        self._embedder_available = False
+        if vector_enabled:
+            self._init_vector_search()
+
+    def _init_vector_search(self) -> None:
+        """Initialize vector search if dependencies are available."""
+        try:
+            from .embedder import embed_documents, embed_query, get_embedder
+            from .vector_store import VectorStore
+            
+            # Check if embedder is available
+            if get_embedder() is None:
+                logger.info("Vector search disabled: sentence-transformers not installed")
+                return
+            
+            # Initialize vector store
+            store = VectorStore()
+            if not store.available:
+                logger.info("Vector search disabled: chromadb not installed")
+                return
+            
+            # Check if we need to index documents
+            if store._collection and store._collection.count() == 0:
+                logger.info(f"Indexing {len(self.docs)} documents for vector search...")
+                self._index_documents(store, embed_documents)
+            
+            self._vector_store = store
+            self._embedder_available = True
+            self._embed_query = embed_query
+            logger.info("Vector search enabled (BGE + Chroma)")
+        
+        except ImportError as e:
+            logger.info(f"Vector search disabled: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize vector search: {e}", exc_info=True)
+
+    def _index_documents(self, store: Any, embed_fn: Any) -> None:
+        """Index all documents into the vector store."""
+        texts = []
+        metadatas = []
+        ids = []
+        
+        for doc in self.docs:
+            doc_id = str(doc.get("id", ""))
+            title = str(doc.get("title", ""))
+            content = str(doc.get("content", ""))
+            tags = list(doc.get("tags", []))
+            
+            # Combine title and content for better context
+            full_text = f"{title}\n{content}" if title else content
+            texts.append(full_text)
+            metadatas.append({
+                "doc_id": doc_id,
+                "title": title,
+                "tags": ",".join(tags),
+            })
+            ids.append(doc_id)
+        
+        # Generate embeddings and add to store
+        embeddings = embed_fn(texts)
+        if embeddings:
+            store.add_documents(texts, embeddings, metadatas, ids)
 
     @staticmethod
     def _default_docs() -> list[dict[str, Any]]:
@@ -74,6 +161,56 @@ class KnowledgeBase:
         ]
 
     def search(self, query: str, top_k: int = 3) -> list[Chunk]:
+        """Search for relevant documents using hybrid retrieval.
+        
+        Tries vector search first if available, falls back to TF-IDF.
+        
+        Args:
+            query: The search query.
+            top_k: Maximum number of results to return.
+        
+        Returns:
+            A list of Chunk objects, sorted by relevance score.
+        """
+        # Try vector search first
+        if self._embedder_available and self._vector_store:
+            try:
+                vector_results = self._vector_search(query, top_k)
+                if vector_results:
+                    return vector_results
+            except Exception as e:
+                logger.warning(f"Vector search failed, falling back to TF-IDF: {e}")
+        
+        # Fallback to TF-IDF
+        return self._tfidf_search(query, top_k)
+
+    def _vector_search(self, query: str, top_k: int) -> list[Chunk]:
+        """Semantic search using embeddings."""
+        query_embedding = self._embed_query(query)
+        if not query_embedding:
+            return []
+        
+        results = self._vector_store.search(
+            query_embedding,
+            top_k=top_k,
+            min_score=self.vector_min_score,
+        )
+        
+        chunks = []
+        for result in results:
+            metadata = result["metadata"]
+            chunks.append(Chunk(
+                doc_id=metadata.get("doc_id", ""),
+                title=metadata.get("title", ""),
+                content=result["text"].split("\n", 1)[-1] if "\n" in result["text"] else result["text"],
+                score=result["score"],
+                tags=metadata.get("tags", "").split(",") if metadata.get("tags") else [],
+            ))
+        
+        return chunks
+
+    def _tfidf_search(self, query: str, top_k: int) -> list[Chunk]:
+        """Token-based search using TF-IDF scoring."""
         query_tokens = tokenize(query)
         if not query_tokens:
             return []
