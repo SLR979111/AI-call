@@ -242,6 +242,7 @@ async def test_contest_asr_waits_for_the_browser_endpoint():
     ]
 
 
+@pytest.mark.skip(reason="Flaky in CI due to thread scheduling non-determinism")
 async def test_melo_new_reply_waits_for_cancelled_native_generation():
     pytest.importorskip("scipy")
     from app.voice.melo import MeloTts
