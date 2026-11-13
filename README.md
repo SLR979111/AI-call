@@ -104,7 +104,7 @@ flowchart LR
     U["用户 / 评委"] --> M1["M1 接入层<br/>FastAPI HTTP/WS<br/>静态页 + /rtc 通话台"]
     M1 --> M2["M2 实时语音<br/>sherpa ASR / Qwen3 或 Melo TTS<br/>真实 PCM 与取消"]
     M2 --> M3["M3 编排器<br/>Session / Turn<br/>取消 / 超时 / 下行队列"]
-    M3 --> M4["M4 Agent<br/>Flow Pack + LLM + RAG"]
+    M3 --> M4["M4 Agent<br/>Flow Pack + LLM + RAG + Vector Search"]
     M4 --> M5["M5 Tool Gateway<br/>Schema / 幂等 / 重试 / 审计"]
     M4 --> M6["M6 合规<br/>REWRITE / BLOCK / TRANSFER"]
     M6 --> M2
