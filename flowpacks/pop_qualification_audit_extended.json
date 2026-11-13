@@ -1,0 +1,216 @@
+{
+  "id": "pop_qualification_audit_extended",
+  "version": "2.0.0",
+  "description": "POP 资质审核驳回外呼场景 - 扩展版（包含更多二级分类）",
+  "entry": "OPEN",
+  "states": {
+    "OPEN": {
+      "say": "您好，我是京东商家资质审核专员，本次通话会录音。请问您是店铺负责人吗？",
+      "must_say": ["identity", "recording_notice"],
+      "next": "IDENTITY_CONFIRM"
+    },
+    "IDENTITY_CONFIRM": {
+      "say": "想跟您确认一下，您申请的资质单据目前被驳回，方便现在说明原因和处理方式吗？",
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "REASON"},
+        {"when": {"intent": "deny"}, "to": "END"},
+        {"when": {"intent": "unclear"}, "to": "IDENTITY_CONFIRM"}
+      ]
+    },
+    "REASON": {
+      "say": "您申请的品牌资质因具体审核项不符合要求，需要按驳回原因补充或修正。",
+      "slots": ["brand", "reject_l1", "reject_l2", "reject_l3"],
+      "next": "REMEDIATION"
+    },
+    "REMEDIATION": {
+      "say": "处理方式是可补齐、重新开具或调整对应材料后，在京麦重新提交。",
+      "slots": ["remediation", "handling_mode"],
+      "next": "CONFIRM_ACTION"
+    },
+    "CONFIRM_ACTION": {
+      "transitions": [
+        {"when": {"intent": "confirm"}, "to": "WRITEBACK"},
+        {"when": {"intent": "ask_action"}, "to": "REMEDIATION"},
+        {"when": {"intent": "ask_detail"}, "to": "DETAIL"},
+        {"when": {"intent": "deny"}, "to": "CALLBACK"},
+        {"when": {"intent": "jd_reject"}, "to": "JD_REJECT"},
+        {"when": {"intent": "complaint"}, "to": "TRANSFER"},
+        {"when": {"intent": "unclear"}, "to": "CONFIRM_ACTION"}
+      ]
+    },
+    "DETAIL": {
+      "say": "我为您详细说明一下具体驳回原因和整改要求。",
+      "next": "CONFIRM_ACTION"
+    },
+    "WRITEBACK": {
+      "say": "我这边为您登记处理结果，请按京麦驳回意见补充材料后重新提交。",
+      "tool": "callback_create",
+      "next": "CLOSE"
+    },
+    "CALLBACK": {
+      "say": "我先为您登记回电任务，稍后由审核专员跟进。",
+      "tool": "callback_create",
+      "next": "CLOSE"
+    },
+    "JD_REJECT": {
+      "say": "该场景按京麦驳回处理，驳回原因和整改意见会留在单据里，无需强制回电。",
+      "next": "CLOSE"
+    },
+    "TRANSFER": {
+      "say": "我为您转接人工审核专员，请稍等。"
+    },
+    "CLOSE": {
+      "say": "感谢您的接听，如有疑问可拨打 4006180092。祝您生活愉快，再见。",
+      "next": "END"
+    },
+    "END": {
+      "say": "感谢您的接听，再见。"
+    }
+  },
+  "slots": {
+    "request_id": {
+      "required": true,
+      "ask": "方便提供一下资质申请单号吗？",
+      "pattern": "^Q[0-9]{6,}$"
+    },
+    "brand": {
+      "required": false,
+      "ask": "您申请的品牌是？"
+    },
+    "reject_l1": {
+      "required": false,
+      "ask": "驳回发生在哪个一级环节？",
+      "values": [
+        "入驻",
+        "品牌",
+        "资质",
+        "经营",
+        "财务"
+      ]
+    },
+    "reject_l2": {
+      "required": false,
+      "ask": "对应的材料大类是？",
+      "values": {
+        "入驻": ["公司主体", "法人信息", "联系方式"],
+        "品牌": ["商标注册证", "品牌授权", "品牌使用权"],
+        "资质": ["营业执照", "税务登记", "许可证"],
+        "经营": ["经营范围", "经营地址", "仓储物流"],
+        "财务": ["开户许可", "对公账户", "财务凭证"]
+      }
+    },
+    "reject_l3": {
+      "required": false,
+      "ask": "具体驳回原因是什么？",
+      "examples": [
+        "商标状态不符合要求",
+        "商标注册时间不符合",
+        "资质造假",
+        "主体资质到期",
+        "授权链路不完整",
+        "信息不一致",
+        "材料不清晰"
+      ]
+    },
+    "handling_mode": {
+      "required": false,
+      "ask": "本场景走电话还是京麦驳回？",
+      "values": ["电话", "京麦驳回"]
+    },
+    "remediation": {
+      "required": false,
+      "ask": "需要商家怎么整改？",
+      "examples": [
+        "重新开具符合要求的商标证书",
+        "补充完整的授权链路材料",
+        "更换至有效期内的资质证明",
+        "修正信息不一致的部分",
+        "提供清晰可见的证件照片"
+      ]
+    }
+  },
+  "scenarios": {
+    "二级分类场景": {
+      "入驻": {
+        "公司主体": [
+          "主体资质到期",
+          "主体信息不一致",
+          "主体类型不符合"
+        ],
+        "法人信息": [
+          "法人身份证过期",
+          "法人信息不完整",
+          "法人变更未更新"
+        ],
+        "联系方式": [
+          "联系电话无法接通",
+          "联系地址不详细",
+          "紧急联系人缺失"
+        ]
+      },
+      "品牌": {
+        "商标注册证": [
+          "商标状态不符合要求",
+          "商标注册时间不符合",
+          "商标类别不匹配",
+          "商标图样不清晰"
+        ],
+        "品牌授权": [
+          "授权链路不完整",
+          "授权书过期",
+          "授权范围不符",
+          "授权主体不一致"
+        ],
+        "品牌使用权": [
+          "使用权证明缺失",
+          "使用期限不符",
+          "使用范围超出"
+        ]
+      },
+      "资质": {
+        "营业执照": [
+          "营业执照过期",
+          "经营范围不包含",
+          "营业执照信息模糊"
+        ],
+        "税务登记": [
+          "税务登记证缺失",
+          "纳税人识别号错误"
+        ],
+        "许可证": [
+          "行业许可证缺失",
+          "许可证过期",
+          "许可证范围不符"
+        ]
+      },
+      "经营": {
+        "经营范围": [
+          "经营类目不匹配",
+          "超出核准范围"
+        ],
+        "经营地址": [
+          "地址信息不完整",
+          "地址与执照不符"
+        ],
+        "仓储物流": [
+          "仓储证明缺失",
+          "物流资质不全"
+        ]
+      },
+      "财务": {
+        "开户许可": [
+          "开户许可证过期",
+          "开户行信息错误"
+        ],
+        "对公账户": [
+          "账户信息不完整",
+          "账户名称不一致"
+        ],
+        "财务凭证": [
+          "凭证不清晰",
+          "凭证时间不符"
+        ]
+      }
+    }
+  }
+}
