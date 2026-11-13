@@ -62,6 +62,15 @@ docker image inspect "aicall-app:candidate-$commit" --format 'id={{.Id}} created
 
 构建成功后再进入切换窗口；失败则保持 8081 不动。
 
+正式窗口使用默认演练脚本，带 `-Execute` 才切换：
+
+```powershell
+.\scripts\promote-8081-candidate.ps1
+.\scripts\promote-8081-candidate.ps1 -Execute
+```
+
+脚本会先备份旧 `aicall-app:local`，失败自动回滚。
+
 本轮已构建并隔离烟测（未切换 8081）：
 
 ```text
