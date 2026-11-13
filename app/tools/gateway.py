@@ -119,11 +119,13 @@ class ToolGateway:
         "order.reschedule": ToolSpec(
             "order.reschedule", "1.1.0", ("order_id", "new_time"),
             {"order_id": r"^[A-Z0-9]{8,20}$", "new_time": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"},
+            idempotent=False,
         ),
-        "ticket.create": ToolSpec("ticket.create", "1.0.0", ("summary",), {}),
+        "ticket.create": ToolSpec("ticket.create", "1.0.0", ("summary",), {}, idempotent=False),
         "callback.create": ToolSpec(
             "callback.create", "1.0.0", ("request_id", "reason"),
             {"request_id": r"^Q[0-9]{6,}$"},
+            idempotent=False,
         ),
         "lead.query": ToolSpec("lead.query", "1.0.0", ("lead_id",), {"lead_id": r"^L[0-9]{4,12}$"}),
     }
@@ -263,23 +265,20 @@ class ToolGateway:
 
         # Try to use business gateway for supported tools
         handler = None
-        if hasattr(self, 'business_gateway') and self.business_gateway and tool == "callback.create":
-            try:
-                from ..business.gateway import BusinessGatewayError
-                async def business_handler(**args: Any) -> dict[str, Any]:
-                    try:
-                        return await self.business_gateway.create_callback(
-                            request_id=args["request_id"],
-                            reason=args["reason"],
-                            contact_phone=args.get("contact_phone"),
-                            notes=args.get("notes")
-                        )
-                    except BusinessGatewayError as exc:
-                        raise ToolError(exc.code, exc.message, retryable=exc.retryable)
-                handler = business_handler
-            except Exception:
-                # Fallback to mock
-                pass
+        if self.business_gateway is not None and tool == "callback.create":
+            from ..business.gateway import BusinessGatewayError
+            async def business_handler(**args: Any) -> dict[str, Any]:
+                try:
+                    return await self.business_gateway.create_callback(
+                        request_id=args["request_id"],
+                        reason=args["reason"],
+                        contact_phone=args.get("contact_phone"),
+                        notes=args.get("notes"),
+                        idempotency_key=key,
+                    )
+                except BusinessGatewayError as exc:
+                    raise ToolError(exc.code, exc.message, retryable=exc.retryable)
+            handler = business_handler
         
         # Default handlers
         if handler is None:
@@ -293,7 +292,9 @@ class ToolGateway:
 
         attempts = 0
         last_error: ToolError | None = None
-        for attempt in (1, 2):
+        # Writes are never automatically retried; GETs may retry once.
+        max_attempts = 2 if spec.idempotent else 1
+        for attempt in range(1, max_attempts + 1):
             attempts = attempt
             start = time.perf_counter()
             try:
@@ -310,13 +311,14 @@ class ToolGateway:
                 await self._emit(
                     session_id=session_id, type="ToolReturned", module="tool",
                     turn_id=turn_id, trace_id=trace_id, latency_ms=round(latency, 2),
-                    payload={"tool": tool, "data_summary": data, "attempt": attempt, "cached": False},
+                    payload={"tool": tool, "data_summary": self._redact(data) if isinstance(data, dict) else data,
+                             "attempt": attempt, "cached": False},
                 )
                 return response
             except ToolError as exc:
                 last_error = exc
                 latency = (time.perf_counter() - start) * 1000.0
-                if exc.retryable and attempt == 1:
+                if exc.retryable and attempt < max_attempts:
                     await self._emit(
                         session_id=session_id, type="ToolRetried", module="tool",
                         turn_id=turn_id, trace_id=trace_id,
@@ -339,7 +341,7 @@ class ToolGateway:
             except asyncio.TimeoutError:
                 last_error = ToolError("TOOL_TIMEOUT", "deadline exceeded", retryable=True)
                 latency = (time.perf_counter() - start) * 1000.0
-                if attempt == 1:
+                if attempt < max_attempts:
                     await self._emit(
                         session_id=session_id, type="ToolRetried", module="tool",
                         turn_id=turn_id, trace_id=trace_id,
@@ -369,10 +371,15 @@ class ToolGateway:
         }
 
     @classmethod
-    def to_openai_tools(cls) -> list[dict[str, Any]]:
-        """Export tool specs as OpenAI Function Calling format."""
+    def to_openai_tools(cls, allowlist: set[str] | None = None) -> list[dict[str, Any]]:
+        """Export tool specs as OpenAI Function Calling format.
+
+        allowlist keeps the prompt small for latency-sensitive turns.
+        """
         tools = []
         for tool_name, spec in cls.SPECS.items():
+            if allowlist is not None and tool_name not in allowlist:
+                continue
             safe_name = cls.openai_tool_name(tool_name)
             properties: dict[str, Any] = {}
             for field in spec.required:
@@ -407,6 +414,16 @@ class ToolGateway:
         }
         return descriptions.get(tool_name, f"Tool: {tool_name}")
     
+    async def aclose(self) -> None:
+        gateway = self.business_gateway
+        try:
+            if gateway is not None and hasattr(gateway, "close"):
+                result = gateway.close()
+                if hasattr(result, "__await__"):
+                    await result
+        finally:
+            self.close()
+
     def close(self) -> None:
         try:
             self._conn.close()

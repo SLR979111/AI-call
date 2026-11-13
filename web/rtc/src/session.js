@@ -34,6 +34,7 @@ export class SessionClient extends EventTarget {
     /** 被服务端取消/已打断的 reply：之后同 reply 的 tts_* 与 audio_chunk 一律丢弃（防"打断后又播完"） */
     this.abortedReplies = new Set();
     this.currentReplyId = '';
+    this.currentTtsFiller = false;
     this.transport = 'ws_pcm';
     this.opensOutbound = false;
     this.frameSeq = 0;
@@ -62,6 +63,7 @@ export class SessionClient extends EventTarget {
     this.audioFramesSent = 0;
     this.abortedReplies.clear();
     this.currentReplyId = '';
+    this.currentTtsFiller = false;
     this.transport = 'ws_pcm';
     this.rtcPeer = null;
     this.rtcChannel = null;
@@ -287,6 +289,9 @@ export class SessionClient extends EventTarget {
     lk.addEventListener('remote-audio', (ev) => {
       this.dispatchEvent(new CustomEvent('livekit-remote-audio', { detail: ev.detail }));
     });
+    lk.addEventListener('remote-audio-started', (ev) => {
+      this.dispatchEvent(new CustomEvent('livekit-remote-audio-started', { detail: ev.detail }));
+    });
     lk.addEventListener('audio-blocked', (ev) => {
       if (ev.detail && ev.detail.blocked) {
         store.log('livekit 远端音频被浏览器自动播放策略挂起，等待用户手势');
@@ -466,6 +471,7 @@ export class SessionClient extends EventTarget {
   onAgentText(d) {
     const replyId = d.reply_id || this.currentReplyId || `r_${d.turn_id || 'x'}`;
     store.pushAgentSentence(replyId, d.sentence_id ?? null, d.text || '');
+    if ('filler' in d) this.currentTtsFiller = d.filler === true;
     store.set({ hint: '' });                        // 服务端又开口了（含"打断后补话术"）：撤掉提示
   }
 
@@ -479,6 +485,7 @@ export class SessionClient extends EventTarget {
       return;
     }
     this.currentReplyId = d.reply_id;
+    if ('filler' in d) this.currentTtsFiller = d.filler === true;
     store.beginReply(d.reply_id, d.turn_id, d.estimated === true || d.tts_alignment === false);
     store.set({ downlink: d.audio_format === 'pcm16' ? 'pcm'
       : (d.estimated || d.tts_alignment === false ? 'speech(估算)' : 'pcm') });
@@ -647,12 +654,13 @@ export class SessionClient extends EventTarget {
     });
   }
 
-  playbackFirstFrame(replyId, turnId, audioCtxTime) {
+  playbackFirstFrame(replyId, turnId, audioCtxTime, formal = false) {
     this.send(C2S.PLAYBACK_FIRST_FRAME, {
       turn_id: turnId || store.get().turnId || null,
       reply_id: replyId || null,
       client_mono_ms: round3(this.mono()),
-      audio_ctx_time: round3(audioCtxTime)
+      audio_ctx_time: round3(audioCtxTime),
+      formal: !!formal
     });
   }
 

@@ -16,6 +16,7 @@ class ReplyExtractor:
         self.buffer = ""
         self.done = False
         self.reply = ""
+        self.partial_emitted = ""
         self.max_buffer = max_buffer
 
     def feed(self, text: str) -> str | None:
@@ -54,4 +55,37 @@ class ReplyExtractor:
                 self.reply = value
                 self.done = True
                 return value
+        return None
+
+    def first_sentence(self) -> str | None:
+        """Return the first completed Chinese sentence before the reply closes.
+
+        This is used only to start TTS earlier; the full reply is still emitted
+        by :meth:`feed` once the closing quote arrives.
+        """
+        if self.done or not self.buffer:
+            return None
+        key = self.buffer.find('"reply"')
+        if key < 0:
+            return None
+        colon = self.buffer.find(":", key + 7)
+        if colon < 0:
+            return None
+        quote = self.buffer.find('"', colon + 1)
+        if quote < 0:
+            return None
+        raw = self.buffer[quote + 1:]
+        if raw.endswith("\\"):
+            return None
+        try:
+            value = json.loads('"' + raw + '"')
+        except (TypeError, ValueError):
+            return None
+        for index, char in enumerate(value):
+            if char in "。！？!?；;" and index >= 1:
+                sentence = value[:index + 1]
+                if sentence == self.partial_emitted:
+                    return None
+                self.partial_emitted = sentence
+                return sentence
         return None

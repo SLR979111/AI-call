@@ -48,7 +48,9 @@ class TurnRuntime:
     cancel: CancelToken = field(default_factory=CancelToken)
     t: dict[str, float] = field(default_factory=dict)
     t9: float | None = None
+    t9_formal: float | None = None
     playback: asyncio.Event = field(default_factory=asyncio.Event)
+    playback_formal: asyncio.Event = field(default_factory=asyncio.Event)
     tts_cursor_ms: float = 0.0
     tts_started_sent: bool = False
     audio_seq: int = 0
@@ -234,11 +236,17 @@ class Orchestrator:
                 )
         elif kind == "playback_first_frame":
             turn = session.current_turn
-            if (turn and not turn.cancel.cancelled() and turn.t9 is None
+            formal = bool(msg.get("formal"))
+            if (turn and not turn.cancel.cancelled()
                     and msg.get("turn_id") == turn.turn_id
                     and msg.get("reply_id") == turn.reply_id):
-                turn.t9 = now_ms()
-                turn.playback.set()
+                if formal:
+                    if turn.t9_formal is None:
+                        turn.t9_formal = now_ms()
+                        turn.playback_formal.set()
+                elif turn.t9 is None:
+                    turn.t9 = now_ms()
+                    turn.playback.set()
                 await self.bus.emit(
                     session_id=session_id, type="PlaybackFirstFrame", module="client",
                     turn_id=turn.turn_id, payload={
@@ -246,6 +254,7 @@ class Orchestrator:
                         "audio_ctx_time": msg.get("audio_ctx_time"),
                         "turn_id": turn.turn_id,
                         "reply_id": turn.reply_id,
+                        "formal": formal,
                     },
                 )
         elif kind == "playback_ended":
@@ -390,9 +399,20 @@ class Orchestrator:
                             turn_id=turn.turn_id, trace_id=turn.trace_id, payload={"stage": stage},
                         )
                         await self._send_state(session)
+                    if kind == "first_token":
+                        if "t4" not in turn.t:
+                            turn.t["t4"] = turn.t.get("t3", now_ms()) + float(
+                                chunk.get("latency_ms") or 0
+                            )
+                            await self.bus.emit(
+                                session_id=session_id, type="AgentFirstToken", module="agent",
+                                turn_id=turn.turn_id, trace_id=turn.trace_id,
+                                latency_ms=round(turn.t["t4"] - turn.t["t3"], 2), payload={},
+                            )
                     elif kind == "sentence":
                         sentence_no += 1
-                        if "t4" not in turn.t:
+                        is_filler = bool(chunk.get("filler"))
+                        if not is_filler and "t4" not in turn.t:
                             turn.t["t4"] = now_ms()
                             await self.bus.emit(
                                 session_id=session_id, type="AgentFirstToken", module="agent",
@@ -401,7 +421,7 @@ class Orchestrator:
                             )
                         text_out = str(chunk.get("text", ""))
                         original_text = text_out
-                        if "t5" not in turn.t:
+                        if not is_filler and "t5" not in turn.t:
                             turn.t["t5"] = now_ms()
                         guard = await self.compliance.check_sentence(text_out, {"turn_id": turn.turn_id})
                         await self.bus.emit(
@@ -442,7 +462,7 @@ class Orchestrator:
                             )
                             text_out = guard.text
                             result = {"outcome": "blocked", "slots": session.slots}
-                            await self._speak(session, turn, text_out, sentence_no, True)
+                            await self._speak(session, turn, text_out, sentence_no, True, is_filler=False)
                             sentences.append(text_out)
                             break
 
@@ -451,9 +471,9 @@ class Orchestrator:
                             session_id=session_id, type="AgentSentence", module="agent",
                             turn_id=turn.turn_id, trace_id=turn.trace_id,
                             payload={"reply_id": turn.reply_id, "sentence_id": sentence_no,
-                                     "text": text_out, "final": final},
+                                     "text": text_out, "final": final, "filler": is_filler},
                         )
-                        await self._speak(session, turn, text_out, sentence_no, final)
+                        await self._speak(session, turn, text_out, sentence_no, final, is_filler=is_filler)
                         sentences.append(text_out)
                     elif kind == "transfer":
                         result = {"outcome": "transferred", "reason": chunk.get("reason"), "slots": session.slots}
@@ -463,7 +483,7 @@ class Orchestrator:
                             payload={"reason": chunk.get("reason"), "queue": chunk.get("queue")},
                         )
                         transfer_text = "好的，正在为您转接人工。"
-                        await self._speak(session, turn, transfer_text, sentence_no + 1, True)
+                        await self._speak(session, turn, transfer_text, sentence_no + 1, True, is_filler=False)
                         sentences.append(transfer_text)
                         break
                     elif kind == "end":
@@ -602,7 +622,7 @@ class Orchestrator:
                 session.done.set()
 
     async def _speak(self, session: SessionState, turn: TurnRuntime, text: str,
-                     sentence_no: int, final: bool) -> None:
+                     sentence_no: int, final: bool, *, is_filler: bool = False) -> None:
         turn.cancel.check()
         if self.tts_provider == "qwen3":
             if len(text) > QWEN_MAX_TEXT_CHARS:
@@ -612,7 +632,10 @@ class Orchestrator:
         if session.ws:
             await session.ws.send_json({
                 "type": "agent_text", "turn_id": turn.turn_id, "reply_id": turn.reply_id,
-                "sentence_id": sentence_no, "text": text, "final": final})
+                "sentence_id": sentence_no, "text": text, "final": final,
+                "filler": is_filler})
+        if not turn.pending_speech:
+            turn._group_filler = is_filler
         turn.pending_speech.append((sentence_no, text, final, turn.char_cursor))
         turn.char_cursor += len(text)
         # First sentence immediately; subsequent approved sentences grouped for Qwen prosody.
@@ -623,6 +646,8 @@ class Orchestrator:
         if not turn.pending_speech:
             return
         group, turn.pending_speech = turn.pending_speech, []
+        is_filler = bool(getattr(turn, "_group_filler", False))
+        turn._group_filler = False
         turn.cancel.check()
         text = "".join(item[1] for item in group)
         start_ms = turn.tts_cursor_ms
@@ -644,7 +669,10 @@ class Orchestrator:
                 turn.cancel.check()
                 await session.ws.send_json(data)
             if pcm:
-                turn.t.setdefault("t8", now_ms())
+                if not is_filler:
+                    turn.t.setdefault("t8", now_ms())
+                else:
+                    turn.t.setdefault("t8_filler", now_ms())
 
         async def send_sentences(end_ms: float, *, provisional: bool) -> None:
             offset = start_ms
@@ -670,25 +698,35 @@ class Orchestrator:
                     # Normalize provider termination below, after successful
                     # exhaustion. This also covers an is_last on nonempty PCM.
                     continue
-                if "t7" not in turn.t:
+                if not is_filler and "t7" not in turn.t:
                     turn.t["t7"] = now_ms()
                     await self.bus.emit(
                         session_id=session.session_id, type="TTSStarted", module="voice.tts",
                         turn_id=turn.turn_id, trace_id=turn.trace_id,
                         payload={"reply_id": turn.reply_id, "sample_rate": rate,
-                                 "tts_alignment": self.tts_alignment})
+                                 "tts_alignment": self.tts_alignment, "filler": False})
                     await self.bus.emit(
                         session_id=session.session_id, type="TTSFirstChunk", module="voice.tts",
                         turn_id=turn.turn_id, trace_id=turn.trace_id,
                         latency_ms=round(turn.t["t7"] - turn.t.get("t6", turn.t["t7"]), 2),
                         payload={"reply_id": turn.reply_id, "sentence_id": group[0][0],
-                                 "bytes": len(chunk.pcm), "fake": self.tts_provider == "fake"})
+                                 "bytes": len(chunk.pcm), "fake": self.tts_provider == "fake",
+                                 "filler": False})
+                if is_filler and "t7_filler" not in turn.t:
+                    turn.t["t7_filler"] = now_ms()
+                    await self.bus.emit(
+                        session_id=session.session_id, type="TTSFirstChunk", module="voice.tts",
+                        turn_id=turn.turn_id, trace_id=turn.trace_id,
+                        latency_ms=round(turn.t["t7_filler"] - turn.t.get("t6", turn.t["t7_filler"]), 2),
+                        payload={"reply_id": turn.reply_id, "sentence_id": group[0][0],
+                                 "bytes": len(chunk.pcm), "fake": self.tts_provider == "fake",
+                                 "filler": True})
                 if session.ws:
                     if not turn.tts_started_sent:
                         await session.ws.send_json({"type": "tts_started", "turn_id": turn.turn_id,
                             "reply_id": turn.reply_id, "sample_rate": rate, "channels": 1,
                             "audio_format": "pcm16", "tts_alignment": self.tts_alignment,
-                            "estimated": not self.tts_alignment, "sentences": []})
+                            "estimated": not self.tts_alignment, "sentences": [], "filler": is_filler})
                         turn.tts_started_sent = True
                         session.playing_turn = turn
                     if not samples:
@@ -728,8 +766,11 @@ class Orchestrator:
     async def _emit_turn_latency(self, session: SessionState, turn: TurnRuntime) -> None:
         t = turn.t
         t9 = t.get("t9")
+        t9_formal = turn.t9_formal
         e2e = t9 - t["t0"] if t9 is not None else None
         official = t9 - t["t1"] if t9 is not None else None
+        e2e_formal = t9_formal - t["t0"] if t9_formal is not None else None
+        formal_official = t9_formal - t["t1"] if t9_formal is not None else None
         await self.bus.emit(
             session_id=session.session_id, type="TurnLatency", module="orchestrator",
             turn_id=turn.turn_id, trace_id=turn.trace_id,
@@ -738,10 +779,18 @@ class Orchestrator:
                 "t2_asr_final_ms": t.get("t2"), "t3_agent_start_ms": t.get("t3"),
                 "t4_first_token_ms": t.get("t4"), "t5_first_sentence_ms": t.get("t5"),
                 "t6_compliance_ms": t.get("t6"), "t7_tts_first_chunk_ms": t.get("t7"),
+                "t7_filler_ms": t.get("t7_filler"), "t8_filler_ms": t.get("t8_filler"),
                 "t8_first_downlink_ms": t.get("t8"), "t9_first_playback_ms": t9,
-                "e2e_ms": round(e2e, 2) if e2e is not None else None, "e2e_official_proxy_ms": round(official, 2) if official is not None else None,
-                "vad_to_playback_ms": round(official, 2) if official is not None else None, "clock_offset_ms": 0.0,
-                "playback_measured": turn.playback.is_set(), "clock_suspect": not turn.playback.is_set(), "barge_in_stop_ms": turn.barge_in_stop_ms,
+                "t9_formal_ms": t9_formal,
+                "e2e_ms": round(e2e, 2) if e2e is not None else None,
+                "e2e_formal_ms": round(e2e_formal, 2) if e2e_formal is not None else None,
+                "e2e_official_proxy_ms": round(official, 2) if official is not None else None,
+                "e2e_formal_official_ms": round(formal_official, 2) if formal_official is not None else None,
+                "vad_to_playback_ms": round(official, 2) if official is not None else None,
+                "clock_offset_ms": 0.0,
+                "playback_measured": turn.playback.is_set(),
+                "playback_formal_measured": turn.playback_formal.is_set(),
+                "clock_suspect": not turn.playback.is_set(), "barge_in_stop_ms": turn.barge_in_stop_ms,
                 "t0_client_ms": None, "t0_vad_ms": t.get("t0"),
             },
         )

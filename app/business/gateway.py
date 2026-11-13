@@ -66,27 +66,10 @@ class BusinessGateway(ABC):
         request_id: str,
         reason: str,
         contact_phone: str | None = None,
-        notes: str | None = None
+        notes: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """创建回电工单。
-        
-        Args:
-            request_id: 申请单号
-            reason: 回电原因
-            contact_phone: 联系电话（可选，如果已知）
-            notes: 备注信息
-        
-        Returns:
-            {
-                "ticket_id": str,
-                "request_id": str,
-                "status": str,  # "scheduled" | "pending" | "completed"
-                "created_at": str
-            }
-        
-        Raises:
-            BusinessGatewayError: 创建失败
-        """
+        """创建回电工单；写操作不自动重试，优先使用幂等键。"""
         pass
 
     @abstractmethod
@@ -172,12 +155,15 @@ class RealBusinessGateway(BusinessGateway):
         self,
         method: str,
         path: str,
+        *,
+        retry: bool = True,
         **kwargs: Any
     ) -> dict[str, Any]:
-        """发送 HTTP 请求并处理错误。"""
+        """发送 HTTP 请求并处理错误；写请求默认不重试。"""
         client = await self._get_client()
-        
-        for attempt in range(self.config.retry_count + 1):
+        attempts = self.config.retry_count + 1 if retry else 1
+
+        for attempt in range(attempts):
             try:
                 response = await client.request(method, path, **kwargs)
                 
@@ -193,13 +179,13 @@ class RealBusinessGateway(BusinessGateway):
                 return response.json()
             
             except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
-                if attempt < self.config.retry_count:
+                if retry and attempt + 1 < attempts:
                     await asyncio.sleep(0.5 * (attempt + 1))
                     continue
                 raise BusinessGatewayError("TIMEOUT", str(exc), retryable=True)
             
-            except BusinessGatewayError:
-                if attempt < self.config.retry_count:
+            except BusinessGatewayError as exc:
+                if retry and exc.retryable and attempt + 1 < attempts:
                     await asyncio.sleep(0.5 * (attempt + 1))
                     continue
                 raise
@@ -218,9 +204,10 @@ class RealBusinessGateway(BusinessGateway):
         request_id: str,
         reason: str,
         contact_phone: str | None = None,
-        notes: str | None = None
+        notes: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """创建回电工单。"""
+        """创建回电工单；写调用不自动重试。"""
         payload = {
             "request_id": request_id,
             "reason": reason
@@ -229,8 +216,11 @@ class RealBusinessGateway(BusinessGateway):
             payload["contact_phone"] = contact_phone
         if notes:
             payload["notes"] = notes
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         
-        return await self._request("POST", "/api/v1/callbacks", json=payload)
+        return await self._request(
+            "POST", "/api/v1/callbacks", retry=False, json=payload, headers=headers
+        )
 
     async def send_jingmai_message(
         self,
@@ -244,7 +234,7 @@ class RealBusinessGateway(BusinessGateway):
             "message_type": message_type,
             "content": content
         }
-        return await self._request("POST", "/api/v1/jingmai/messages", json=payload)
+        return await self._request("POST", "/api/v1/jingmai/messages", retry=False, json=payload)
 
     async def update_qualification_status(
         self,
@@ -259,7 +249,9 @@ class RealBusinessGateway(BusinessGateway):
         if notes:
             payload["notes"] = notes
         
-        return await self._request("PATCH", f"/api/v1/qualifications/{request_id}/status", json=payload)
+        return await self._request(
+            "PATCH", f"/api/v1/qualifications/{request_id}/status", retry=False, json=payload
+        )
 
 
 def create_business_gateway() -> BusinessGateway:
@@ -272,7 +264,7 @@ def create_business_gateway() -> BusinessGateway:
         BUSINESS_TIMEOUT_MS: 超时时间（默认: 5000）
         BUSINESS_RETRY_COUNT: 重试次数（默认: 1）
     """
-    gateway_type = os.getenv("BUSINESS_GATEWAY", "mock").lower()
+    gateway_type = os.getenv("BUSINESS_GATEWAY", "mock").strip().lower()
     
     if gateway_type == "real":
         base_url = os.getenv("BUSINESS_API_BASE_URL", "").strip()

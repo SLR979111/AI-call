@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from .agent.fake import FakeAgent
 from .agent.pop_audit import PopAuditAgent
+from .business.gateway import create_business_gateway
 from .compliance import ComplianceGuard
 from .config import _bool, settings
 from .events import EventBus
@@ -147,7 +148,10 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     bus = EventBus(settings.data_dir, settings.release_id, settings.clock_id)
     mock = MockBusiness()
-    tools = ToolGateway(settings.data_dir, mock, bus)
+    business_gateway = None
+    if os.getenv("BUSINESS_GATEWAY", "mock").strip().lower() == "real":
+        business_gateway = create_business_gateway()
+    tools = ToolGateway(settings.data_dir, mock, bus, business_gateway=business_gateway)
     # 场景决定 Flow、知识库和默认 Agent；默认是赛题指定的 POP 资审驳回外呼。
     root = Path(__file__).resolve().parent.parent
     if settings.scenario_id == "pop_qualification_audit":
@@ -221,6 +225,7 @@ async def lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.tools = tools
     app.state.mock = mock
+    app.state.business_gateway = business_gateway
     app.state.orchestrator = orchestrator
     app.state.registry = Registry(settings.data_dir)
     app.state.flowpack = flowpack
@@ -236,7 +241,7 @@ async def lifespan(app: FastAPI):
         if pop_store is not None:
             pop_store.close()
         bus.close()
-        tools.close()
+        await tools.aclose()
 
 
 app = FastAPI(title="智语外呼", version="0.2.0", lifespan=lifespan)
@@ -792,6 +797,11 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
             elif kind == "media_request":
                 try:
                     payload = _rtc_payload(session_id)
+                    if _bool("LIVEKIT_BRIDGE", "0"):
+                        try:
+                            await websocket.app.state.livekit_bridges.start(session_id, payload["room"])
+                        except Exception as exc:
+                            print(f"[livekit-bridge] start failed: {type(exc).__name__}: {exc}", flush=True)
                     await conn.send_json({"type": "media_ready", **payload})
                 except HTTPException as exc:
                     await conn.send_json({"type": "error", "error": {

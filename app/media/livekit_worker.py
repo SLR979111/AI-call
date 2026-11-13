@@ -65,7 +65,11 @@ class LiveKitBridge:
         self.asr = None
         self.asr_task: asyncio.Task | None = None
         self.transcript_task: asyncio.Task | None = None
-        self.transcripts: asyncio.Queue[str] = asyncio.Queue(maxsize=32)
+        self.pending_text: str | None = None
+        self.pending_event = asyncio.Event()
+        self.user_joined = asyncio.Event()
+        self.user_track_ready = asyncio.Event()
+        self.opened = False
         self.sent_audio = 0
         self.stopped = False
 
@@ -83,7 +87,15 @@ class LiveKitBridge:
         @self.room.on("track_subscribed")
         def on_track(track, publication, participant) -> None:
             if track.kind == rtc.TrackKind.KIND_AUDIO:
+                self.user_track_ready.set()
                 asyncio.create_task(self._consume_track(track, participant.identity))
+                # Only speak the outbound greeting after the browser has
+                # actually subscribed; otherwise early TTS is never heard.
+                asyncio.create_task(self._open_once())
+
+        @self.room.on("participant_connected")
+        def on_participant(participant) -> None:
+            self.user_joined.set()
 
         @self.room.on("disconnected")
         def on_disconnected(*_: Any) -> None:
@@ -97,19 +109,24 @@ class LiveKitBridge:
             self.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
         print(f"[livekit-bridge] room={self.room_name} session={self.session_id} connected", flush=True)
-        if getattr(self.orc.agent, "opens_outbound", False):
-            await self.orc.open_outbound(self.session_id, self.conn)
+
+    async def _open_once(self) -> None:
+        if self.opened or not getattr(self.orc.agent, "opens_outbound", False):
+            return
+        self.opened = True
+        await asyncio.sleep(0.3)
+        await self.orc.open_outbound(self.session_id, self.conn)
 
     async def _consume_asr(self) -> None:
         try:
             async for event in self.asr.events():
                 if event.kind == "final" and event.text.strip():
                     print(f"[livekit-bridge] asr: {event.text}", flush=True)
-                    # Never await the Agent while the media/ASR consumer is the
-                    # same task: a slow turn fills the ASR queue and loses later
-                    # utterances. Queue the final and let a separate worker run
-                    # turns in order.
-                    await self.transcripts.put(event.text)
+                    # Keep only the newest pending transcript. If the user
+                    # starts a new utterance while an older one is waiting,
+                    # the older one is discarded instead of being replayed.
+                    self.pending_text = event.text
+                    self.pending_event.set()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -117,15 +134,17 @@ class LiveKitBridge:
 
     async def _consume_transcripts(self) -> None:
         while True:
-            text = await self.transcripts.get()
+            await self.pending_event.wait()
+            self.pending_event.clear()
+            text, self.pending_text = self.pending_text, None
+            if not text:
+                continue
             try:
                 await self.orc.handle_text(self.session_id, text, self.conn)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 print(f"[livekit-bridge] transcript worker failed: {type(exc).__name__}: {exc}", flush=True)
-            finally:
-                self.transcripts.task_done()
 
     async def _consume_track(self, track: Any, identity: str) -> None:
         print(f"[livekit-bridge] subscribe {identity}", flush=True)

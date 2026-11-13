@@ -53,6 +53,9 @@ export class LiveKitTransport extends EventTarget {
     /** @type {Set<string>} */
     this.remotes = new Set();
     this.remoteAudioFrom = '';
+    this.firstRemoteAudio = false;
+    this.remoteLevelTimer = 0;
+    this.remoteSpeaking = false;
   }
 
   /* ============================ 对外状态 ============================ */
@@ -283,12 +286,60 @@ export class LiveKitTransport extends EventTarget {
       this.audioEls.add(el);
       // 浏览器可能因为自动播放策略挂起：这里再推一次，失败就等 resumeAudio()
       const played = el.play?.();
-      if (played && typeof played.catch === 'function') {
+      if (played && typeof played.then === 'function') {
         played.catch(() => { this.autoPlayBlocked = true; this.emit('audio-blocked', { blocked: true }); });
       }
+      this.startRemoteLevel(track, identity);
     }
     this.emit('remote-audio', { identity, attached: this.audioEls.size });
     this.emit('stats', this.stats());
+  }
+
+  /** Watch the remote track's actual level, not the moment <audio> attaches. */
+  startRemoteLevel(track, identity) {
+    try {
+      const media = track?.mediaStreamTrack;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!media || !Ctx) return;
+      this.stopRemoteLevel();
+      this.remoteCtx = new Ctx();
+      const source = this.remoteCtx.createMediaStreamSource(new MediaStream([media]));
+      const analyser = this.remoteCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      this.remoteSource = source;
+      this.remoteAnalyser = analyser;
+      const buf = new Uint8Array(analyser.fftSize);
+      this.remoteLevelTimer = window.setInterval(() => {
+        if (!this.remoteAnalyser) return;
+        this.remoteAnalyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (const v of buf) {
+          const x = (v - 128) / 128;
+          sum += x * x;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        if (!this.remoteSpeaking && rms > 0.02) {
+          this.remoteSpeaking = true;
+          this.emit('remote-audio-started', { identity });
+        } else if (this.remoteSpeaking && rms < 0.008) {
+          this.remoteSpeaking = false;
+        }
+      }, 40);
+    } catch { /* analyser is only for metrics; never block audio */ }
+  }
+
+  stopRemoteLevel() {
+    if (this.remoteLevelTimer) {
+      clearInterval(this.remoteLevelTimer);
+      this.remoteLevelTimer = 0;
+    }
+    try { this.remoteSource?.disconnect(); } catch { /* noop */ }
+    this.remoteSource = null;
+    this.remoteAnalyser = null;
+    this.remoteSpeaking = false;
+    try { this.remoteCtx?.close(); } catch { /* noop */ }
+    this.remoteCtx = null;
   }
 
   /** @param {any} track */
@@ -299,6 +350,7 @@ export class LiveKitTransport extends EventTarget {
       try { el.remove(); } catch { /* noop */ }
     }
     if (!this.audioEls.size) this.remoteAudioFrom = '';
+    if (!this.audioEls.size) this.stopRemoteLevel();
     this.emit('stats', this.stats());
   }
 

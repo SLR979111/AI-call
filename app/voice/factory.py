@@ -29,6 +29,12 @@ def create_tts(provider: str | None = None):
     if provider == "qwen3":
         from .qwen import QwenTts
         return QwenTts(os.getenv("QWEN_TTS_URL", "http://127.0.0.1:8090"))
+    if provider == "volc":
+        from .volc import VolcTts
+        return VolcTts()
+    if provider == "hybrid":
+        from .hybrid import HybridTts
+        return HybridTts()
     if provider == "melo":
         from .melo import MeloTts
         try:
@@ -47,6 +53,9 @@ def create_asr(provider: str | None = None):
     if provider == "sherpa":
         from .sherpa_asr import SherpaAsr
         return SherpaAsr(os.getenv("ASR_MODEL_DIR", "models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"))
+    if provider == "volc":
+        from .volc_asr import VolcAsr
+        return VolcAsr()
     raise VoiceError("ASR_CONFIG", f"unknown ASR_PROVIDER={provider}")
 
 

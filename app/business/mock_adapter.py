@@ -47,7 +47,8 @@ class MockBusinessAdapter(BusinessGateway):
         request_id: str,
         reason: str,
         contact_phone: str | None = None,
-        notes: str | None = None
+        notes: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """创建回电工单。"""
         # 验证申请单是否存在

@@ -38,6 +38,7 @@ let inBarge = false;
 let bargeTimer = 0;
 let lastSpeechEnd = 0;
 let timingTurn = null;
+let livekitReportedKeys = new Set();
 let inputSource = 'mic';
 let audioSinceEnd = false;
 let contestEndpointing = false;
@@ -71,7 +72,7 @@ ui = initUi({
 const contestConfig = fetch(`${cfg.APP_BASE}/contest/cases`).then(async (response) => {
   if (!response.ok) return;
   const catalog = await response.json();
-  vad.endFrames = Math.ceil(catalog.silence_ms / cfg.FRAME_MS);
+  vad.endFrames = Math.max(40, Math.ceil(catalog.silence_ms / cfg.FRAME_MS));
   vad.contestEndpointing = true;
   contestEndpointing = true;
   ui.setContestCases(catalog.cases, catalog.default_case_id);
@@ -83,6 +84,7 @@ async function startCall(source) {
   inputSource = source;
   lastSpeechEnd = 0;
   timingTurn = null;
+  livekitReportedKeys.clear();
   audioSinceEnd = false;
   playbackPreRoll.length = 0;
   listeningPreRoll.length = 0;
@@ -246,7 +248,7 @@ function handleFrame(f) {
     listeningPreRoll.length = 0;
     // 播报期等本地确认后才送语音，避免回声经 ASR 抢先打断。保留开口音频。
     playbackPreRoll.push(f);
-    if (playbackPreRoll.length > vad.bargeFrames) playbackPreRoll.shift();
+    if (playbackPreRoll.length > vad.bargeBufferFrames) playbackPreRoll.shift();
     if (r.barge != null && triggerBarge('local_vad', r.barge, r.db)) {
       for (const frame of playbackPreRoll) sendUplinkFrame(frame);
       playbackPreRoll.length = 0;
@@ -409,6 +411,25 @@ client.addEventListener('livekit-remote-audio', (ev) => {
   store.log(`livekit 订阅到远端音频 ${d.identity || '—'}（共 ${d.attached} 条）`);
 });
 
+function reportLivekitFirstFrame(attempt = 0) {
+  const state = store.get();
+  if (!state.currentReplyId || !state.turnId) {
+    if (attempt < 20) setTimeout(() => reportLivekitFirstFrame(attempt + 1), 50);
+    return;
+  }
+  const formal = client.currentTtsFiller !== true;
+  const key = `${state.currentReplyId}:${formal ? 'formal' : 'filler'}`;
+  if (livekitReportedKeys.has(key)) return;
+  livekitReportedKeys.add(key);
+  client.playbackFirstFrame(state.currentReplyId, state.turnId, engine.ctxTime(), formal);
+}
+
+client.addEventListener('livekit-remote-audio-started', () => {
+  // The remote audio track is permanent; report once per reply, when the
+  // analyser first sees actual sound (not when the <audio> element attaches).
+  reportLivekitFirstFrame();
+});
+
 client.addEventListener('livekit-stats', (ev) => {
   store.set({ livekit: ev.detail });
 });
@@ -469,9 +490,9 @@ client.addEventListener('final-transcript', (event) => {
   store.set({ ttfb: null });
 });
 const origFirstFrame = client.playbackFirstFrame.bind(client);
-client.playbackFirstFrame = (replyId, turnId, audioCtxTime) => {
+client.playbackFirstFrame = (replyId, turnId, audioCtxTime, formal = false) => {
   if (timingTurn?.id === turnId) store.set({ ttfb: Math.round(now() - timingTurn.lastVoiced) });
-  origFirstFrame(replyId, turnId, audioCtxTime);
+  origFirstFrame(replyId, turnId, audioCtxTime, formal);
 };
 
 store.log(`前端已就绪（v0.2.1）｜ APP_BASE=${cfg.APP_BASE}（${cfg.APP_BASE_SOURCE}）｜ 点「开始通话」`);

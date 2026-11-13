@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import threading
+import wave
 from math import gcd
 from pathlib import Path
 from time import monotonic
@@ -44,9 +46,33 @@ class MeloTts:
         from scipy.signal import resample_poly  # noqa: F401
         self.model.generate("您好。", sid=0, speed=self.speed)
 
+        # Optional pre-rendered fixed filler. Cache only an exact text/rate
+        # match so a stale recording can never replace a different sentence.
+        self.filler_text = os.getenv("MELO_FILLER_TEXT", "").strip()
+        self.filler_pcm = b""
+        self.filler_rate = 0
+        filler_path = os.getenv("MELO_FILLER_AUDIO", "").strip()
+        if self.filler_text and filler_path and Path(filler_path).is_file():
+            with wave.open(filler_path, "rb") as wav:
+                if wav.getnchannels() == 1 and wav.getsampwidth() == 2:
+                    self.filler_pcm = wav.readframes(wav.getnframes())
+                    self.filler_rate = wav.getframerate()
+
     async def synthesize(self, text, *, voice="default", sample_rate=24000, cancel):
         if voice != "default" or sample_rate not in (8000, 16000, 24000, 44100, 48000):
             raise VoiceError("TTS_CONFIG", "unsupported voice or sample rate")
+
+        if self.filler_pcm and text == self.filler_text and sample_rate == self.filler_rate:
+            frame_bytes = max(2, (sample_rate // 50) * 2)
+            seq = 0
+            for offset in range(0, len(self.filler_pcm), frame_bytes):
+                cancel.check()
+                yield AudioChunk(self.filler_pcm[offset:offset + frame_bytes], seq,
+                                 ts_mono_ms=mono_ms(), sample_rate=sample_rate)
+                seq += 1
+            cancel.check()
+            yield AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
+            return
 
         def produce(emit, stop):
             import numpy as np

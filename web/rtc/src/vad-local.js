@@ -20,8 +20,11 @@ export class LocalVad {
   constructor(cfg) {
     const v = (cfg && cfg.VAD) || {};
     this.startFrames = v.START_FRAMES ?? 3;
-    this.endFrames = v.END_FRAMES ?? 20;
-    this.bargeFrames = v.BARGE_FRAMES ?? 8;
+    this.endFrames = v.END_FRAMES ?? 40;
+    this.bargeFrames = v.BARGE_FRAMES ?? 30;
+    this.bargeMs = v.BARGE_MS ?? (this.bargeFrames * (v.FRAME_MS ?? 20));
+    this.requireUtteranceEnd = v.BARGE_MS != null;
+    this.bargeBufferFrames = v.BARGE_BUFFER_FRAMES ?? 250;
     this.floorMargin = v.FLOOR_MARGIN_DB ?? 9;
     this.refMargin = v.REF_MARGIN_DB ?? 6;
     this.contestEndpointing = false;
@@ -31,6 +34,10 @@ export class LocalVad {
     this.spRun = 0;
     this.silRun = 0;
     this.bargeRun = 0;
+    this.bargeVoicedMs = 0;
+    this.bargeLastMono = 0;
+    this.bargeFired = false;
+    this.bargeSilenceRun = 0;
     this.bargeFirstFrameMono = 0;
     this.b0Mono = 0;             // 本次语音段的 b0
     this.firstFrameMono = 0;     // 当前 spRun 里第一帧的时间
@@ -73,18 +80,38 @@ export class LocalVad {
       this.b0Mono = this.firstFrameMono;     // ★ b0 = 第一帧，不是第 3 帧
       out.start = this.b0Mono;
     }
-    if (p.playing && aboveGate) {
-      this.bargeRun++;
-      if (this.bargeRun === 1) this.bargeFirstFrameMono = p.monoMs;
-      if (this.bargeRun === this.bargeFrames) {
+    if (!p.playing) {
+      // Only accumulate barge audio while the agent is actually speaking.
+      this.bargeVoicedMs = 0;
+      this.bargeLastMono = 0;
+      this.bargeFired = false;
+      this.bargeSilenceRun = 0;
+      this.bargeRun = 0;
+    }
+    if (p.playing) {
+      if (aboveGate) {
+        // Accumulate voiced time; short pauses do not reset it.
+        if (this.bargeVoicedMs === 0) this.bargeFirstFrameMono = p.monoMs;
+        const delta = this.bargeLastMono > 0 ? p.monoMs - this.bargeLastMono : 20;
+        this.bargeVoicedMs += Math.min(60, Math.max(0, delta));
+        this.bargeLastMono = p.monoMs;
+        this.bargeSilenceRun = 0;
+        this.bargeRun = Math.ceil(this.bargeVoicedMs / 20);
+      } else if (this.bargeVoicedMs > 0) {
+        this.bargeSilenceRun++;
+      }
+      // Do not cut mid-sentence: wait until the user's utterance ends
+      // (800ms trailing silence) and at least 600ms has been voiced.
+      if (!this.bargeFired
+          && this.bargeVoicedMs >= this.bargeMs
+          && (!this.requireUtteranceEnd || this.bargeSilenceRun >= this.endFrames)) {
+        this.bargeFired = true;
         this.speech = true;
         this.silRun = 0;
         this.b0Mono = this.bargeFirstFrameMono;
         this.lastVoicedMono = p.monoMs;
         out.barge = this.b0Mono;
       }
-    } else {
-      this.bargeRun = 0;
     }
     if (this.speech && this.silRun >= this.endFrames) {
       this.speech = false;
@@ -99,6 +126,9 @@ export class LocalVad {
     this.spRun = 0;
     this.silRun = 0;
     this.bargeRun = 0;
+    this.bargeVoicedMs = 0;
+    this.bargeLastMono = 0;
+    this.bargeFired = false;
     this.speech = false;
     this.b0Mono = 0;
     this.lastVoicedMono = 0;

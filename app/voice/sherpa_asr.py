@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import numpy as np
 
@@ -22,9 +23,12 @@ class SherpaAsr:
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=str(root / "tokens.txt"), encoder=str(root / "encoder.int8.onnx"),
             decoder=str(root / "decoder.onnx"), joiner=str(root / "joiner.int8.onnx"),
-            num_threads=2, sample_rate=16000, feature_dim=80, decoding_method="greedy_search",
-            enable_endpoint_detection=True, rule1_min_trailing_silence=0.8,
-            rule2_min_trailing_silence=0.8, rule3_min_utterance_length=15.0,
+            num_threads=max(1, int(os.getenv("ASR_NUM_THREADS", "4"))), sample_rate=16000,
+            feature_dim=80, decoding_method="greedy_search",
+            enable_endpoint_detection=True,
+            rule1_min_trailing_silence=float(os.getenv("ASR_ENDPOINT_SILENCE_S", "0.5")),
+            rule2_min_trailing_silence=float(os.getenv("ASR_ENDPOINT_SILENCE_S", "0.5")),
+            rule3_min_utterance_length=15.0,
         )
 
     async def start(self, session_id, *, sample_rate=16000, hotwords=None, client_endpointing=False):
