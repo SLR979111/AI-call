@@ -232,6 +232,9 @@ class LLMAgent:
             # Outbound opening: the bridge calls handle_text("") once after the
             # media track is published. Do not wait for the user to speak first.
             self.opened_sessions.add(session_id)
+            engine = self.flow_engines.get(session_id)
+            if engine and engine.current == "OPEN":
+                engine.apply_intent("start")
             yield {"kind": "stage", "stage": "IDENTITY_CONFIRM"}
             brand = str(self.case_context.get("brand") or "您")
             greeting = (
@@ -309,6 +312,8 @@ class LLMAgent:
             # formal reply does not wait for LLM generation.
             self.identity_verified.add(session_id)
             engine = self.flow_engines.get(session_id)
+            if engine and engine.current == "OPEN":
+                engine.current = "IDENTITY_CONFIRM"
             flow_result = engine.apply_intent("confirm") if engine else None
             script = self._identity_script()
             history.append({"role": "user", "content": text})
