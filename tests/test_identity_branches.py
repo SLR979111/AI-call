@@ -58,5 +58,6 @@ def test_closing_does_not_continue_case():
     chunks = _run("好的，谢谢")
     joined = _joined(chunks)
     assert chunks[-1]["kind"] == "end"
+    assert chunks[-1]["outcome"] == "closing"
     assert "SECRET_REASON" not in joined
     assert "再见" in joined

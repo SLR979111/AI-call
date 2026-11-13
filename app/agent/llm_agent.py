@@ -255,7 +255,7 @@ class LLMAgent:
             history.append({"role": "assistant", "content": closing})
             yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
                    "text": closing, "final": True, "filler": False}
-            yield {"kind": "end", "reply_id": reply_id, "outcome": "completed",
+            yield {"kind": "end", "reply_id": reply_id, "outcome": "closing",
                    "slots": dict(slots), "result": {"llm_provider": "rule", "model": "closing"}}
             return
 
