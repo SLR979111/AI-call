@@ -10,6 +10,7 @@ from ..cancel import CancelToken
 from ..flow.pack import FlowPack
 from ..llm.router import LLMRouter, messages, parse_json_object
 from ..rag.knowledge import KnowledgeBase
+from .pop_presets import preset_for
 from .reply_stream import ReplyExtractor
 
 SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象，不要 Markdown。
@@ -257,6 +258,22 @@ class LLMAgent:
                    "text": closing, "final": True, "filler": False}
             yield {"kind": "end", "reply_id": reply_id, "outcome": "closing",
                    "slots": dict(slots), "result": {"llm_provider": "rule", "model": "closing"}}
+            return
+
+        preset = preset_for(flow_state, text, self.case_context, verified=verified)
+        if preset is not None:
+            engine = self.flow_engines.get(session_id)
+            if preset.intent and engine:
+                engine.apply_intent(preset.intent)
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": preset.reply})
+            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                   "text": preset.reply, "final": True, "filler": False}
+            result = {"llm_provider": "rule", "model": "pop-preset"}
+            if engine:
+                result["flow_snapshot"] = engine.snapshot()
+            yield {"kind": "end", "reply_id": reply_id, "outcome": preset.outcome,
+                   "slots": dict(engine.slots) if engine else dict(slots), "result": result}
             return
 
         if flow_state == "IDENTITY_CONFIRM" and self._is_denial(text):

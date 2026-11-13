@@ -5,35 +5,91 @@
   "states": {
     "OPEN": {
       "say": "您好，我是京东商家资质审核专员，本次通话会录音。请问您是店铺负责人吗？",
-      "must_say": ["identity", "recording_notice"],
+      "must_say": [
+        "identity",
+        "recording_notice"
+      ],
       "next": "IDENTITY_CONFIRM"
     },
     "IDENTITY_CONFIRM": {
       "say": "想跟您确认一下，您申请的资质单据目前被驳回，方便现在说明原因和处理方式吗？",
       "transitions": [
-        {"when": {"intent": "confirm"}, "to": "REASON"},
-        {"when": {"intent": "deny"}, "to": "END"},
-        {"when": {"intent": "unclear"}, "to": "IDENTITY_CONFIRM"}
+        {
+          "when": {
+            "intent": "confirm"
+          },
+          "to": "REASON"
+        },
+        {
+          "when": {
+            "intent": "deny"
+          },
+          "to": "END"
+        },
+        {
+          "when": {
+            "intent": "unclear"
+          },
+          "to": "IDENTITY_CONFIRM"
+        }
       ]
     },
     "REASON": {
       "say": "您申请的品牌资质因具体审核项不符合要求，需要按驳回原因补充或修正。",
-      "slots": ["brand", "reject_l1", "reject_l2", "reject_l3"],
+      "slots": [
+        "brand",
+        "reject_l1",
+        "reject_l2",
+        "reject_l3"
+      ],
       "next": "REMEDIATION"
     },
     "REMEDIATION": {
       "say": "处理方式是可补齐、重新开具或调整对应材料后，在京麦重新提交。",
-      "slots": ["remediation", "handling_mode"],
+      "slots": [
+        "remediation",
+        "handling_mode"
+      ],
       "next": "CONFIRM_ACTION"
     },
     "CONFIRM_ACTION": {
       "transitions": [
-        {"when": {"intent": "confirm"}, "to": "WRITEBACK"},
-        {"when": {"intent": "ask_action"}, "to": "REMEDIATION"},
-        {"when": {"intent": "deny"}, "to": "CALLBACK"},
-        {"when": {"intent": "jd_reject"}, "to": "JD_REJECT"},
-        {"when": {"intent": "complaint"}, "to": "TRANSFER"},
-        {"when": {"intent": "unclear"}, "to": "CONFIRM_ACTION"}
+        {
+          "when": {
+            "intent": "confirm"
+          },
+          "to": "WRITEBACK"
+        },
+        {
+          "when": {
+            "intent": "ask_action"
+          },
+          "to": "REMEDIATION"
+        },
+        {
+          "when": {
+            "intent": "deny"
+          },
+          "to": "CALLBACK"
+        },
+        {
+          "when": {
+            "intent": "jd_reject"
+          },
+          "to": "JD_REJECT"
+        },
+        {
+          "when": {
+            "intent": "complaint"
+          },
+          "to": "TRANSFER"
+        },
+        {
+          "when": {
+            "intent": "unclear"
+          },
+          "to": "CONFIRM_ACTION"
+        }
       ]
     },
     "WRITEBACK": {
