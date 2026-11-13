@@ -170,6 +170,7 @@ class LLMAgent:
             msg_list,
             tools=available_tools,
             tool_choice="auto",
+            response_format={"type": "json_object"},
             temperature=0.2,
             max_tokens=400,
             session_id=session_id,
@@ -206,6 +207,11 @@ class LLMAgent:
                 continue
 
             if chunk.type == "sentence":
+                if self.stream_mode == "buffered":
+                    # Buffered mode waits for the complete JSON object. Sending
+                    # streamed sentence chunks here would leak JSON fragments
+                    # (e.g. '"reply": "您好') into TTS.
+                    continue
                 if self.stream_mode == "reply":
                     # In reply mode token chunks are the source of truth; the
                     # sentence chunks contain the raw JSON wrapper.

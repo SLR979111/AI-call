@@ -20,6 +20,7 @@ class ProviderConfig:
     model: str
     timeout_ms: int = 3000
     price_per_1k_cny: float = 0.002
+    thinking: str | None = None
 
 
 @dataclass
@@ -92,6 +93,7 @@ class LLMRouter:
             model=model,
             timeout_ms=int(os.getenv("LLM_TIMEOUT_MS", "3000")),
             price_per_1k_cny=float(os.getenv("LLM_PRICE_PER_1K_CNY", "0.002")),
+            thinking=os.getenv(f"LLM_{prefix}_THINKING", "").strip() or None,
         )
 
     @property
@@ -154,6 +156,8 @@ class LLMRouter:
                 }
                 if response_format:
                     payload["response_format"] = response_format
+                if provider.thinking:
+                    payload["thinking"] = {"type": provider.thinking}
                 if tools:
                     payload["tools"] = tools
                     if tool_choice:
@@ -288,6 +292,8 @@ class LLMRouter:
                 }
                 if response_format:
                     payload_dict["response_format"] = response_format
+                if provider.thinking:
+                    payload_dict["thinking"] = {"type": provider.thinking}
                 if tools:
                     payload_dict["tools"] = tools
                     if tool_choice:
@@ -328,8 +334,16 @@ class LLMRouter:
                             except json.JSONDecodeError:
                                 continue
                             
-                            delta = chunk_data["choices"][0].get("delta", {})
-                            finish_reason = chunk_data["choices"][0].get("finish_reason")
+                            choices = chunk_data.get("choices") or []
+                            if not choices:
+                                # Ark/OpenAI-compatible providers send a final
+                                # usage-only chunk with choices=[].
+                                if "usage" in chunk_data:
+                                    usage_data = chunk_data.get("usage") or {}
+                                continue
+                            choice = choices[0] or {}
+                            delta = choice.get("delta") or {}
+                            finish_reason = choice.get("finish_reason")
                             
                             # 首 token 计时
                             if not first_token_sent and delta:
@@ -362,6 +376,8 @@ class LLMRouter:
                             # 处理 tool_calls
                             if "tool_calls" in delta:
                                 for position, tc in enumerate(delta["tool_calls"] or []):
+                                    if not isinstance(tc, dict):
+                                        continue
                                     index = tc.get("index", position)
                                     if not isinstance(index, int):
                                         index = position
@@ -382,7 +398,7 @@ class LLMRouter:
                             
                             # 处理 usage（某些 provider 在最后一个 chunk 返回）
                             if "usage" in chunk_data:
-                                usage_data = chunk_data["usage"]
+                                usage_data = chunk_data.get("usage") or {}
                             
                             # 结束标志
                             if finish_reason:
