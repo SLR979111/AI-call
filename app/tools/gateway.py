@@ -141,11 +141,14 @@ class ToolGateway:
                 return tool
         return name
 
-    def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None) -> None:
+    def __init__(self, data_dir: Path, mock: MockBusiness | None = None, bus: EventBus | None = None,
+                 business_gateway: Any | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.mock = mock or MockBusiness()
         self.bus = bus
+        # Business gateway for real system integration
+        self.business_gateway = business_gateway
         self._db_path = self.data_dir / "index" / "tools.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -258,13 +261,35 @@ class ToolGateway:
             )
             return cached
 
-        handler = {
-            "order.query": self.mock.order_query,
-            "order.reschedule": self.mock.order_reschedule,
-            "ticket.create": self.mock.ticket_create,
-            "callback.create": self.mock.callback_create,
-            "lead.query": self.mock.lead_query,
-        }[tool]
+        # Try to use business gateway for supported tools
+        handler = None
+        if hasattr(self, 'business_gateway') and self.business_gateway and tool == "callback.create":
+            try:
+                from ..business.gateway import BusinessGatewayError
+                async def business_handler(**args: Any) -> dict[str, Any]:
+                    try:
+                        return await self.business_gateway.create_callback(
+                            request_id=args["request_id"],
+                            reason=args["reason"],
+                            contact_phone=args.get("contact_phone"),
+                            notes=args.get("notes")
+                        )
+                    except BusinessGatewayError as exc:
+                        raise ToolError(exc.code, exc.message, retryable=exc.retryable)
+                handler = business_handler
+            except Exception:
+                # Fallback to mock
+                pass
+        
+        # Default handlers
+        if handler is None:
+            handler = {
+                "order.query": self.mock.order_query,
+                "order.reschedule": self.mock.order_reschedule,
+                "ticket.create": self.mock.ticket_create,
+                "callback.create": self.mock.callback_create,
+                "lead.query": self.mock.lead_query,
+            }[tool]
 
         attempts = 0
         last_error: ToolError | None = None
