@@ -37,7 +37,11 @@ class TestVectorStore:
         
         store = VectorStore(persist_dir=temp_chroma_dir, collection_name="test_init")
         assert store is not None
-        assert store.available
+        
+        # Skip if chromadb is not installed (optional dependency)
+        if not store.available:
+            pytest.skip("chromadb not installed (optional dependency)")
+        
         assert store.collection_name == "test_init"
     
     def test_add_and_search(self, temp_chroma_dir):
@@ -48,7 +52,7 @@ class TestVectorStore:
         # Initialize store with unique directory
         store = VectorStore(persist_dir=temp_chroma_dir, collection_name="test_search")
         if not store.available:
-            pytest.skip("Vector store not available")
+            pytest.skip("chromadb not installed (optional dependency)")
         
         # Clear any existing data
         store.clear()
