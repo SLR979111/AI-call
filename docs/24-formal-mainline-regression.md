@@ -51,9 +51,29 @@ git rev-parse HEAD
 git status --short
 ```
 
-### 3.2 重启
+### 3.2 候选镜像（先构建，不切换）
 
-只停 8081，不动 8087/8091：
+```powershell
+# 只构建候选镜像，不改 aicall-app:local，不影响正在运行的 8081
+$commit = git rev-parse --short HEAD
+docker build -t "aicall-app:candidate-$commit" .
+docker image inspect "aicall-app:candidate-$commit" --format 'id={{.Id}} created={{.Created}}'
+```
+
+构建成功后再进入切换窗口；失败则保持 8081 不动。
+
+本轮已构建并隔离烟测（未切换 8081）：
+
+```text
+candidate image: aicall-app:candidate-8833132
+image id: sha256:0775a40eda6d194051cb2a5cdfb3464770332b9562eb84e20d2908ac72119407
+size: 729MB
+临时容器 8088 /healthz = 200
+临时容器已删除
+8081 仍为旧镜像 aicall-app:local，/healthz = 200
+```
+
+### 3.3 切换（需要正式窗口）
 
 ```powershell
 # 先备份旧镜像，构建新镜像，再重建 app 容器
@@ -62,7 +82,7 @@ docker compose build app
 docker compose up -d app
 ```
 
-### 3.3 启动后检查
+### 3.4 启动后检查
 
 ```powershell
 curl.exe -sS -o NUL -w "8081=%{http_code}`n" http://127.0.0.1:8081/healthz
@@ -76,7 +96,7 @@ curl.exe -sS -o NUL -w "8087=%{http_code}`n" http://127.0.0.1:8087/healthz
 8087=200（不影响实验入口）
 ```
 
-### 3.4 文本 smoke
+### 3.5 文本 smoke
 
 用 Python，避免 PowerShell 中文编码问题：
 
@@ -98,7 +118,7 @@ Transcript 为“你好”，不是 ?? 或乱码
 result.outcome 非 error
 ```
 
-### 3.5 语音 smoke
+### 3.6 语音 smoke
 
 浏览器打开：
 
@@ -122,7 +142,7 @@ http://127.0.0.1:8081/rtc/
 说“好的谢谢” → 再见并 SessionEnded
 ```
 
-### 3.6 指标
+### 3.7 指标
 
 ```text
 TurnLatency 有 t0..t9
