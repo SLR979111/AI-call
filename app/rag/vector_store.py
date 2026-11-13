@@ -42,14 +42,14 @@ class VectorStore:
         """
         try:
             import chromadb
-            from chromadb.config import Settings
             
             self.persist_dir.mkdir(parents=True, exist_ok=True)
             
-            self._client = chromadb.Client(Settings(
-                persist_directory=str(self.persist_dir),
-                anonymized_telemetry=False,
-            ))
+            # Use PersistentClient to avoid singleton conflicts in tests
+            self._client = chromadb.PersistentClient(
+                path=str(self.persist_dir),
+                settings=chromadb.config.Settings(anonymized_telemetry=False),
+            )
             
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
@@ -65,6 +65,9 @@ class VectorStore:
                 "chromadb not installed; vector store disabled. "
                 "Install with: pip install chromadb"
             )
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to initialize ChromaDB: {e}")
             return False
     
     @property
