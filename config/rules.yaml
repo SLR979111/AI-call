@@ -1,0 +1,153 @@
+# 合规规则配置文件
+# 支持三种决策：REWRITE（改写）、BLOCK（拦截）、TRANSFER（转人工）
+
+version: "1.0"
+
+# 文本合规规则
+text_rules:
+  # 虚假承诺
+  - id: false_promise
+    name: 虚假承诺检测
+    pattern: "保证|一定|绝对|百分百|最低价"
+    decision: REWRITE
+    replacement: "以实际结果为准"
+    severity: warn
+    enabled: true
+    description: "避免承诺无法保证的结果"
+
+  # 隐私泄露
+  - id: privacy_leak
+    name: 隐私信息泄露
+    pattern: "身份证号|银行卡号|完整手机号"
+    decision: BLOCK
+    replacement: "抱歉，这个问题我无法提供。"
+    severity: fatal
+    enabled: true
+    description: "防止泄露用户隐私信息"
+
+  # 负面情绪
+  - id: negative_sentiment
+    name: 负面情绪表达
+    pattern: "真烦|真麻烦|别废话|闭嘴"
+    decision: REWRITE
+    replacement: "感谢您的反馈，我会为您处理。"
+    severity: warn
+    enabled: true
+    description: "避免负面情绪表达"
+
+  # 不当承诺
+  - id: unrealistic_promise
+    name: 不切实际的承诺
+    pattern: "立即|马上|现在就|保证通过"
+    decision: REWRITE
+    replacement: "我们会尽快为您处理。"
+    severity: warn
+    enabled: true
+    description: "避免不切实际的时间承诺"
+
+# 转人工规则
+transfer_rules:
+  - id: user_request_human
+    name: 用户要求转人工
+    pattern: "转人工|找人工|投诉|经理"
+    decision: TRANSFER
+    severity: info
+    enabled: true
+    description: "用户主动要求人工服务"
+
+# 工具调用规则
+tool_rules:
+  # 允许的工具列表
+  allowed_tools:
+    - order_query          # 订单查询
+    - order_reschedule     # 订单改约
+    - ticket_create        # 创建工单
+    - lead_query           # 线索查询
+    - callback_create      # 创建回电任务
+
+  # 工具参数校验规则
+  parameter_rules:
+    order_query:
+      required: [order_id]
+      patterns:
+        order_id: "^[A-Z0-9]{10,20}$"
+    
+    order_reschedule:
+      required: [order_id, new_time]
+      patterns:
+        order_id: "^[A-Z0-9]{10,20}$"
+    
+    ticket_create:
+      required: [summary]
+      max_length:
+        summary: 500
+    
+    callback_create:
+      required: [request_id, reason]
+      patterns:
+        request_id: "^Q[0-9]{6}$"
+
+# 质检规则
+quality_check:
+  # 会话质量指标
+  metrics:
+    - id: turn_count
+      name: 对话轮次
+      warning_threshold: 5
+      error_threshold: 10
+      enabled: true
+
+    - id: response_time
+      name: 响应时间（ms）
+      warning_threshold: 2000
+      error_threshold: 5000
+      enabled: true
+
+    - id: compliance_violation
+      name: 合规违规次数
+      warning_threshold: 1
+      error_threshold: 3
+      enabled: true
+
+  # 任务完成率
+  task_completion:
+    - intent: order_reschedule
+      required_slots: [order_id, new_time]
+      completion_action: reschedule_success
+
+    - intent: faq
+      required_slots: []
+      completion_action: answered
+
+    - intent: transfer
+      required_slots: []
+      completion_action: transferred
+
+# 报告配置
+reporting:
+  # 质检报告生成
+  quality_report:
+    enabled: true
+    output_dir: "data/quality_reports"
+    format: ["json", "markdown"]
+    include_fields:
+      - session_id
+      - turn_count
+      - compliance_violations
+      - task_completion
+      - response_times
+      - tool_calls
+
+  # 合规违规报告
+  compliance_report:
+    enabled: true
+    output_dir: "data/compliance_reports"
+    format: ["json", "markdown"]
+    include_fields:
+      - session_id
+      - turn_id
+      - rule_id
+      - violation_text
+      - decision
+      - severity
+      - timestamp

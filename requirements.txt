@@ -22,3 +22,4 @@ scipy>=1.12,<2
 sherpa-onnx==2.0.1
 # sherpa-onnx 2.0.1 needs ONNX Runtime API 28; 1.28+ supplies it.
 onnxruntime>=1.28,<2
+pyyaml>=6.0
