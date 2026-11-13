@@ -25,6 +25,7 @@ Windows 多场景通话、语音收轮和自动 RSI 的复现步骤见 [POP 联�
 | **8091** | 比赛入口 | `serve_pop_contest.py`，POP 六阶段 + Resilient 规则 | 可演示；不调用 LLM |
 | **8084** | LLM Agent 实验 | sherpa → `LLMAgent` + Qwen3-4B → Melo | 可对话；5–14s，未达实时 |
 | **8096** | 伪双工 Mock Lab | `MockDuplexProvider` 事件协议，无真实音频 | 协议实验；独立分支 |
+| **8087** | 云端实验入口 | 火山流式 ASR + Ark 2.1-lite + HybridTts（套话/正式同音色，双向 TTS） | 实验：首声约 0.2–0.4s；普通自由回答约 4s；不是正式 8091 |
 
 ### 当前链路
 
@@ -570,6 +571,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8081
 - **比赛入口：<http://127.0.0.1:8091/rtc/>**（`scripts/serve_pop_contest.py` 默认端口）
 - LLM 实验：<http://127.0.0.1:8084/rtc/>（Qwen3-4B，慢，实验用）
 - 伪双工 Mock：<http://127.0.0.1:8096/>（独立分支，无真实音频）
+- 云端实验入口：<http://127.0.0.1:8087/rtc/?transport=livekit>（仅实验，不是正式 8091）
 
 本地 venv、配置项、接口表、Docker 镜像/代理排障见 [开发指南](docs/guides/development.md)。
 
