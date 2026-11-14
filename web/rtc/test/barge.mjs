@@ -173,11 +173,11 @@ const flush = () => new Promise((r) => setTimeout(r, 20));
   check('D 分开的播报片段不累计打断帧', second.every((e) => e.barge == null));
   check('D 打断的 b0 仍是这段插话的第一帧', feed(true, -20).barge === nextB0);
   vad.reset();
-  feed(true);
-  feed(true);
+  feed(true, -20);
+  feed(true, -20);
   const idleB0 = ts;
-  check('D 播报结束后重新计数', feed(false).start == null && feed(false).start == null);
-  check('D 空闲语音仍走 60 ms 开口判断', feed(false).start === idleB0);
+  check('D 播报结束后重新计数', feed(false, -20).start == null && feed(false, -20).start == null);
+  check('D 空闲语音仍走 60 ms 开口判断', feed(false, -20).start === idleB0);
 }
 
 console.log(fails.length ? `\n❌ ${fails.length} 项失败：\n - ` + fails.join('\n - ') : '\n✅ 全部通过');
