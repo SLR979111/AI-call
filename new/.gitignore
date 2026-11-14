@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+runtime/
+node_modules/
+test-results/
+
+# This small, licensed runtime model is part of the independent implementation.
+# Override the parent repository's blanket *.onnx exclusion.
+!app/assets/silero-vad-16k.onnx

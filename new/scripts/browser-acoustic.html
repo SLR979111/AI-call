@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="UTF-8"><title>语音抗干扰验证</title>
+<style>
+body{font:16px/1.7 system-ui,sans-serif;background:#f6f6f0;color:#223e32;max-width:900px;margin:48px auto;padding:0 24px}h1{font-size:26px}button{background:#35644f;color:white;border:0;border-radius:8px;padding:12px 20px;font:inherit;cursor:pointer}pre{white-space:pre-wrap;background:white;padding:24px;border-radius:12px;font:14px/1.6 ui-monospace,monospace}.ok{color:#267149}.bad{color:#a52e2e}li{margin:14px 0}small{color:#68776f}
+</style>
+<h1>语音抗干扰验证</h1>
+<p>使用合成输入模拟扬声器回声、底噪和真实插话；不采集真实麦克风，也不向扬声器播放声音。</p>
+<button id="run">运行回声和插话检查</button>
+<p id="status">等待开始</p><ol id="steps"></ol><pre id="result"></pre>
+<script type="module">
+import {Player,Microphone} from '/static/audio.js';
+const $=id=>document.getElementById(id), results=[];
+const check=(condition,message)=>{if(!condition)throw new Error(message);};
+function step(message){const li=document.createElement('li');li.textContent=message;$('steps').append(li);}
+
+async function runCase(rate,early){
+  const context=new AudioContext({sampleRate:rate});await context.resume();
+  const original=navigator.mediaDevices.getUserMedia;
+  const destination=context.createMediaStreamDestination(),nodes=[];
+  const socket=new WebSocket(`ws://${location.host}/ws`);socket.binaryType='arraybuffer';
+  let player,mic,stage=early?'early':'opening',injected=false,nearSignalAt=null,finished=false,closing=false;
+  const result={rate,early,transcripts:[],cancels:[],errors:[],opening_complete:false};
+  const send=event=>{
+    if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify(event));
+    if(event.type==='playback_started' && ['double','early'].includes(stage) && !injected){
+      injected=true;
+      setTimeout(()=>{if(!closing)feedNear();},150);
+    }
+  };
+  let resolveDone,rejectDone;
+  const done=new Promise((resolve,reject)=>{resolveDone=resolve;rejectDone=reject;});
+  // Attach immediately: event callbacks can fail before the final await.
+  done.catch(()=>{});
+  const timeout=setTimeout(()=>rejectDone(new Error('浏览器音频验证超时')),65000);
+  let near;
+  function feedNear(){
+    const source=context.createBufferSource();source.buffer=near;source.connect(destination);
+    const at=context.currentTime+.025;
+    let first=0;
+    const data=near.getChannelData(0);
+    for(let offset=0;offset<data.length;offset+=480){
+      let power=0;for(let i=offset;i<Math.min(offset+480,data.length);i++)power+=data[i]**2;
+      if(Math.sqrt(power/480)>.006){first=offset/24000;break;}
+    }
+    nearSignalAt=performance.now()+(at-context.currentTime+first)*1000;
+    result.near_signal_ms=nearSignalAt;source.start(at);nodes.push(source);
+  }
+  try{
+    await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
+    player=new Player(context,send);
+    // Keep the playback bus as the AEC reference, but disconnect real speakers.
+    player.output.disconnect(context.destination);
+    for(const [seconds,gain] of [[.12,.7],[.15,.25],[.19,.12]]){
+      const delay=context.createDelay(1),volume=context.createGain();delay.delayTime.value=seconds;volume.gain.value=gain;
+      player.output.connect(delay);delay.connect(volume);volume.connect(destination);nodes.push(delay,volume);
+    }
+    const noise=context.createBufferSource(),buffer=context.createBuffer(1,rate,rate);
+    let seed=777;const values=buffer.getChannelData(0);
+    for(let i=0;i<rate;i++){seed=(seed*1664525+1013904223)>>>0;values[i]=(seed/4294967296*2-1)*.006+.01*Math.sin(i*2*Math.PI*120/rate);}
+    noise.buffer=buffer;noise.loop=true;noise.connect(destination);noise.start();nodes.push(noise);
+    navigator.mediaDevices.getUserMedia=async()=>destination.stream;
+    mic=new Microphone(context,socket,message=>{result.errors.push(message);rejectDone(new Error(message));},player.output);
+    await mic.open();
+    const bytes=await (await fetch('/acoustic-fixture')).arrayBuffer(),view=new DataView(bytes);
+    near=context.createBuffer(1,bytes.byteLength/2,24000);
+    for(let i=0;i<near.length;i++)near.getChannelData(0)[i]=view.getInt16(i*2,true)/32768*.8;
+    socket.onmessage=({data})=>{
+      try{
+        if(data instanceof ArrayBuffer){player.packet(data);return;}
+        const event=JSON.parse(data);
+        if(event.type==='reply_start')player.begin(event.epoch);
+        if(event.type==='utterance')player.unit(event);
+        if(event.type==='utterance_end')player.finish(event);
+        if(event.type==='cancel'){
+          result.cancels.push({...event,observed_ms:performance.now()});player.cancel(event.epoch);
+          if(['opening','tail'].includes(stage))rejectDone(new Error('只有外放回声时仍发生打断'));
+        }
+        if(event.type==='transcript' && event.final){
+          result.transcripts.push(event.text);
+          if(['opening','tail'].includes(stage))rejectDone(new Error('回声被识别成了用户发言'));
+          if(event.text.includes('听清')||event.text.includes('再说'))stage='heard';
+        }
+        if(event.type==='error'){result.errors.push(event.message);rejectDone(new Error(event.message));}
+        if(event.type==='reply_done' && stage==='opening'){
+          result.opening_complete=true;stage='tail';
+          setTimeout(()=>{if(!closing){stage='double';send({type:'text',text:'我是负责人，请告诉我缺什么。'});}},850);
+        }else if(event.type==='reply_done' && stage==='heard' && !finished){
+          finished=true;setTimeout(resolveDone,850);
+        }
+      }catch(error){rejectDone(error);}
+    };
+    const config=await (await fetch('/api/config')).json();
+    send({type:'start',task:config.default_task,voice:true,audio_protocol:2,predictions:false});
+    await done;
+    check(result.cancels.length===1,'预期一次真实插话，实际取消次数：'+result.cancels.length);
+    check(result.cancels[0].reason==='speech','自动打断没有经过服务器人声判断');
+    check(nearSignalAt!==null,'没有注入真实说话样本');
+    result.interrupt_ms=Math.round(result.cancels[0].observed_ms-nearSignalAt);
+    check(result.interrupt_ms>=0 && result.interrupt_ms<1000,'真实插话停播延迟超出目标');
+    check(result.transcripts.some(t=>t.includes('听清')||t.includes('再说')),'没有正确识别插话内容');
+    check(result.errors.length===0,'浏览器或协议报错');
+    result.passed=true;
+  }catch(error){result.passed=false;result.failure=error.message;}
+  finally{
+    closing=true;clearTimeout(timeout);mic?.close();player?.close();
+    nodes.forEach(node=>{try{node.stop?.();node.disconnect();}catch{}});
+    destination.stream.getTracks().forEach(t=>t.stop());socket.close();await context.close();
+    navigator.mediaDevices.getUserMedia=original;
+  }
+  return result;
+}
+$('run').onclick=async()=>{
+  $('run').disabled=true;$('status').textContent='正在检查 48 kHz 外放回声与插话…';
+  try{
+    for(const [rate,early] of [[48000,false],[44100,true]]){
+      const result=await runCase(rate,early);results.push(result);
+      step(`${rate} Hz ${early?'开场立即插话':'回声播放完成后插话'}：${result.passed?'通过，停播 '+result.interrupt_ms+' ms':'失败，'+result.failure}`);
+      $('result').textContent=JSON.stringify(results,null,2);
+      if(!result.passed)break;
+      $('status').textContent='正在检查 44.1 kHz 开场插话…';
+    }
+    const passed=results.length===2 && results.every(r=>r.passed);
+    $('status').textContent=passed?'全部检查通过':'检查未通过';$('status').className=passed?'ok':'bad';
+    await fetch('/acoustic-result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passed,results})});
+  }catch(error){$('status').textContent='检查失败：'+error.message;$('status').className='bad';}
+};
+</script></html>
