@@ -67,7 +67,8 @@ def test_safety_presets_work_in_any_stage():
 
 
 def test_agent_advances_short_affirmatives_without_reasking_identity():
-    pack = FlowPack.load(Path(r"H:\aicall\flowpacks\pop_qualification_audit.json"))
+    # Use relative path from project root
+    pack = FlowPack.load(Path("flowpacks/pop_qualification_audit.json"))
     agent = LLMAgent(None, None, flow_pack=pack, case_context=CTX)
     replies = []
 

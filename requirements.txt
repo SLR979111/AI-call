@@ -23,3 +23,8 @@ sherpa-onnx==2.0.1
 # sherpa-onnx 2.0.1 needs ONNX Runtime API 28; 1.28+ supplies it.
 onnxruntime>=1.28,<2
 pyyaml>=6.0
+
+# Optional: Vector search for semantic knowledge retrieval
+# Install with: pip install sentence-transformers chromadb
+sentence-transformers>=2.2.0
+chromadb>=0.4.22
