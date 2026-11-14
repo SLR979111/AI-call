@@ -165,12 +165,13 @@ const flush = () => new Promise((r) => setTimeout(r, 20));
     ts += 20;
     return event;
   };
-  for (let i = 0; i < 7; i++) feed(true);
+  // Use higher energyDb (-20) to stay above adaptive noise floor
+  for (let i = 0; i < 7; i++) feed(true, -20);
   feed(false, -75);
   const nextB0 = ts;
-  const second = Array.from({ length: 7 }, () => feed(true));
+  const second = Array.from({ length: 29 }, () => feed(true, -20));
   check('D 分开的播报片段不累计打断帧', second.every((e) => e.barge == null));
-  check('D 打断的 b0 仍是这段插话的第一帧', feed(true).barge === nextB0);
+  check('D 打断的 b0 仍是这段插话的第一帧', feed(true, -20).barge === nextB0);
   vad.reset();
   feed(true);
   feed(true);
