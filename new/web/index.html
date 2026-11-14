@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI Call G2 · 有目的地聊，自然地说</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23275c4d'/%3E%3Cpath d='M16 31h6l4-12 7 27 6-20 4 5h6' fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="AI Call G2 首页"><span class="brandmark" aria-hidden="true">⌁</span>AI CALL <b>G2</b></a>
+    <span class="topnote">一个目标，一段自然的对话。</span>
+    <span id="connection" class="connection">准备连接</span>
+  </header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="eyebrow">THIS CONVERSATION</div>
+      <div class="task-title"><h1 id="taskTitle">资料补正沟通</h1><button id="editTask" class="text-button">编辑任务 ↗</button></div>
+      <p id="taskGoal" class="goal"></p>
+      <div class="divider"></div>
+      <div class="section-label">这次要说清楚</div>
+      <ul id="checkpoints" class="checkpoints"></ul>
+      <div id="outcome" class="outcome"><span class="dot"></span><span id="outcomeText">等待开始</span></div>
+      <details class="facts"><summary>已知信息</summary><p id="taskFacts"></p></details>
+      <div class="sidebar-bottom"><span class="tiny-spark">✳</span><p>可以追问、改口，也可以随时打断。<br>有问题时，先把问题说清楚。</p></div>
+    </aside>
+
+    <section class="conversation" aria-label="对话区域">
+      <div class="session-heading"><span id="modeLabel">对话预览</span><span id="latency" class="latency"></span></div>
+      <div id="transcript" class="transcript" role="log" aria-label="对话记录" aria-live="polite">
+        <div id="empty" class="empty-state">
+          <div class="voice-orb" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+          <div class="eyebrow">READY WHEN YOU ARE</div>
+          <h2>有目的地聊，<br>自然地说。</h2>
+          <p>带着左边的目标开始。<br>它会听你说完，也会记得聊到了哪里。</p>
+          <div class="empty-hint">可用扬声器通话，说话即可打断</div>
+        </div>
+      </div>
+      <div id="partial" class="partial" aria-live="off"></div>
+      <div id="error" class="error hidden" role="alert"></div>
+      <div class="controls">
+        <div class="live-status"><span id="activity" class="activity"></span><span id="phase">准备好了，开始聊吧</span><span id="duration" class="duration"></span></div>
+        <div id="startControls" class="start-controls">
+          <button id="startVoice" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-3 0h6"/></svg>开始通话</button>
+          <button id="startText" class="secondary">文字试聊</button>
+        </div>
+        <div id="callControls" class="call-controls hidden">
+          <button id="mute" class="secondary" aria-pressed="false">暂停麦克风</button>
+          <button id="interrupt" class="secondary">打断</button>
+          <button id="stop" class="end-button">结束对话</button>
+        </div>
+        <form id="textForm" class="text-form hidden">
+          <label class="sr-only" for="textInput">输入一句话</label>
+          <input id="textInput" maxlength="2000" autocomplete="off" placeholder="也可以在这里输入一句话…">
+          <button id="sendText" aria-label="发送消息" type="submit">↑</button>
+        </form>
+      </div>
+    </section>
+  </main>
+  <footer><span>AI CALL G2 <span class="footer-separator">/</span> 最小对话实验</span><details id="diagnostics"><summary>实验选项</summary><div class="diagnostic-content"><label><input id="prediction" type="checkbox" checked> 提前准备可能的回复</label><span id="cacheStat">尚无数据</span><button id="export" class="text-button">导出对话</button></div></details></footer>
+
+  <dialog id="taskDialog">
+    <form id="taskForm">
+      <div class="dialog-heading"><h2>这次想聊什么？</h2><button id="closeDialog" type="button" aria-label="关闭" class="text-button">✕</button></div>
+      <p class="dialog-note">给它一个具体目标，和这次对话可以依据的信息。</p>
+      <label>任务名称<input id="editTitle" required maxlength="80"></label>
+      <label>对话目标<textarea id="editGoal" required maxlength="1000" rows="2"></textarea></label>
+      <label>已知信息<textarea id="editFacts" maxlength="5000" rows="4"></textarea></label>
+      <label>需要说清楚的要点 <span>每行一项，最多8项</span><textarea id="editPoints" required rows="3"></textarea></label>
+      <label>开场白<textarea id="editOpening" required maxlength="180" rows="2"></textarea></label>
+      <div class="dialog-actions"><button type="submit" class="primary">保存任务</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
