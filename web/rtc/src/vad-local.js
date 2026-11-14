@@ -87,6 +87,7 @@ export class LocalVad {
       this.bargeFired = false;
       this.bargeSilenceRun = 0;
       this.bargeRun = 0;
+      this.bargeFirstFrameMono = 0;  // Reset first frame marker when playback stops
     }
     if (p.playing) {
       if (aboveGate) {
