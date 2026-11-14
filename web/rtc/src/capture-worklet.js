@@ -35,62 +35,6 @@ class Biquad {
   }
 }
 
-class HighpassFilter {
-  constructor(sampleRate, cutoff) {
-    const w0 = (2 * Math.PI * cutoff) / sampleRate;
-    const cos0 = Math.cos(w0);
-    const alpha = Math.sin(w0) / (2 * Math.SQRT1_2);
-    const a0 = 1 + alpha;
-    this.b0 = ((1 + cos0) / 2) / a0;
-    this.b1 = (-(1 + cos0)) / a0;
-    this.b2 = ((1 + cos0) / 2) / a0;
-    this.a1 = (-2 * cos0) / a0;
-    this.a2 = (1 - alpha) / a0;
-    this.x1 = 0; this.x2 = 0; this.y1 = 0; this.y2 = 0;
-  }
-  step(x) {
-    const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2
-            - this.a1 * this.y1 - this.a2 * this.y2;
-    this.x2 = this.x1; this.x1 = x;
-    this.y2 = this.y1; this.y1 = y;
-    return y;
-  }
-}
-
-/**
- * 自适应高通 + 噪声门。只做降噪，不改变采样率/帧长。
- * 噪声底用慢速跟踪；低于噪声底 + 6dB 的信号衰减到 0.12。
- */
-class AdaptiveNoiseGate {
-  constructor(sampleRate) {
-    this.hp = new HighpassFilter(sampleRate, 80);
-    this.noise = 0.003;
-    this.env = 0;
-    this.gain = 0.35;
-    this.n = 0;
-  }
-  step(x) {
-    const h = this.hp.step(x);
-    const a = Math.abs(h);
-    this.env = a > this.env ? this.env + 0.25 * (a - this.env)
-                            : this.env + 0.02 * (a - this.env);
-    if (++this.n >= 80) {
-      this.n = 0;
-      if (this.env < this.noise * 1.8) {
-        this.noise = 0.98 * this.noise + 0.02 * this.env;
-      } else {
-        this.noise = 0.999 * this.noise + 0.001 * this.env;
-      }
-      this.noise = Math.max(this.noise, 0.0005);
-    }
-    const threshold = Math.max(0.004, this.noise * 2.2);
-    const target = this.env > threshold ? 1 : 0.12;
-    const rate = target > this.gain ? 0.2 : 0.06;
-    this.gain += (target - this.gain) * rate;
-    return h * this.gain;
-  }
-}
-
 class CaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -114,8 +58,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.pending = new Float32Array(4096);
     this.pendLen = 0;
     this.pos = 0;            // 分数读位置（相对 pending 起点）
-
-    this.denoiser = new AdaptiveNoiseGate(this.inputRate);
 
     this.meterAcc = 0;
     this.meterCount = 0;
@@ -170,17 +112,12 @@ class CaptureProcessor extends AudioWorkletProcessor {
     return out.subarray(0, k);
   }
 
-  process(inputs, outputs) {
+  process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
 
-    const clean = new Float32Array(ch.length);
-    for (let i = 0; i < ch.length; i++) clean[i] = this.denoiser.step(ch[i]);
-    const outCh = outputs[0] && outputs[0][0];
-    if (outCh) outCh.set(clean);
-
-    for (let i = 0; i < clean.length; i++) {
-      this.meterAcc += clean[i] * clean[i];
+    for (let i = 0; i < ch.length; i++) {
+      this.meterAcc += ch[i] * ch[i];
       if (++this.meterCount >= this.meterSamples) {
         const rms = Math.sqrt(this.meterAcc / this.meterCount);
         this.port.postMessage({ type: 'meter', db: 20 * Math.log10(rms + 1e-9) });
@@ -189,7 +126,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
       }
     }
 
-    const signal = this._resample(clean);
+    const signal = this._resample(ch);
     let read = 0;
     while (read < signal.length) {
       const n = Math.min(this.frameSamples - this.off, signal.length - read);

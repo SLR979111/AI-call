@@ -19,10 +19,6 @@ export class AudioEngine {
     this.stream = null;
     /** @type {AudioWorkletNode|null} */
     this.node = null;
-    /** @type {MediaStreamAudioDestinationNode|null} */
-    this.processedDest = null;
-    /** @type {MediaStreamTrack|null} */
-    this.processedTrack = null;
     this.actualRate = 0;         // AudioContext 实际采样率（Safari 会忽略 16000 请求）
     this.inputRate = 0;          // 麦克风轨道实际采样率（通常 48000）
     this.device = null;
@@ -78,12 +74,7 @@ export class AudioEngine {
       console.info('[engine] 设备实际参数', this.device);
 
       const src = this.ctx.createMediaStreamSource(this.stream);
-      this.processedDest = this.ctx.createMediaStreamDestination();
-      this.processedTrack = this.processedDest.stream.getAudioTracks()[0] || null;
       this.node = new AudioWorkletNode(this.ctx, 'aicall-capture', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
         processorOptions: {
           targetRate: 16000,
           frameMs: this.cfg.FRAME_MS,
@@ -95,7 +86,6 @@ export class AudioEngine {
       const mute = this.ctx.createGain();
       mute.gain.value = 0;
       src.connect(this.node);
-      this.node.connect(this.processedDest);
       this.node.connect(mute);
       mute.connect(this.ctx.destination);            // 保证图持续被拉取，不发声
       this.micAvailable = true;
@@ -140,9 +130,6 @@ export class AudioEngine {
       this.stream = null;
     }
     if (this.node) { try { this.node.disconnect(); } catch { /* noop */ } this.node = null; }
-    if (this.processedTrack) { try { this.processedTrack.stop(); } catch { /* noop */ } }
-    this.processedTrack = null;
-    this.processedDest = null;
     this.micAvailable = false;
     this._monoCalibrated = false;
   }
