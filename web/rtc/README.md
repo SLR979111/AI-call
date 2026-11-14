@@ -137,6 +137,93 @@ http://127.0.0.1:8091/rtc/?theme=off                     关掉换肤
 - 自动播放策略：入房时若被挂起，客户端提示一句并挂一次性 `pointerdown` 解锁，不自动重试。
 
 
+## 二点六、新前端逻辑（Decision 流）
+
+> 后端正在把"预测式对话（Decision）"接进来。前端已按新逻辑实现，**只有两个接口**。
+> 后端契约尚未合并，所以目前默认走能力探测：探测通过走新逻辑，否则自动回落旧契约。
+
+### 两个接口
+
+```js
+// ① 把用户输入推给后端 Decision（音频帧 / 文本 / 本地信号，一个方法）
+decision.push({ audio: { pcm, monoMs, muted } });
+decision.push({ text: '你好', final: true });
+decision.push({ signal: { name: 'barge_in', b0_ms } }, heard);
+
+// ② 挂一个 hook 等音频（流式）；返回取消订阅函数
+const off = decision.onAudio(({ meta, pcm, ended, reason }) => { /* 播 */ });
+```
+
+### 打断不是协议
+
+用户一开口，前端只做两件本地事：**立刻停播** + **继续推音频**。没有
+`local_muted / cancel / turn_aborted` 这套握手。
+
+新的 `epoch` 一到，旧音频与旧字幕全部作废 —— `epoch` 就是取消：
+
+```text
+服务端                   前端
+audio_segment(epoch=5) → 开始播第 5 轮
+audio_chunk(epoch=5)   → 继续播
+（用户打断，随便推什么）
+audio_segment(epoch=6) → hardStop()：增益归零、清空队列、丢弃所有 epoch<6 的块
+```
+
+### 音频块自带元数据
+
+```json
+{"type":"audio_segment","utt":"u_1","epoch":5,"kind":"filler","reply_id":"r_0005_filler",
+ "sample_rate":24000,"format":"pcm16le","channels":1,"stage":"REASON","is_last":false,
+ "sentences":[{"sentence_id":1,"text":"好的，我看一下。","start_ms":0,"end_ms":480,
+               "char_start":0,"char_end":8}]}
+{"type":"audio_chunk","utt":"u_1","epoch":5,"seq":0,"pcm_b64":"..."}
+{"type":"audio_end","utt":"u_1","epoch":5}
+```
+
+- `kind`：`filler`（先垫一句的套话）| `answer`（正式回答）。字幕会标「套话」，
+  「最新自主回复」卡只显示 `answer`。
+- `sample_rate` **每块可不同**：预渲染套话与云端 TTS 采样率常常不一样，
+  前端按块的 rate 建 buffer，交给浏览器重采样，所以不会变调。
+- 块可以整块带元数据，也可以只带 `{utt,epoch,seq,pcm_b64}` 继承段的元数据 ——
+  两种都收（判据是 `kind`/`sample_rate` 是否存在，`epoch` 不算，因为每个块都带）。
+- `is_last` 或 `audio_end` 二者之一必须给，否则 `playing` 永远为真、段收不了尾。
+
+### 上行
+
+| 消息 | 说明 |
+|---|---|
+| 二进制 `0xA1` 帧 | 沿用旧编码（16B 头 + 640B PCM），服务端那侧已有解析器 |
+| `{"type":"input","text","final"}` | 文本输入（无麦演示 / 文本模式） |
+| `{"type":"input","signal":{...},"heard":{...}}` | `speech_started` / `speech_end` / `barge_in` / `first_frame`；`heard` 带"用户听到第几句、第几字"，供后端做针对性回答 |
+
+`signal` 只是**数据**，不是控制指令：后端不需要为它回 ack，打断也不依赖它。
+
+### 跑起来
+
+```powershell
+node web/rtc/mock/mock-server.mjs          # Mock 已实现新契约（含 epoch 切换演示）
+# 新逻辑（强制）  http://127.0.0.1:8099/?mode=stream&mic=0
+# 能力探测自动选 http://127.0.0.1:8099/?mic=0
+# 旧契约         http://127.0.0.1:8099/?mode=legacy
+```
+
+Mock 每次输入会先出一段 440Hz 套话（24k），900ms 后再出一段 620Hz 正式回答（22k），
+两段采样率不同 —— 用来验证 per-chunk 重采样。连续输入两次即可看到 epoch 顶掉旧音频。
+
+### 代码在哪
+
+```text
+src/boot.js        入口分发：探测 /ws/decision，可用走新逻辑，否则回落旧契约
+src/decision.js    两个接口（唯一实现）+ epoch 记账 + 下行分发
+src/player.js      流式播放：epoch 过滤 / per-chunk 采样率 / is_last / 打断游标
+src/stream-app.js  新装配：engine + vad + ui + decision + player
+src/main.js        旧装配（ws_pcm 契约），保留不删，作为回落路径
+```
+
+**后端尚未实现的部分**：`/ws/decision` 端点与上述消息契约。前端已按此实现并可用
+Mock 全链路验证；后端就绪后把 `MODE` 默认切到 `stream` 即可，无需改前端代码。
+
+
 ## 三、目录
 
 ```

@@ -66,6 +66,18 @@ const server = http.createServer((req, res) => {
     return json(res, 503, { error: { code: 'MEDIA_NOT_CONFIGURED', message: 'LiveKit 未配置', retryable: false, severity: 'warn', user_message: '当前为兼容模式' } });
   }
   if (url.pathname === '/healthz') return json(res, 200, { status: 'ok', mode: 'mock' });
+  // 浏览器端自检回传：headless 里 --dump-dom 抓不到模块顶层 await 之后的结果，
+  // 所以让页面把结论 POST 回来，从 mock 的 stdout 读（job_output 可见）。
+  if (req.method === 'POST' && url.pathname === '/debug/report') {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      console.log('[browser-report] ' + body.slice(0, 6000));
+      json(res, 200, { ok: true });
+    });
+    return;
+  }
+
 
   // 静态
   let p = url.pathname === '/' ? '/index.html' : url.pathname;
@@ -82,8 +94,9 @@ const server = http.createServer((req, res) => {
 
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  if (!url.pathname.startsWith('/ws/session/')) { socket.destroy(); return; }
-  if (!url.searchParams.get('token')) {
+  const isDecision = url.pathname.startsWith('/ws/decision');
+  if (!url.pathname.startsWith('/ws/session/') && !isDecision) { socket.destroy(); return; }
+  if (!isDecision && !url.searchParams.get('token')) {
     socket.end('HTTP/1.1 441 Unauthorized\r\n\r\n');
     return;
   }
@@ -94,6 +107,9 @@ server.on('upgrade', (req, socket) => {
     'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
   );
+
+  // 新前端逻辑：Decision 流（上行 input / 下行 audio_segment + audio_chunk）
+  if (isDecision) { new DecisionConn(socket, url); return; }
 
   const sessionId = url.pathname.split('/').pop();
   new Conn(socket, sessionId);          // 构造函数里挂 data/close 处理器
@@ -377,3 +393,191 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[mock] http://127.0.0.1:${PORT}/?app=http://127.0.0.1:${PORT}`);
   console.log(`[mock] POST /sessions · WS /ws/session/{id}?token= · MEDIA_NOT_CONFIGURED 演练 C1`);
 });
+
+/* ============================ Decision 流（新前端逻辑） ============================ */
+
+/**
+ * 一段正弦音：Mock 不做真 TTS，用不同频率区分"套话 / 正式回答"，
+ * 并且故意给两段不同的采样率，用来验证前端 per-chunk sample_rate 生效（不变调）。
+ */
+function tonePcm({ hz, rate, ms, amp }) {
+  const n = Math.round((rate * ms) / 1000);
+  const buf = Buffer.allocUnsafe(n * 2);
+  for (let i = 0; i < n; i++) {
+    const v = Math.round(Math.sin((2 * Math.PI * hz * i) / rate) * amp * 32767);
+    buf.writeInt16LE(v, i * 2);
+  }
+  return buf;
+}
+
+/**
+ * 新契约的 Mock 实现：
+ *   C→S  hello | input{text|signal|heard} | ping | hangup   （音频帧 0xA1 只计数）
+ *   S→C  stream_ready | audio_segment | audio_chunk | audio_end | control | pong
+ *
+ * 关键演示点：每次输入 epoch 自增；套话先出一段，900ms 后正式回答再自增 epoch。
+ * 如果正式回答到来时套话还在播，前端会按 epoch 直接丢弃旧音频 —— 这就是"打断"。
+ */
+class DecisionConn {
+  constructor(socket, url) {
+    this.socket = socket;
+    this.query = url.searchParams;
+    this.probe = this.query.get('probe') === '1';
+    this.buf = Buffer.alloc(0);
+    this.closed = false;
+    this.s2cSeq = 1;
+    this.epoch = 0;
+    this.uttN = 0;
+    this.turnN = 0;
+    this.stage = 'OPEN';
+    this.frames = 0;
+    this.timers = [];
+    socket.on('data', (c) => { this.buf = Buffer.concat([this.buf, c]); this.drain(); });
+    socket.on('close', () => { this.closed = true; this.clearTimers(); });
+    socket.on('error', () => { this.closed = true; this.clearTimers(); });
+  }
+
+  drain() {
+    while (!this.closed) {
+      const f = decodeFrame(this.buf);
+      if (!f) return;
+      this.buf = this.buf.subarray(f.consumed);
+      if (f.opcode === 0x8) { this.close(); return; }
+      if (f.opcode === 0x9) { this.raw(0xa, f.payload); continue; }
+      if (f.opcode === 0x2) { if (f.payload[0] === 0xa1) this.frames++; continue; }
+      if (f.opcode === 0x1) this.onText(f.payload.toString('utf8'));
+    }
+  }
+
+  onText(txt) {
+    let m; try { m = JSON.parse(txt); } catch { return; }
+    switch (m.type) {
+      case 'hello':
+        this.send('stream_ready', {
+          session_id: m.session_id || '',
+          protocol: '1.0',
+          epoch: this.epoch,
+          stage: this.stage
+        });
+        break;
+      case 'input': this.onInput(m); break;
+      case 'ping': this.send('pong', { t: m.t }); break;
+      case 'hangup':
+        this.send('control', { name: 'session_ended', payload: { reason: m.reason || 'user_click' } });
+        this.close();
+        break;
+      default: break;
+    }
+  }
+
+  onInput(m) {
+    const sig = m.signal && m.signal.name;
+    if (sig === 'speech_started') {
+      this.send('control', {
+        name: 'state',
+        payload: { turn_state: 'USER_SPEAKING', flow_state: this.stage, slots: {} }
+      });
+      return;
+    }
+    if (sig === 'barge_in') {
+      // 打断：立刻用新 epoch 顶掉正在播的东西（不再走 cancel/turn_aborted）
+      this.clearTimers();
+      this.send('control', {
+        name: 'state',
+        payload: { turn_state: 'THINKING', flow_state: this.stage, slots: {} }
+      });
+      this.startTurn('barge');
+      return;
+    }
+    if (m.text) { this.startTurn('text'); return; }
+    if (sig === 'speech_end') { this.startTurn('speech'); return; }
+    if (sig === 'first_frame') {
+      this.send('debug_latency', {
+        note: 'first_frame', utt: m.signal.utt, kind: m.signal.kind,
+        formal: m.signal.formal, ttfb_ms: m.signal.ttfb_ms
+      });
+    }
+  }
+
+  startTurn(trigger) {
+    this.turnN++;
+    this.epoch++;
+    const stage = this.stage;
+    // ① 先垫一句套话（命中前先出声）
+    this.emitSegment({
+      kind: 'filler', epoch: this.epoch, stage,
+      text: '好的，我看一下这笔申请。',
+      hz: 440, rate: 24000, chunks: 12
+    });
+    // ② 900ms 后正式回答（新 epoch；套话若还在播会被前端丢弃）
+    this.after(900, () => {
+      this.epoch++;
+      this.emitSegment({
+        kind: 'answer', epoch: this.epoch, stage,
+        text: '这笔申请所提交的开店主体资质已到期失效，请更新有效资质后重新提交。',
+        hz: 620, rate: 22000, chunks: 18
+      });
+      this.stage = stage === 'OPEN' ? 'REASON' : 'REMEDIATION';
+      this.send('control', {
+        name: 'state',
+        payload: { turn_state: 'SPEAKING', flow_state: this.stage, slots: { trigger } }
+      });
+    });
+  }
+
+  emitSegment({ kind, epoch, stage, text, hz, rate, chunks }) {
+    const utt = `u_${++this.uttN}`;
+    const replyId = `r_${String(this.turnN).padStart(4, '0')}_${kind}`;
+    const ms = 40;
+    this.send('audio_segment', {
+      utt,
+      epoch,
+      kind,
+      reply_id: replyId,
+      sample_rate: rate,
+      format: 'pcm16le',
+      channels: 1,
+      stage,
+      is_last: false,
+      sentences: [{
+        sentence_id: 1, text,
+        start_ms: 0, end_ms: chunks * ms,
+        char_start: 0, char_end: text.length
+      }]
+    });
+    const pcm = tonePcm({ hz, rate, ms, amp: kind === 'filler' ? 0.12 : 0.2 });
+    const b64 = pcm.toString('base64');
+    for (let i = 0; i < chunks; i++) {
+      this.after(i * ms, () => {
+        this.send('audio_chunk', { utt, epoch, seq: i, pcm_b64: b64 });
+        if (i === chunks - 1) this.send('audio_end', { utt, epoch });
+      });
+    }
+  }
+
+  after(ms, fn) {
+    const t = setTimeout(() => { if (!this.closed) fn(); }, ms);
+    this.timers.push(t);
+  }
+
+  clearTimers() {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers = [];
+  }
+
+  send(type, data = {}) {
+    this.raw(0x1, Buffer.from(JSON.stringify({ type, seq: this.s2cSeq++, ...data }), 'utf8'));
+  }
+
+  raw(opcode, payload) {
+    if (this.closed || this.socket.destroyed) return;
+    try { this.socket.write(encodeFrame(opcode, payload)); } catch { this.closed = true; }
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.clearTimers();
+    try { this.socket.write(encodeFrame(0x8, Buffer.alloc(0))); this.socket.end(); } catch { /* noop */ }
+  }
+}

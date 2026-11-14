@@ -29,6 +29,21 @@
     SCENARIO_ID: q.get('scenario') || 'service_outbound',
     RELEASE_ID: q.get('release') || null,
 
+    /** 前端逻辑版本：
+     *  stream —— 新逻辑（Decision 流：push 上行 / onAudio 下行 hook）
+     *  legacy —— 旧契约（ws_pcm 那套 session/turn 状态机）
+     *  auto   —— 先探测 /ws/decision 是否可用，可用走 stream，否则自动回落 legacy
+     *  ?mode=stream|legacy|auto 可强制覆盖 */
+    MODE: q.get('mode') || 'auto',
+
+    /** Decision 流：上行输入与下行音频共用一条 WS（这就是"两个接口"的传输层） */
+    STREAM: {
+      WS_PATH: q.get('streamPath') || '/ws/decision',
+      PROBE_TIMEOUT_MS: 800,
+      HEARTBEAT_MS: 10000,
+      RECONNECT_BACKOFF: [300, 800, 2000, 4000]
+    },
+
     /** 传输偏好：auto | livekit | webrtc（=livekit）| ws_pcm | rtc_pcm
      *  auto   —— 先要 LiveKit token；拿到就入房。MEDIA_NOT_CONFIGURED / 入房失败 /
      *            超时一律静默回落 ws_pcm（C1 + G4），不影响通话可用性。

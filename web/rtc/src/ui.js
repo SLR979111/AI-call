@@ -92,13 +92,14 @@ function render(s) {
   $('aiBadge').style.display = s.phase === 'connected' ? '' : 'none';
 
   // 字幕（仅在变化时重建，避免打断输入法与滚动跳动）
-  const sig = s.lines.map((l) => `${l.id}:${l.final ? 1 : 0}:${l.struck ? 1 : 0}:${l.text.length}`).join('|') + '#' + (s.hint || '');
+  const sig = s.lines.map((l) => `${l.id}:${l.final ? 1 : 0}:${l.struck ? 1 : 0}:${l.text.length}:${l.filler ? 1 : 0}`).join('|') + '#' + (s.hint || '');
   if (sig !== lastLinesSig) {
     lastLinesSig = sig;
     const box = $('transcript');
     box.innerHTML = s.lines.map((l) => `
-      <div class="line ${l.who}">
+      <div class="line ${l.who}${l.filler ? ' filler' : ''}">
         <div class="who">${l.who === 'user' ? '用户' : '数字员工'}${l.final ? '' : ' · 识别中'}${
+          l.filler ? ' · <span class="pill">套话</span>' : ''}${
           l.struck ? ' · <span class="cut">被打断</span>' : ''}</div>
         <div class="${l.struck ? 'struck' : ''}">${escapeHtml(l.text)}</div>
       </div>`).join('')
@@ -106,8 +107,10 @@ function render(s) {
     box.scrollTop = box.scrollHeight;
   }
 
-  // 最新自主回复：只展示最后一条已完成的 agent 文本
-  const latest = [...s.lines].reverse().find((l) => l.who === 'agent' && l.text && l.final);
+  // 最新自主回复：优先正式回答；套话不算"自主回复"（Decision 模型下每次输入都可能先来一句套话）
+  const agents = s.lines.filter((l) => l.who === 'agent' && l.text && l.final);
+  const answer = [...agents].reverse().find((l) => !l.filler);
+  const latest = answer || null;
   const latestEl = $('latestReply');
   if (latestEl) latestEl.textContent = latest ? latest.text : (s.phase === 'connected' ? '等待数字员工回复…' : '等待通话…');
 

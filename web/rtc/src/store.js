@@ -95,13 +95,19 @@ export function pushUserLine(text, final) {
 /**
  * agent_text 是**按句**下发（{sentence_id, text, final}），不是 token 增量：
  * 同一 reply 的多句要拼成一条字幕行，重复 sentence_id 只更新不追加。
+ *
+ * kind（新逻辑）：'filler' 表示这是"先垫一句"的套话，'answer' 才是正式回答。
+ * 套话必须能被区分出来，否则 Decision 模型下每次输入都会出现一段"假回复"混进主字幕。
+ * @param {string} replyId @param {number|null} sentenceId @param {string} text
+ * @param {'filler'|'answer'|string} [kind]
  */
-export function pushAgentSentence(replyId, sentenceId, text) {
+export function pushAgentSentence(replyId, sentenceId, text, kind) {
+  const filler = kind === 'filler';
   const idx = state.lines.findIndex((l) => l.who === 'agent' && l.replyId === replyId);
   if (idx < 0) {
     state.lines.push({
       id: `a_${state.lines.length}`, who: 'agent', text: text || '', final: true,
-      struck: false, replyId, lastSentenceId: sentenceId
+      struck: false, replyId, lastSentenceId: sentenceId, filler
     });
     set({ lines: state.lines.slice() });
     return;
