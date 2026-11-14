@@ -1,10 +1,13 @@
 """Predictive Dialogue API v1, generated from contracts/predictive.v1.json."""
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import create_pipeline
@@ -12,6 +15,7 @@ from . import create_pipeline
 SCHEMA_VERSION = "1.0"
 router = APIRouter(prefix="/predictive/v1", tags=["predictive-v1"])
 pipeline = create_pipeline()
+CONTRACT_PATH = Path(__file__).resolve().parents[2] / "contracts" / "schemas" / "predictive.v1.json"
 
 
 class ClassifyBody(BaseModel):
@@ -65,3 +69,9 @@ def handle(body: HandleBody) -> dict[str, Any]:
         "operation": "handle",
         "decision": asdict(decision),
     }
+
+
+@router.get("/contract")
+def contract() -> JSONResponse:
+    """Frontend-facing contract document (same file as the repo schema)."""
+    return JSONResponse(json.loads(CONTRACT_PATH.read_text(encoding="utf-8")))

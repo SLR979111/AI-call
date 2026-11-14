@@ -55,3 +55,11 @@ def test_blank_text_is_rejected():
         "operation": "handle", "text": " ", "stage": "REASON", "context": CTX,
     })
     assert r.status_code == 422
+
+
+def test_contract_endpoint_is_frontend_readable():
+    r = CLIENT.get("/predictive/v1/contract")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("title") == "Predictive Dialogue API v1"
+    assert "definitions" in body

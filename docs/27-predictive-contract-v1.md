@@ -76,6 +76,8 @@ empty
 
 ## 4. API
 
+前端可直接读取契约：`GET /predictive/v1/contract`（返回 `contracts/schemas/predictive.v1.json`）。
+
 ### POST `/predictive/v1/classify`
 
 请求：
