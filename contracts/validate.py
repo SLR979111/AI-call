@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Validate AICall event fixtures against contracts/schemas.
+"""Validate AICall fixtures against contracts/schemas.
 
 Usage:
     python contracts/validate.py [fixtures_dir|file.jsonl ...]
     python contracts/validate.py contracts/fixtures --schema contracts/schemas/event.v1.json
 
-Default target is contracts/fixtures; default schema is event.v1.json.
+Default target is contracts/fixtures. In automatic mode, ws_* fixtures use
+ws_transcript.v1.json, predictive.v1.* fixtures use predictive.v1.json, and
+other fixtures use event.v1.json. --schema explicitly overrides that selection.
 Each *.jsonl file is validated line by line (blank lines skipped); each *.json
 file is validated as one document. Prints ``OK <file> <n>`` per clean file and
 exits 1 on any error.
@@ -32,6 +34,7 @@ DEFAULT_SCHEMA = SCHEMAS_DIR / "event.v1.json"
 # ws_*.jsonl 是「WS 收发实录」（{"dir","frame"} 逐帧），不是事件 envelope，
 # 用独立 schema 校验，且不做事件 seq 单调检查。
 WS_SCHEMA = SCHEMAS_DIR / "ws_transcript.v1.json"
+PREDICTIVE_SCHEMA = SCHEMAS_DIR / "predictive.v1.json"
 
 try:  # preferred path
     import jsonschema  # type: ignore
@@ -241,7 +244,7 @@ def display(path: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Validate *.jsonl event fixtures against a JSON Schema (default: event.v1.json)."
+        description="Validate JSON/JSONL fixtures using their contract schema."
     )
     parser.add_argument(
         "targets",
@@ -251,14 +254,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--schema",
-        default=str(DEFAULT_SCHEMA),
         metavar="PATH",
-        help="schema to validate against (default: contracts/schemas/event.v1.json)",
+        help="override automatic event/WS/predictive schema selection",
     )
     parser.add_argument("--quiet", action="store_true", help="only print failures and the final summary")
     args = parser.parse_args(argv)
 
-    schema_path = Path(args.schema)
+    schema_path = Path(args.schema or DEFAULT_SCHEMA)
     if not schema_path.is_absolute():
         schema_path = Path.cwd() / schema_path
     schema_path = schema_path.resolve()
@@ -299,11 +301,17 @@ def main(argv: list[str] | None = None) -> int:
         last_seq: int | None = None
         is_ws = path.name.startswith("ws_")
         file_schema = schema
-        if is_ws:
+        file_schema_path = schema_path
+        if args.schema is None:
+            if is_ws:
+                file_schema_path = WS_SCHEMA
+            elif path.name.startswith("predictive.v1."):
+                file_schema_path = PREDICTIVE_SCHEMA
+        if file_schema_path != schema_path:
             try:
-                file_schema = load_schema(WS_SCHEMA)
+                file_schema = load_schema(file_schema_path)
             except (OSError, json.JSONDecodeError) as exc:
-                errors.append(f"{WS_SCHEMA.name}: cannot load ws schema: {exc}")
+                errors.append(f"{file_schema_path.name}: cannot load schema: {exc}")
         saw_session_ready = False
         try:
             for label, doc, parse_error in iter_documents(path):
