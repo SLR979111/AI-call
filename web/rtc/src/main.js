@@ -26,7 +26,9 @@ const fileUplink = new FileUplink(engine, cfg);
 // LiveKit 复用 audio-engine 已经采集的那条麦克风 track（AEC 在 getUserMedia 时就申请了）。
 // 这样「VAD 判定的声音」和「发给服务端的声音」是同一份，不会出现双份 getUserMedia。
 client.micTrackProvider = () => {
-  const s = /** @type {any} */ (engine).stream;
+  const e = /** @type {any} */ (engine);
+  if (e.processedTrack) return e.processedTrack;
+  const s = e.stream;
   return s ? s.getAudioTracks()[0] || null : null;
 };
 // 远端音频挂载点（index.html 里的隐藏容器；缺失时 livekit.js 会自己建一个）
