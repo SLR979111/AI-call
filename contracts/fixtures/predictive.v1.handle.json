@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "operation": "handle",
+  "decision": {
+    "text": "原因是主体资质到期。更新有效资质后重新提交。",
+    "hit": true,
+    "stage": "REASON",
+    "next_stage": "REMEDIATION",
+    "classification": {
+      "label": "affirmative",
+      "stage": "REASON",
+      "confidence": 0.95,
+      "reason": "short affirmative"
+    },
+    "output_classification": {
+      "label": "other",
+      "stage": "REASON",
+      "confidence": 0.5,
+      "reason": "broad fallback"
+    },
+    "candidate": {
+      "candidate_id": "REASON:affirmative",
+      "stage": "REASON",
+      "label": "affirmative",
+      "text": "原因是主体资质到期。更新有效资质后重新提交。",
+      "next_stage": "REMEDIATION",
+      "source": "prepared"
+    },
+    "filler_used": false,
+    "needs_llm": false,
+    "prepared_candidates": [
+      {
+        "candidate_id": "REMEDIATION:affirmative",
+        "stage": "REMEDIATION",
+        "label": "affirmative",
+        "text": "请更新主体资质到期，更新有效资质后重新提交，提交后我们会再次审核。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:transfer",
+        "stage": "REMEDIATION",
+        "label": "transfer",
+        "text": "好的，我帮您转接人工审核专员，请稍等。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:abuse",
+        "stage": "REMEDIATION",
+        "label": "abuse",
+        "text": "好的，如您暂时不需要，我们不再打扰，再见。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:busy",
+        "stage": "REMEDIATION",
+        "label": "busy",
+        "text": "好的，我稍后方便时再联系您，再见。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:negative",
+        "stage": "REMEDIATION",
+        "label": "negative",
+        "text": "好的，如您暂时不需要，我们不再打扰，再见。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:confused",
+        "stage": "REMEDIATION",
+        "label": "confused",
+        "text": "请更新主体资质到期，更新有效资质后重新提交，提交后我们会再次审核。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:already",
+        "stage": "REMEDIATION",
+        "label": "already",
+        "text": "请更新主体资质到期，更新有效资质后重新提交，提交后我们会再次审核。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:question_identity",
+        "stage": "REMEDIATION",
+        "label": "question_identity",
+        "text": "我是京东商家资质审核AI客服，正在和您确认这笔资质申请。",
+        "next_stage": "CONFIRM_ACTION",
+        "source": "prepared"
+      },
+      {
+        "candidate_id": "REMEDIATION:fallback",
+        "stage": "REMEDIATION",
+        "label": "fallback",
+        "text": "好的，我收到您的信息了。亲，请您稍等。",
+        "next_stage": null,
+        "source": "filler"
+      }
+    ]
+  }
+}

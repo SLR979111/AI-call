@@ -159,6 +159,26 @@ t9 不为 null
 playback_measured=true
 ```
 
+### 3.8 预测式 API smoke
+
+候选镜像启动后检查新主链路契约：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8081/predictive/v1/handle \
+  -H 'Content-Type: application/json' \
+  -d '{"operation":"handle","text":"好","stage":"REASON","context":{"reject_l3":"主体资质到期","remediation":"更新有效资质后重新提交"}}'
+```
+
+通过标准：
+
+```text
+HTTP 200
+schema_version=1.0
+hit=true 或（未命中时）filler_used=true + needs_llm=true
+不允许空 text
+prepared_candidates 非空
+```
+
 ## 4. 8091 启用前检查
 
 ```text

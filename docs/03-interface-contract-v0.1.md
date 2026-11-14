@@ -291,6 +291,9 @@ class Vad(Protocol):
 
 ## 6. 接口 C：Agent
 
+预测式主链路（预生成 → 分类 → 命中/fallback → 下一轮）见 [docs/27](27-predictive-contract-v1.md)。Agent 身份确认后优先走该管线；身份阶段仍保留安全分支。
+
+
 ```python
 class Agent(Protocol):
     async def start_session(self, session_id: str, version_set: dict[str, str],

@@ -36,6 +36,8 @@ def classify(text: str) -> str:
         return "busy"
     if any(x in t for x in ("不用", "不需要", "不想", "没兴趣", "不补", "不提交", "拒绝")):
         return "negative"
+    if any(x in t for x in ("你是谁", "你叫啥", "你叫什么", "哪位", "干什么的", "干嘛的", "什么客服")):
+        return "question_identity"
     if any(x in t for x in ("为什么", "什么意思", "没听懂", "再说一遍", "怎么", "什么")):
         return "confused"
     if any(x in t for x in ("已经提交", "补过了", "提交了", "更新了", "已经补")):
@@ -61,6 +63,9 @@ def preset_for(stage: str, text: str, ctx: dict, *, verified: bool) -> Preset | 
         return Preset("好的，如您暂时不需要，我们不再打扰，再见。", outcome="closing", close=True)
 
     if stage == "IDENTITY_CONFIRM":
+        if kind == "question_identity":
+            return Preset("我是京东商家资质审核AI客服，请问您是店铺负责人吗？",
+                          outcome="pending_identity")
         if kind == "confused":
             return Preset("抱歉，我需要先确认一下，请问您是店铺负责人吗？",
                           outcome="pending_identity")
@@ -70,18 +75,33 @@ def preset_for(stage: str, text: str, ctx: dict, *, verified: bool) -> Preset | 
         if not verified:
             return Preset("抱歉，我需要先确认一下，请问您是店铺负责人吗？",
                           outcome="pending_identity")
+        if kind == "question_identity":
+            return Preset("我是京东商家资质审核AI客服，正在和您确认这笔资质申请。",
+                          outcome="pending_confirm")
+        if kind == "other":
+            return None
         return Preset(f"原因是{reason}。{action}。", intent="confirm")
 
     if stage == "REMEDIATION":
         if not verified:
             return Preset("抱歉，我需要先确认一下，请问您是店铺负责人吗？",
                           outcome="pending_identity")
+        if kind == "question_identity":
+            return Preset("我是京东商家资质审核AI客服，正在和您确认这笔资质申请。",
+                          outcome="pending_confirm")
+        if kind == "other":
+            return None
         return Preset(f"请更新{reason}，{action}，提交后我们会再次审核。", intent="confirm")
 
     if stage == "CONFIRM_ACTION":
-        if kind in {"confused", "other"}:
+        if kind == "question_identity":
+            return Preset("我是京东商家资质审核AI客服，正在和您确认这笔资质申请。",
+                          outcome="pending_confirm")
+        if kind == "confused":
             return Preset(f"已确认材料问题，请{action}。是否现在按这个方式处理？",
                           outcome="pending_confirm")
+        if kind == "other":
+            return None
         if kind == "already":
             return Preset("好的，您已提交，我会按本次材料继续跟进。", outcome="completed")
         if kind == "affirmative":

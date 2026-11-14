@@ -19,6 +19,7 @@ def test_classify_common_merchant_replies():
     assert classify("你们是不是骗子") == "abuse"
     assert classify("我现在忙") == "busy"
     assert classify("已经提交了") == "already"
+    assert classify("你叫啥？") == "question_identity"
 
 
 def test_stage_sequence_does_not_repeat_identity():
@@ -37,6 +38,12 @@ def test_stage_sequence_does_not_repeat_identity():
     assert confirm is not None
     assert "负责人" not in confirm.reply
     assert "登记" in confirm.reply
+
+    identity_q = preset_for("CONFIRM_ACTION", "你叫啥？", CTX, verified=True)
+    assert identity_q is not None
+    assert "京东" in identity_q.reply
+    assert "登记" not in identity_q.reply
+    assert preset_for("CONFIRM_ACTION", "你们公司地址在哪", CTX, verified=True) is None
 
     close = preset_for("CLOSE", "好", CTX, verified=True)
     assert close is not None

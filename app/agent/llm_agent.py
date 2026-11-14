@@ -11,6 +11,7 @@ from ..flow.pack import FlowPack
 from ..llm.router import LLMRouter, messages, parse_json_object
 from ..rag.knowledge import KnowledgeBase
 from .pop_presets import preset_for
+from ..predictive import create_pipeline
 from .reply_stream import ReplyExtractor
 
 SYSTEM_PROMPT = """你是电话外呼客服数字员工。只输出一个 JSON 对象，不要 Markdown。
@@ -102,6 +103,7 @@ class LLMAgent:
         self.fillers_spoken: dict[str, set[str]] = {}
         self.opened_sessions: set[str] = set()
         self.identity_verified: set[str] = set()
+        self.predictive = create_pipeline() if os.getenv("PREDICTIVE_DIALOGUE", "0") == "1" else None
         self.max_history_turns = max_history_turns
         self.max_tokens = max(32, int(os.getenv("LLM_MAX_TOKENS", "160")))
         self.stage_wait = os.getenv("LLM_STAGE_WAIT", "亲，请您稍等。").strip()
@@ -162,6 +164,11 @@ class LLMAgent:
         return f"您的申请被驳回，原因是{reason}。请更新有效资质后重新提交。"
 
     @staticmethod
+    def _split_spoken(text: str) -> list[str]:
+        parts = re.findall(r"[^。！？!?；;，,]+[。！？!?；;，,]?", text or "")
+        return [p.strip() for p in parts if p.strip()]
+
+    @staticmethod
     def _is_closing(text: str) -> bool:
         compact = re.sub(r"[\s，,。.!！?？]", "", text or "")
         if not compact or "?" in text or "？" in text:
@@ -189,11 +196,12 @@ class LLMAgent:
         compact = re.sub(r"[\s，,。.!！?？]", "", text or "")
         if not compact:
             return False
-        return compact in {
-            "是", "是的", "对", "对的", "没错", "是我", "我就是", "我是本人",
-            "是本人", "我是负责人", "我是店铺负责人", "是的我是", "对我是",
-            "是的我是店铺负责人", "对我是店铺负责人", "是的呀", "对对",
-        }
+        if any(x in compact for x in ("不是", "不对", "不行", "不可以", "打错", "找错")):
+            return False
+        return bool(re.fullmatch(
+            r"(?:是的?|对的?|没错|是我|我就是|我是|本人|是本人|我是负责人|我是店铺负责人|对对|是的呀)+",
+            compact,
+        ))
 
     @staticmethod
     def _limit_reply(reply: str, limit: int = 50) -> str:
@@ -263,21 +271,50 @@ class LLMAgent:
                    "slots": dict(slots), "result": {"llm_provider": "rule", "model": "closing"}}
             return
 
-        preset = preset_for(flow_state, text, self.case_context, verified=verified)
-        if preset is not None:
-            engine = self.flow_engines.get(session_id)
-            if preset.intent and engine:
-                engine.apply_intent(preset.intent)
-            history.append({"role": "user", "content": text})
-            history.append({"role": "assistant", "content": preset.reply})
-            yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
-                   "text": preset.reply, "final": True, "filler": False}
-            result = {"llm_provider": "rule", "model": "pop-preset"}
-            if engine:
-                result["flow_snapshot"] = engine.snapshot()
-            yield {"kind": "end", "reply_id": reply_id, "outcome": preset.outcome,
-                   "slots": dict(engine.slots) if engine else dict(slots), "result": result}
-            return
+        predictive_filler_sent = False
+        if self.predictive is not None and flow_state != "IDENTITY_CONFIRM":
+            decision = self.predictive.handle(text, flow_state, self.case_context)
+            if decision.hit and decision.candidate is not None:
+                engine = self.flow_engines.get(session_id)
+                if engine and decision.next_stage:
+                    engine.current = decision.next_stage
+                    engine.history.append(decision.next_stage)
+                history.append({"role": "user", "content": text})
+                history.append({"role": "assistant", "content": decision.text})
+                parts = self._split_spoken(decision.text) or [decision.text]
+                for index, part in enumerate(parts):
+                    yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": index + 1,
+                           "text": part, "final": index == len(parts) - 1, "filler": False}
+                outcome = ("closing" if decision.candidate.label in {"closing", "negative", "abuse", "busy"}
+                           else "transferred" if decision.candidate.label == "transfer" else "completed")
+                result = {"llm_provider": "predictive", "model": "pre-generated"}
+                if engine:
+                    result["flow_snapshot"] = engine.snapshot()
+                yield {"kind": "end", "reply_id": reply_id, "outcome": outcome,
+                       "slots": dict(engine.slots) if engine else dict(slots), "result": result}
+                return
+            # Miss: speak the classifier-selected filler, then let LLM answer.
+            if decision.text:
+                predictive_filler_sent = True
+                yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                       "text": decision.text, "final": False, "filler": True}
+
+        if self.predictive is None or flow_state == "IDENTITY_CONFIRM":
+            preset = preset_for(flow_state, text, self.case_context, verified=verified)
+            if preset is not None:
+                engine = self.flow_engines.get(session_id)
+                if preset.intent and engine:
+                    engine.apply_intent(preset.intent)
+                history.append({"role": "user", "content": text})
+                history.append({"role": "assistant", "content": preset.reply})
+                yield {"kind": "sentence", "reply_id": reply_id, "sentence_id": 1,
+                       "text": preset.reply, "final": True, "filler": False}
+                result = {"llm_provider": "rule", "model": "pop-preset"}
+                if engine:
+                    result["flow_snapshot"] = engine.snapshot()
+                yield {"kind": "end", "reply_id": reply_id, "outcome": preset.outcome,
+                       "slots": dict(engine.slots) if engine else dict(slots), "result": result}
+                return
 
         if flow_state == "IDENTITY_CONFIRM" and self._is_denial(text):
             closing = "抱歉，打扰了。后续如有需要可联系京东商家客服，再见。"
@@ -396,7 +433,7 @@ class LLMAgent:
         phase = flow_state.upper() if flow_state.upper() in self._fillers else "DEFAULT"
         spoken = self.fillers_spoken.setdefault(session_id, set())
         filler = self._fillers[phase].strip()
-        if filler and phase not in spoken:
+        if not predictive_filler_sent and filler and phase not in spoken:
             spoken.add(phase)
             if self.stage_wait:
                 filler = f"{filler}{self.stage_wait}"

@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicall.local/contracts/predictive.v1.json",
+  "title": "Predictive Dialogue API v1",
+  "description": "Pre-generate -> classify -> match -> hit/filler -> prepare next turn.",
+  "oneOf": [
+    {"$ref": "#/definitions/ClassifyRequest"},
+    {"$ref": "#/definitions/ClassifyResponse"},
+    {"$ref": "#/definitions/PrepareRequest"},
+    {"$ref": "#/definitions/PrepareResponse"},
+    {"$ref": "#/definitions/HandleRequest"},
+    {"$ref": "#/definitions/HandleResponse"}
+  ],
+  "definitions": {
+    "Context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "stage", "confidence", "reason"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "enum": ["affirmative", "deny_identity", "closing", "transfer", "abuse", "busy", "negative", "confused", "already", "question_identity", "other", "empty"]
+        },
+        "stage": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reason": {"type": "string"}
+      }
+    },
+    "Candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "stage", "label", "text", "next_stage", "source"],
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "stage": {"type": "string"},
+        "label": {
+          "type": "string",
+          "enum": ["affirmative", "deny_identity", "closing", "transfer", "abuse", "busy", "negative", "confused", "already", "question_identity", "other", "fallback"]
+        },
+        "text": {"type": "string", "minLength": 1},
+        "next_stage": {"type": ["string", "null"]},
+        "source": {"type": "string"}
+      }
+    },
+    "Decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "hit", "stage", "next_stage", "classification", "output_classification", "filler_used", "needs_llm", "prepared_candidates"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "hit": {"type": "boolean"},
+        "stage": {"type": "string"},
+        "next_stage": {"type": ["string", "null"]},
+        "classification": {"$ref": "#/definitions/Classification"},
+        "output_classification": {"$ref": "#/definitions/Classification"},
+        "candidate": {"oneOf": [{"$ref": "#/definitions/Candidate"}, {"type": "null"}]},
+        "filler_used": {"type": "boolean"},
+        "needs_llm": {"type": "boolean"},
+        "prepared_candidates": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Candidate"}
+        }
+      }
+    },
+    "ClassifyRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "text", "stage", "context"],
+      "properties": {
+        "operation": {"const": "classify"},
+        "text": {"type": "string"},
+        "stage": {"type": "string", "minLength": 1},
+        "context": {"$ref": "#/definitions/Context"}
+      }
+    },
+    "ClassifyResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "operation", "classification"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "operation": {"const": "classify"},
+        "classification": {"$ref": "#/definitions/Classification"}
+      }
+    },
+    "PrepareRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "stage", "context"],
+      "properties": {
+        "operation": {"const": "prepare"},
+        "stage": {"type": "string", "minLength": 1},
+        "context": {"$ref": "#/definitions/Context"}
+      }
+    },
+    "PrepareResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "operation", "stage", "candidates"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "operation": {"const": "prepare"},
+        "stage": {"type": "string"},
+        "candidates": {"type": "array", "items": {"$ref": "#/definitions/Candidate"}}
+      }
+    },
+    "HandleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "text", "stage", "context"],
+      "properties": {
+        "operation": {"const": "handle"},
+        "text": {"type": "string"},
+        "stage": {"type": "string", "minLength": 1},
+        "context": {"$ref": "#/definitions/Context"}
+      }
+    },
+    "HandleResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "operation", "decision"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "operation": {"const": "handle"},
+        "decision": {"$ref": "#/definitions/Decision"}
+      }
+    }
+  }
+}

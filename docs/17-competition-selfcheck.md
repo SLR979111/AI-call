@@ -238,6 +238,25 @@ python scripts/metric_check.py --base http://127.0.0.1:8081 --section all
 python scripts/eval_pop.py --base http://127.0.0.1:8081
 ```
 
+## 8.1 预测式主链路自检
+
+```text
+POST /predictive/v1/handle
+text=好
+stage=REASON
+```
+
+必须满足：
+
+```text
+schema_version=1.0
+命中：hit=true，candidate 非空，prepared_candidates 非空
+未命中：hit=false，filler_used=true，needs_llm=true，text 非空
+任何非空输入都不能无输出
+```
+
+分类器当前为规则实现；后续可替换为模型/向量/embedding，但契约和 fallback 语义不变。
+
 ## 9. 限制
 
 - 本文件不是官方评测口径；

@@ -54,7 +54,7 @@ flowchart LR
 | M1 接入与媒体 | 天命 + cx | WebRTC、ICE/TURN、抖动缓冲、录音、客户端 AEC 协调 | 业务、ASR/TTS 逻辑 |
 | M2 实时语音 | SinCircle | VAD/端点、ASR、TTS、热词、首包、打断检测 | 取消调度、业务状态、合规 |
 | M3 编排器 | 天命 | Session/Turn、取消、超时、下行队列、`turn_id` 隔离 | 业务状态、话术、RAG |
-| M4 Agent | pseudonym | Flow Engine、上下文、意图/槽位、LLM、RAG、工具决策、兜底 | 实际业务 API、TTS、WebRTC |
+| M4 Agent | pseudonym | Flow Engine、上下文、意图/槽位、LLM、RAG、工具决策、预测式候选/分类器、兜底 | 实际业务 API、TTS、WebRTC |
 | M5 Tool Gateway | 天命 | 工具注册、参数校验、超时、重试、幂等、审计、Mock | 决定“调不调”（M4 决定） |
 | M6 合规 | pseudonym + 天命 + 湖中日月 | 三侧检查、ALLOW/REWRITE/BLOCK/TRANSFER、规则与测试 | 生成话术（只改写/拦截） |
 | M7 数据与可观测 | 天命 | 事件、trace、存储、回放、指标聚合 | 业务决策、评测判定 |
@@ -380,6 +380,8 @@ slots:
 | C7 | 合规规则/改写 | rules.yaml | 必说/禁语可触发 |
 | C8 | 兜底/转人工 | 异常分支 | 不悬挂 |
 | C9 | 版本化工件 | prompt/flow 版本 | 可被 Registry pin |
+| C10 | 预测式分类器 | 规则 v1；模型/向量/embedding 评估 | 任意输入有 fallback，契约字段稳定 |
+| C11 | 预测式缓存 | SpeculativeCache、BGE 语义、voice 输入 cache、LLM 异步 Top-K | 命中率/P50 有数，未命中 fallback 稳定 |
 
 ### 3.4 湖中日月（评测/RSI）
 
@@ -392,6 +394,8 @@ slots:
 | D5 | 自测报告 + 原始日志 | 报告 + logs | 可复算 |
 | D6 | 合规测试集 | 必说/禁语/对抗 | 召回 100% |
 | D7 | 测试音频方案 | 音频 + 转写 + 同意 | 口径确认 |
+| D8 | 分类器评测 | 规则 vs 模型/向量准确率、fallback 率、P50 | 可比较报告 |
+| D9 | 缓存/预测评测 | 命中率、误命中率、预测准确率、首声 | 可比较报告 |
 
 ### 3.5 cx（前端/演示）
 

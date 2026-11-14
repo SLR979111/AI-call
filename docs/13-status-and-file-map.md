@@ -41,6 +41,7 @@ aicall/
 │   │   ├── fake.py          规则 Agent（默认）
 │   │   └── llm_agent.py     LLM JSON 决策 Agent
 │   ├── llm/router.py        OpenAI 兼容主/备 Router
+│   ├── predictive/          预生成候选、规则分类、fallback、v1 API
 │   ├── tools/gateway.py     Tool Gateway + Mock 业务
 │   ├── rag/knowledge.py     本地知识检索
 │   ├── flow/pack.py         Flow Pack 加载/状态转移

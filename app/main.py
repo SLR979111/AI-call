@@ -27,6 +27,7 @@ from .llm.router import LLMRouter
 from .media.livekit import create_livekit_token
 from .media.livekit_worker import BridgeRegistry
 from .orchestrator import Orchestrator, SessionState
+from .predictive.api import router as predictive_router
 from .registry import Registry, RegistryError
 from .rsi.gate import GateConfig, compare as rsi_compare
 from .tools.gateway import MockBusiness, ToolGateway
@@ -245,6 +246,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="智语外呼", version="0.2.0", lifespan=lifespan)
+app.include_router(predictive_router)
 
 
 def _orc(request: Request) -> Orchestrator:

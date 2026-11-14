@@ -39,6 +39,7 @@ $env:LLM_TOOL_ALLOWLIST = "dynamic"
 $env:LLM_MAX_TOKENS = "160"
 $env:LLM_PLAIN_MAX_TOKENS = "96"
 $env:LLM_MAX_REPLY_CHARS = "50"
+$env:PREDICTIVE_DIALOGUE = "1"
 $env:ASR_PROVIDER = "volc"
 $env:VOLC_ASR_API_KEY = $env:VOLC_KEY
 $env:VOLC_ASR_RESOURCE_ID = "volc.seedasr.sauc.duration"

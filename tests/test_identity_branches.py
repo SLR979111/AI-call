@@ -46,6 +46,20 @@ def test_unclear_or_question_before_identity_only_reasks():
         assert "店铺负责人" in joined
 
 
+def test_repeated_affirmative_still_confirms():
+    for text in ("是的，是的", "是的 是的", "对的，没错"):
+        chunks = _run(text)
+        joined = _joined(chunks)
+        assert "SECRET_REASON" in joined, text
+
+
+def test_mixed_negative_does_not_confirm():
+    chunks = _run("是的，是的，不行，是的")
+    joined = _joined(chunks)
+    assert "SECRET_REASON" not in joined
+    assert chunks[-1]["outcome"] == "pending_identity"
+
+
 def test_identity_confirmation_still_uses_case_script():
     chunks = _run("是的")
     joined = _joined(chunks)
