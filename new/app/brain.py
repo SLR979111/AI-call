@@ -7,7 +7,7 @@ from typing import AsyncIterator
 
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
-from .rule_based_decision import RuleBasedDecisionEngine
+from .context_aware_decision import ContextAwareDecisionEngine
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -87,7 +87,7 @@ async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
 class Brain:
     def __init__(self, cloud: Cloud):
         self.cloud = cloud
-        self.rule_engine = RuleBasedDecisionEngine()
+        self.decision_engine = ContextAwareDecisionEngine()
 
     @staticmethod
     def snapshot(memory: Memory):
@@ -95,13 +95,25 @@ class Brain:
                 "dialogue": memory.history[-24:]}
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
-        # Fast path: Try rule-based decision first (no LLM)
+        # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history:
             last_user_input = memory.history[-1].get("text", "")
-            decision, selected_candidate = self.rule_engine.should_reuse(last_user_input, candidates)
+            
+            # Get assistant's last text for context
+            assistant_last_text = ""
+            for entry in reversed(memory.history[:-1]):
+                if entry.get("role") == "assistant":
+                    assistant_last_text = entry.get("text", "")
+                    break
+            
+            decision, selected_candidate = self.decision_engine.should_reuse(
+                last_user_input, 
+                candidates,
+                assistant_last_text
+            )
             
             if decision == "reuse":
-                # Rule-based reuse (skip LLM decision, but still need state update)
+                # Context-aware reuse (skip LLM decision, but still need state update)
                 yield "reuse", selected_candidate.reply
                 # Generate state update
                 snapshot = self.snapshot(memory)
@@ -113,7 +125,7 @@ class Brain:
                         return
                 raise ProviderError("模型回复缺少状态更新")
             elif decision == "say":
-                # Rule-based rejection (generate new, ignore candidates)
+                # Context-aware rejection (generate new, ignore candidates)
                 candidates = []
         
         # Slow path: LLM-based decision
