@@ -45,6 +45,12 @@ async def config():
             "predictions": settings.predictions, "default_task": app.state.default_card.model_dump()}
 
 
+@app.get("/api/cache/stats")
+async def cache_stats():
+    """Return cache performance metrics."""
+    return app.state.cloud.cache_manager.report()
+
+
 @app.get("/healthz")
 async def health():
     return {"ok": True, "name": "ai-call-g2", "sessions": len(app.state.sessions)}

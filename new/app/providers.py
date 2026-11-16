@@ -15,6 +15,8 @@ from typing import AsyncIterator
 import httpx
 from dotenv import load_dotenv
 
+from .cache import CacheManager
+
 
 class ProviderError(RuntimeError):
     pass
@@ -61,6 +63,7 @@ class Cloud:
         self.owns_client = client is None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.cache_bytes = 0
+        self.cache_manager = CacheManager()
 
     @property
     def headers(self):
@@ -74,10 +77,21 @@ class Cloud:
             raise ProviderError(f"{service} 请求失败（HTTP {response.status_code}）")
 
     async def chat(self, messages: list[dict], *, max_tokens: int = 650) -> AsyncIterator[str]:
+        # Check LLM cache first
+        temperature = 0.2
+        cached_response = self.cache_manager.llm.get(messages, self.settings.model, temperature)
+        if cached_response is not None:
+            # Simulate streaming from cache
+            for i in range(0, len(cached_response), 50):
+                yield cached_response[i:i + 50]
+            return
+        
+        # Cache miss - call API and collect response
+        collected = []
         async with self.client.stream(
             "POST", self.settings.base_url + "/chat/completions", headers=self.headers,
             json={"model": self.settings.model, "messages": messages, "stream": True,
-                  "temperature": 0.2, "max_tokens": max_tokens, "reasoning_effort": "none"},
+                  "temperature": temperature, "max_tokens": max_tokens, "reasoning_effort": "none"},
         ) as response:
             self.check(response, "对话模型")
             async for line in response.aiter_lines():
@@ -85,7 +99,7 @@ class Cloud:
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
-                    return
+                    break
                 try:
                     payload = json.loads(data)
                     choices = payload.get("choices") or []
@@ -94,11 +108,23 @@ class Cloud:
                             raise ProviderError("模型输出达到长度限制")
                         content = choices[0].get("delta", {}).get("content")
                         if content:
+                            collected.append(content)
                             yield content
                 except (KeyError, TypeError, json.JSONDecodeError) as exc:
                     raise ProviderError("模型返回了无法解析的数据") from exc
+        
+        # Cache the full response
+        if collected:
+            full_response = "".join(collected)
+            self.cache_manager.llm.put(messages, self.settings.model, temperature, full_response)
 
     async def transcribe(self, pcm: bytes) -> str:
+        # Check ASR cache first
+        cached_text = self.cache_manager.asr.get(pcm)
+        if cached_text is not None:
+            return cached_text
+        
+        # Cache miss - call API
         response = await self.client.post(
             self.settings.base_url + "/v1/tools/asr", headers=self.headers,
             files={"file": ("speech.wav", wav_bytes(pcm), "audio/wav")},
@@ -108,7 +134,11 @@ class Cloud:
             text = response.json()["text"]
             if not isinstance(text, str):
                 raise TypeError()
-            return text.strip()
+            text = text.strip()
+            
+            # Cache the result
+            self.cache_manager.asr.put(pcm, text)
+            return text
         except (ValueError, KeyError, TypeError) as exc:
             raise ProviderError("语音识别没有返回有效文本") from exc
 
