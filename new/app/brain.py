@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
+from .rule_based_decision import RuleBasedDecisionEngine
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -94,6 +95,28 @@ class Brain:
                 "dialogue": memory.history[-24:]}
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
+        # Fast path: Try rule-based decision first (no LLM)
+        if candidates and memory.history:
+            last_user_input = memory.history[-1].get("text", "")
+            decision, selected_candidate = self.rule_engine.should_reuse(last_user_input, candidates)
+            
+            if decision == "reuse":
+                # Rule-based reuse (skip LLM decision, but still need state update)
+                yield "reuse", selected_candidate.reply
+                # Generate state update
+                snapshot = self.snapshot(memory)
+                update_messages = [{"role": "system", "content": POLICY},
+                                  {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
+                async for event in json_lines(self.cloud.chat(update_messages)):
+                    if event.get("type") == "update":
+                        yield "update", Update.model_validate(event)
+                        return
+                raise ProviderError("模型回复缺少状态更新")
+            elif decision == "say":
+                # Rule-based rejection (generate new, ignore candidates)
+                candidates = []
+        
+        # Slow path: LLM-based decision
         snapshot = self.snapshot(memory)
         snapshot["candidates"] = [item.model_dump() for item in candidates]
         messages = [{"role": "system", "content": POLICY},
