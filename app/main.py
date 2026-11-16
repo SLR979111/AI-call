@@ -24,6 +24,7 @@ from .config import _bool, settings
 from .events import EventBus
 from .eval.runner import EvalCase, EvalRunner
 from .flow.pack import FlowPack, FlowPackError
+from .guidance.api import router as guidance_router
 from .llm.router import LLMRouter
 from .media.livekit import create_livekit_token
 from .media.livekit_worker import BridgeRegistry
@@ -248,6 +249,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="智语外呼", version="0.2.0", lifespan=lifespan)
 app.include_router(predictive_router)
+app.include_router(guidance_router)
 
 # Dev-only split frontend: enable CORS only when DEV_CORS_ORIGINS is set.
 _dev_cors_origins = [x.strip() for x in os.getenv("DEV_CORS_ORIGINS", "").split(",") if x.strip()]
