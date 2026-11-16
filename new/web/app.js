@@ -57,6 +57,11 @@ async function start(useVoice) {
     // Resume within the click gesture, before network or microphone awaits.
     if (voice) {
       context = new AudioContext();
+      
+      // 确保 AudioContext 激活
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
       await context.resume();
     }
     socket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
