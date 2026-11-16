@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -96,20 +97,19 @@ class Brain:
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
         # Fast path: Context-aware decision engine (considers assistant's last question type)
-        if candidates and memory.history:
+        if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
-            
-            # Get assistant's last text for context
+
+            # Only an utterance heard in full can anchor a short answer.
             assistant_last_text = ""
             for entry in reversed(memory.history[:-1]):
                 if entry.get("role") == "assistant":
-                    assistant_last_text = entry.get("text", "")
+                    if entry.get("delivery") == "complete":
+                        assistant_last_text = entry.get("text", "")
                     break
-            
+
             decision, selected_candidate = self.decision_engine.should_reuse(
-                last_user_input, 
-                candidates,
-                assistant_last_text
+                last_user_input, candidates, assistant_last_text
             )
             
             if decision == "reuse":
@@ -117,8 +117,9 @@ class Brain:
                 yield "reuse", selected_candidate.reply
                 # Generate state update
                 snapshot = self.snapshot(memory)
-                update_messages = [{"role": "system", "content": POLICY},
-                                  {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
+                snapshot["selected_reply"] = selected_candidate.reply.model_dump()
+                update_messages = [{"role": "system", "content": POLICY + "\n本轮已选择 selected_reply 作为回复，请据此只输出一行 update，不再输出 say 或 reuse。是否播完仍以 dialogue 的 delivery 和 state.delivered 为准。"},
+                                   {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
                 async for event in json_lines(self.cloud.chat(update_messages)):
                     if event.get("type") == "update":
                         yield "update", Update.model_validate(event)
@@ -165,17 +166,54 @@ class Brain:
             raise ProviderError("模型回复缺少内容或状态更新")
 
     async def predict(self, snapshot: dict) -> list[Candidate]:
-        messages = [{"role": "system", "content": FORECAST},
-                    {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
-        text = "".join([part async for part in self.cloud.chat(messages, max_tokens=450)])
-        text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(text)
-        items = [Candidate.model_validate(item) for item in data["candidates"][:2]]
-        if len({item.id for item in items}) != len(items):
-            raise ValueError("duplicate prediction id")
+        return [item async for batch in self.predict_batches(snapshot) for item in batch]
+
+    async def predict_batches(self, snapshot: dict) -> AsyncIterator[list[Candidate]]:
+        # Separate requests keep common acknowledgements from competing with
+        # specific questions for the same two forecast slots.
+        branches = (
+            "优先覆盖纯肯定/承接（是的、好的、明白了、可以）以及否定/没有。"
+            "纯承接的回复应推进尚未说明的内容，不把好的当成材料已提交。",
+            "优先覆盖当前话题的具体追问和选择（第一项、怎么补、哪份）。",
+            "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）以及结束意愿。",
+        )
+
+        async def forecast_branch(index: int, instruction: str):
+            messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
+                        {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
+            text = "".join([part async for part in self.cloud.chat(messages, max_tokens=450)])
+            text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            data = json.loads(text)
+            batch = [Candidate.model_validate(item) for item in data["candidates"][:2]]
+            for number, item in enumerate(batch):
+                item.id = f"p{index}_{number}"
+            return batch
+
+        tasks = [asyncio.create_task(forecast_branch(i, instruction))
+                 for i, instruction in enumerate(branches)]
+        emitted = False
+        error = None
         valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
-        for item in items:
-            item.reply.covers = [p for p in item.reply.covers if p in valid_points]
-            if item.reply.question not in item.reply.text:
-                item.reply.question = ""
-        return items
+        try:
+            for task in asyncio.as_completed(tasks):
+                try:
+                    items = await task
+                except Exception as exc:
+                    error = exc
+                    continue
+                for item in items:
+                    item.reply.covers = [p for p in item.reply.covers if p in valid_points]
+                    if item.reply.question not in item.reply.text:
+                        item.reply.question = ""
+                if items:
+                    emitted = True
+                    yield items
+            if not emitted:
+                if error is not None:
+                    raise error
+                raise ProviderError("所有预测分支均失败")
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

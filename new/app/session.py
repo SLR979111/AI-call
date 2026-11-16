@@ -387,19 +387,37 @@ class Session:
 
     async def _predict(self, epoch: int, snapshot: dict):
         try:
-            candidates = await self.brain.predict(snapshot)
             ready = []
-            for item in candidates:
-                if not self.is_current(epoch):
-                    return
+            tasks = []
+
+            async def prepare(item):
                 if self.voice:
                     await self.cloud.prefetch(item.reply.text)
-                ready.append(item)
                 if self.is_current(epoch):
+                    ready.append(item)
                     self.candidates = list(ready)
                     self.prediction_epoch = epoch
-            self.log("prediction_ready", count=len(ready),
-                     candidates=[item.model_dump() for item in ready])
+                    self.log("prediction_ready", count=len(ready),
+                             candidates=[candidate.model_dump() for candidate in ready])
+
+            try:
+                if hasattr(self.brain, "predict_batches"):
+                    async for batch in self.brain.predict_batches(snapshot):
+                        if not self.is_current(epoch):
+                            return
+                        tasks.extend(asyncio.create_task(prepare(item)) for item in batch)
+                else:
+                    batch = await self.brain.predict(snapshot)
+                    tasks.extend(asyncio.create_task(prepare(item)) for item in batch)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        self.log("prediction_miss", error=type(result).__name__)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
