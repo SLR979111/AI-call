@@ -15,7 +15,7 @@ from typing import AsyncIterator
 import httpx
 from dotenv import load_dotenv
 
-from .cache import CacheManager
+from .enhanced_cache import EnhancedCacheManager
 
 
 class ProviderError(RuntimeError):
@@ -63,7 +63,7 @@ class Cloud:
         self.owns_client = client is None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.cache_bytes = 0
-        self.cache_manager = CacheManager()
+        self.cache_manager = EnhancedCacheManager()
 
     @property
     def headers(self):
