@@ -86,6 +86,7 @@ async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
 class Brain:
     def __init__(self, cloud: Cloud):
         self.cloud = cloud
+        self.rule_engine = RuleBasedDecisionEngine()
 
     @staticmethod
     def snapshot(memory: Memory):
