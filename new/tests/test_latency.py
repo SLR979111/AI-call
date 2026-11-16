@@ -59,7 +59,7 @@ class LatencyStats:
         )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 async def cloud():
     """Shared cloud provider instance."""
     settings = Settings.load()
@@ -317,7 +317,6 @@ async def test_cache_stats(cloud):
     print(f"\nCache report: {report}")
 
 
-@pytest.mark.benchmark
 @pytest.mark.asyncio
 async def test_benchmark_full_suite(cloud):
     """Full benchmark suite with detailed breakdown."""
