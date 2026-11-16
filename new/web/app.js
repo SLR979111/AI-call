@@ -3,206 +3,705 @@ import {Player, Microphone} from './audio.js';
 const $ = id => document.getElementById(id);
 let task, socket, context, player, mic, voice = false, connected = false, epoch = 0;
 let startedAt = 0, timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false;
-const phaseNames = {ready:'准备好了，开始聊吧', thinking:'正在组织回答', speaking:'正在说话 · 可以随时打断', listening:'在听，请说'};
+let waveformCanvas, waveformCtx, animationFrame;
+let pipelineNodes = [];
 
-function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
-function showError(text) { $('error').textContent = text; $('error').classList.remove('hidden'); }
-function clearError() { $('error').classList.add('hidden'); }
-function renderTask() {
-  $('taskTitle').textContent = task.title;
-  $('taskGoal').textContent = task.goal;
-  $('taskFacts').textContent = task.facts;
-  $('checkpoints').replaceChildren();
-  for (const point of task.checkpoints) {
-    const li = document.createElement('li'); li.dataset.point = point.id;
-    const icon = document.createElement('span'); icon.className = 'check';
-    const text = document.createElement('span'); text.textContent = point.description;
-    li.append(icon, text); $('checkpoints').append(li);
+// ==================== PIPELINE GRAPH ====================
+function renderPipeline() {
+  const svg = $('pipelineGraph');
+  svg.innerHTML = '';
+  
+  if (!task || !task.checkpoints) return;
+  
+  const points = task.checkpoints;
+  const startY = 80;
+  const stepY = 70;
+  const leftPadding = 40;
+  
+  pipelineNodes = points.map((point, i) => ({
+    id: point.id,
+    description: point.description,
+    x: leftPadding,
+    y: startY + i * stepY,
+    status: 'inactive'
+  }));
+  
+  // Draw connections with curves
+  for (let i = 0; i < pipelineNodes.length - 1; i++) {
+    const from = pipelineNodes[i];
+    const to = pipelineNodes[i + 1];
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const d = `M ${from.x} ${from.y + 24} 
+               C ${from.x} ${from.y + 40}, 
+                 ${to.x} ${to.y - 40}, 
+                 ${to.x} ${to.y - 24}`;
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'pipeline-connection');
+    path.dataset.fromId = from.id;
+    path.dataset.toId = to.id;
+    svg.appendChild(path);
   }
+  
+  // Draw nodes with collapsible text
+  pipelineNodes.forEach((node, i) => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'pipeline-node inactive');
+    g.dataset.nodeId = node.id;
+    
+    // Node circle
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', node.x);
+    circle.setAttribute('cy', node.y);
+    circle.setAttribute('r', 20);
+    g.appendChild(circle);
+    
+    // Node number
+    const number = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    number.setAttribute('x', node.x);
+    number.setAttribute('y', node.y + 6);
+    number.setAttribute('text-anchor', 'middle');
+    number.setAttribute('class', 'node-number');
+    number.textContent = i + 1;
+    g.appendChild(number);
+    
+    // Simplified label (always visible)
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', node.x + 35);
+    label.setAttribute('y', node.y + 6);
+    label.setAttribute('class', 'node-label');
+    label.textContent = `Step ${i + 1}`;
+    g.appendChild(label);
+    
+    // Detail text (only visible on hover) - create foreignObject for better text wrapping
+    const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+    fo.setAttribute('x', node.x + 35);
+    fo.setAttribute('y', node.y + 15);
+    fo.setAttribute('width', '240');
+    fo.setAttribute('height', '80');
+    fo.setAttribute('class', 'node-detail');
+    
+    const div = document.createElement('div');
+    div.className = 'node-detail-text';
+    div.textContent = node.description;
+    fo.appendChild(div);
+    g.appendChild(fo);
+    
+    svg.appendChild(g);
+  });
+  
+  // Update SVG viewBox to fit content
+  const height = Math.max(600, startY + pipelineNodes.length * stepY + 80);
+  svg.setAttribute('viewBox', `0 0 300 ${height}`);
 }
-function append(role, text, key = null) {
-  $('empty')?.remove();
-  const message = document.createElement('div'); message.className = `message ${role}`;
-  const speaker = document.createElement('div'); speaker.className = 'speaker'; speaker.textContent = role==='user' ? '你' : 'AI CALL';
-  const bubble = document.createElement('div'); bubble.className = 'bubble'; bubble.textContent = text;
-  message.append(speaker, bubble); $('transcript').append(message);
-  const record = {role, text, delivery:role==='user' || !voice ? 'complete' : 'pending'};
-  records.push(record);
-  if (key) uiUnits.set(key, {message, record});
-  $('transcript').scrollTop = $('transcript').scrollHeight;
-}
-function markCancelled(cancelledEpoch) {
-  for (const [key, value] of uiUnits) {
-    if (key.startsWith(`${cancelledEpoch}:`) && value.record.delivery === 'pending') {
-      value.record.delivery = 'interrupted';
-      const note = document.createElement('div'); note.className = 'delivery-note'; note.textContent = '这一句未完整播出';
-      value.message.append(note);
+
+function updatePipelineNode(nodeId, status) {
+  const node = document.querySelector(`[data-node-id="${nodeId}"]`);
+  if (!node) return;
+  
+  node.classList.remove('inactive', 'active', 'completed');
+  node.classList.add(status);
+  
+  // Update connection line to this node
+  if (status === 'completed') {
+    const prevLine = document.querySelector(`[data-to-id="${nodeId}"]`);
+    if (prevLine) prevLine.classList.add('completed');
+    
+    // Add data card
+    const nodeData = pipelineNodes.find(n => n.id === nodeId);
+    if (nodeData) {
+      addDataCard(nodeData.description, '已完成提取');
     }
   }
 }
-function interrupt(source = 'manual', evidence = null) {
-  if (!connected || !epoch) return;
-  const progress = player?.stop(true) || [];
-  markCancelled(epoch);
-  send({type:'interrupt', epoch, progress, source, evidence});
-  $('phase').textContent = voice ? '在听，请说' : '已打断，可以继续输入';
+
+// ==================== WAVEFORM VISUALIZATION ====================
+let audioBuffer = new Array(128).fill(0);
+let barHeights = new Array(64).fill(0);
+let analyser = null;
+let analyserData = null;
+
+function initWaveform() {
+  waveformCanvas = $('waveformCanvas');
+  if (!waveformCanvas) return;
+  
+  waveformCtx = waveformCanvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  
+  const rect = waveformCanvas.getBoundingClientRect();
+  waveformCanvas.width = rect.width * dpr;
+  waveformCanvas.height = rect.height * dpr;
+  waveformCtx.scale(dpr, dpr);
+  
+  // Setup audio analyser for real-time visualization
+  if (context && !analyser) {
+    analyser = context.createAnalyser();
+    analyser.fftSize = 128;
+    analyser.smoothingTimeConstant = 0.8;
+    analyserData = new Uint8Array(analyser.frequencyBinCount);
+    
+    // Connect microphone and player to analyser
+    if (mic?.source) {
+      mic.source.connect(analyser);
+    }
+    if (player?.output) {
+      player.output.connect(analyser);
+    }
+  }
+  
+  drawWaveform();
 }
+
+function drawWaveform() {
+  if (!waveformCanvas || !waveformCtx) return;
+  
+  const width = waveformCanvas.width / (window.devicePixelRatio || 1);
+  const height = waveformCanvas.height / (window.devicePixelRatio || 1);
+  
+  // Background with gradient
+  const bgGradient = waveformCtx.createLinearGradient(0, 0, 0, height);
+  bgGradient.addColorStop(0, '#F8FAFC');
+  bgGradient.addColorStop(1, '#E9EEF6');
+  waveformCtx.fillStyle = bgGradient;
+  waveformCtx.fillRect(0, 0, width, height);
+  
+  if (!connected) {
+    // Draw idle state with animated circles
+    const time = Date.now() / 1000;
+    waveformCtx.fillStyle = '#1E40AF';
+    waveformCtx.globalAlpha = 0.1;
+    for (let i = 0; i < 3; i++) {
+      const radius = 40 + Math.sin(time * 2 + i) * 20;
+      waveformCtx.beginPath();
+      waveformCtx.arc(width / 2, height / 2, radius + i * 30, 0, Math.PI * 2);
+      waveformCtx.fill();
+    }
+    waveformCtx.globalAlpha = 1;
+    
+    waveformCtx.fillStyle = '#475569';
+    waveformCtx.font = '16px Inter';
+    waveformCtx.textAlign = 'center';
+    waveformCtx.fillText('Ready for audio input', width / 2, height / 2);
+    
+    animationFrame = requestAnimationFrame(drawWaveform);
+    return;
+  }
+  
+  // Spectrum analyzer style visualization
+  const barCount = 64;
+  const barWidth = width / barCount;
+  
+  // Get real audio frequency data
+  if (analyser && analyserData) {
+    analyser.getByteFrequencyData(analyserData);
+    
+    // Map frequency bins to bars (downsample from 64 bins to 64 bars)
+    for (let i = 0; i < barCount; i++) {
+      const dataIndex = Math.floor(i * analyserData.length / barCount);
+      const targetHeight = (analyserData[dataIndex] / 255) * height * 0.8;
+      barHeights[i] += (targetHeight - barHeights[i]) * 0.3; // Smooth transition
+    }
+  } else {
+    // Fallback: minimal idle animation when no audio data
+    for (let i = 0; i < barCount; i++) {
+      const targetHeight = Math.random() * height * 0.1;
+      barHeights[i] += (targetHeight - barHeights[i]) * 0.1;
+    }
+  }
+  
+  // Draw bars with gradient
+  for (let i = 0; i < barCount; i++) {
+    const x = i * barWidth;
+    const barH = barHeights[i];
+    const y = height - barH;
+    
+    // Create gradient for each bar
+    const gradient = waveformCtx.createLinearGradient(0, y, 0, height);
+    const hue = (i / barCount) * 60 + 200; // Blue to cyan
+    gradient.addColorStop(0, `hsl(${hue}, 70%, 50%)`);
+    gradient.addColorStop(1, `hsl(${hue}, 70%, 70%)`);
+    
+    waveformCtx.fillStyle = gradient;
+    waveformCtx.fillRect(x + 1, y, barWidth - 2, barH);
+    
+    // Add glow effect
+    waveformCtx.shadowColor = `hsl(${hue}, 70%, 50%)`;
+    waveformCtx.shadowBlur = 10;
+    waveformCtx.fillRect(x + 1, y, barWidth - 2, barH);
+    waveformCtx.shadowBlur = 0;
+  }
+  
+  // Add reflection effect
+  waveformCtx.globalAlpha = 0.2;
+  waveformCtx.save();
+  waveformCtx.scale(1, -1);
+  waveformCtx.translate(0, -height);
+  for (let i = 0; i < barCount; i++) {
+    const x = i * barWidth;
+    const barH = barHeights[i] * 0.5;
+    const y = height - barH;
+    const hue = (i / barCount) * 60 + 200;
+    const gradient = waveformCtx.createLinearGradient(0, y, 0, height);
+    gradient.addColorStop(0, `hsl(${hue}, 70%, 50%)`);
+    gradient.addColorStop(1, `hsl(${hue}, 70%, 70%)`);
+    waveformCtx.fillStyle = gradient;
+    waveformCtx.fillRect(x + 1, y, barWidth - 2, barH);
+  }
+  waveformCtx.restore();
+  waveformCtx.globalAlpha = 1;
+  
+  animationFrame = requestAnimationFrame(drawWaveform);
+}
+
+// ==================== DATA CARDS ====================
+let cardCounter = 0;
+let recentCardKeys = new Set();
+
+function addDataCard(title, content, options = {}) {
+  const grid = $('captureGrid');
+  if (!grid) return;
+  
+  // Prevent duplicate cards within a 2-second window
+  const cardKey = `${title}:${content}`;
+  if (recentCardKeys.has(cardKey) && !options.allowDuplicate) {
+    return;
+  }
+  recentCardKeys.add(cardKey);
+  setTimeout(() => recentCardKeys.delete(cardKey), 2000);
+  
+  cardCounter++;
+  
+  const card = document.createElement('div');
+  card.className = 'data-card';
+  card.style.animationDelay = `${cardCounter * 0.05}s`;
+  
+  // Card icon and color based on type
+  const icon = document.createElement('div');
+  icon.className = 'card-icon';
+  let iconEmoji = '📝';
+  let accentColor = '#1E40AF';
+  
+  if (title.includes('User') || title.includes('用户') || title.includes('说')) {
+    iconEmoji = '👤';
+    accentColor = '#D97706';
+  } else if (title.includes('AI') || title.includes('Response') || title.includes('回复')) {
+    iconEmoji = '🤖';
+    accentColor = '#0F766E';
+  } else if (title.includes('完成') || title.includes('Complete')) {
+    iconEmoji = '✅';
+    accentColor = '#16A34A';
+  } else if (title.includes('提取') || title.includes('Extract')) {
+    iconEmoji = '🔍';
+    accentColor = '#9333EA';
+  } else if (title.includes('Error') || title.includes('错误')) {
+    iconEmoji = '⚠️';
+    accentColor = '#DC2626';
+  }
+  
+  icon.innerHTML = iconEmoji;
+  card.style.setProperty('--card-accent', accentColor);
+  
+  const textContainer = document.createElement('div');
+  textContainer.className = 'card-text';
+  
+  const header = document.createElement('div');
+  header.className = 'data-card-header';
+  header.textContent = title;
+  
+  const body = document.createElement('div');
+  body.className = 'data-card-content';
+  body.textContent = content;
+  
+  // Add timestamp
+  const time = document.createElement('div');
+  time.className = 'card-time';
+  const now = new Date();
+  time.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+  
+  textContainer.appendChild(header);
+  textContainer.appendChild(body);
+  
+  card.appendChild(icon);
+  card.appendChild(textContainer);
+  card.appendChild(time);
+  
+  grid.appendChild(card);
+  
+  // Auto scroll with smooth animation
+  setTimeout(() => {
+    grid.scrollTo({
+      top: grid.scrollHeight,
+      behavior: 'smooth'
+    });
+  }, 100);
+  
+  // Limit cards to 50
+  const cards = grid.querySelectorAll('.data-card');
+  if (cards.length > 50) {
+    cards[0].style.animation = 'slide-out 0.3s ease forwards';
+    setTimeout(() => cards[0].remove(), 300);
+  }
+}
+
+// ==================== METRICS UPDATE ====================
+let metricsState = {
+  latency: 0,
+  sentiment: 50,
+  wpm: 0,
+  barge: 0
+};
+
+function updateMetrics(data) {
+  // Update latency - support both field names
+  const latency = data.latency_ms || data.latency;
+  if (latency !== undefined && latency !== null) {
+    metricsState.latency = Math.round(latency);
+    $('latencyValue').textContent = metricsState.latency;
+  }
+  
+  // Simulate sentiment (0-100, text sentiment analysis)
+  if (data.text) {
+    const positiveWords = ['好', '优秀', '谢谢', '感谢', '完成', '成功', '是的', '可以', '同意'];
+    const negativeWords = ['不', '没有', '失败', '错误', '问题', '无法'];
+    let score = 50;
+    positiveWords.forEach(w => { if (data.text.includes(w)) score += 8; });
+    negativeWords.forEach(w => { if (data.text.includes(w)) score -= 8; });
+    metricsState.sentiment = Math.max(0, Math.min(100, score));
+    $('sentimentValue').textContent = metricsState.sentiment;
+  }
+  
+  // Simulate WPM (words per minute based on text length and time)
+  if (data.text && data.duration_ms) {
+    const charCount = data.text.length;
+    const minutes = data.duration_ms / 60000;
+    metricsState.wpm = Math.round((charCount / 2) / minutes); // Rough: 2 chars per word
+    $('wpmValue').textContent = metricsState.wpm;
+  } else if (data.text) {
+    // Fallback: estimate based on typical speaking rate
+    const charCount = data.text.length;
+    const estimatedWords = charCount / 2;
+    const estimatedMinutes = estimatedWords / 150; // 150 WPM average
+    metricsState.wpm = 150;
+    $('wpmValue').textContent = metricsState.wpm;
+  }
+  
+  // Simulate barge count (user interruptions)
+  if (data.barge) {
+    metricsState.barge += 1;
+    $('bargeValue').textContent = metricsState.barge;
+  }
+}
+
+// ==================== WEBSOCKET HANDLERS ====================
+function send(event) { 
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); 
+}
+
+function showError(text) { 
+  $('error').textContent = text; 
+  $('error').classList.remove('hidden'); 
+  setTimeout(() => $('error').classList.add('hidden'), 5000);
+}
+
+function clearError() { 
+  $('error').classList.add('hidden'); 
+}
+
+function onMessage({data}) {
+  if (data instanceof ArrayBuffer) { 
+    player?.packet(data); 
+    return; 
+  }
+  
+  let event;
+  try { event = JSON.parse(data); } catch { return; }
+  
+  switch (event.type) {
+    case 'reply_start':
+      epoch = event.epoch;
+      player?.begin(epoch);
+      clearError();
+      break;
+      
+    case 'utterance':
+      if (event.epoch !== epoch || player?.blocked.has(event.epoch)) break;
+      player?.unit(event);
+      addDataCard('AI Response', event.text);
+      records.push({role: 'assistant', text: event.text});
+      if (event.text) {
+        uiUnits.set(`${event.epoch}:${event.unit}`, {text: event.text});
+        updateMetrics({ text: event.text, duration_ms: event.duration_ms });
+      }
+      break;
+      
+    case 'utterance_end':
+      player?.finish(event);
+      break;
+      
+    case 'cancel':
+      player?.cancel(event.epoch);
+      break;
+      
+    case 'transcript':
+      if (event.final) {
+        addDataCard('User Said', event.text);
+        records.push({role: 'user', text: event.text});
+        updateMetrics({ text: event.text, duration_ms: event.duration_ms });
+      }
+      break;
+      
+    case 'state':
+      const phaseText = {
+        ready: 'Ready',
+        thinking: 'Thinking...',
+        speaking: 'Speaking',
+        listening: 'Listening'
+      };
+      $('phaseIndicator').textContent = phaseText[event.phase] || 'Active';
+      
+      // Update pipeline nodes
+      if (event.delivered) {
+        event.delivered.forEach(nodeId => {
+          updatePipelineNode(nodeId, 'completed');
+        });
+      }
+      break;
+      
+    case 'reply_done':
+      turns++;
+      if (event.reused) hits++;
+      break;
+      
+    case 'latency':
+      if (event.voice_to_playback_ms !== null && event.voice_to_playback_ms !== undefined) {
+        updateMetrics({ latency: Math.round(event.voice_to_playback_ms) });
+      }
+      break;
+      
+    case 'error':
+      showError(event.message);
+      break;
+  }
+}
+
+// ==================== CONNECTION LIFECYCLE ====================
 async function start(useVoice) {
   if (connected || inputInFlight) return;
   inputInFlight = true;
   clearError();
+  
   $('startVoice').disabled = $('startText').disabled = true;
+  
   try {
     voice = useVoice;
-    // Resume within the click gesture, before network or microphone awaits.
+    
     if (voice) {
       context = new AudioContext();
-      await context.resume();
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
     }
+    
     socket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
     socket.binaryType = 'arraybuffer';
-    await new Promise((resolve,reject) => {
-      const timeout = setTimeout(() => reject(new Error('连接超时，请确认服务已启动。')), 6000);
+    
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 6000);
       socket.onopen = () => { clearTimeout(timeout); resolve(); };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('无法连接到本地服务。')); };
+      socket.onerror = () => { clearTimeout(timeout); reject(new Error('Connection failed')); };
     });
+    
     if (voice) {
-      player = new Player(context, send, (e,u) => {
+      player = new Player(context, send, (e, u) => {
         const item = uiUnits.get(`${e}:${u}`);
-        if (item) item.record.delivery = 'complete';
+        if (item) item.delivered = true;
       });
       mic = new Microphone(context, socket, showError, player.output);
       await mic.open();
+      
+      // Connect audio to analyser after player and mic are created
+      if (analyser) {
+        if (mic.source) mic.source.connect(analyser);
+        if (player.output) player.output.connect(analyser);
+      }
     }
-    records = []; uiUnits.clear(); turns = hits = 0; epoch = 0;
-    $('transcript').replaceChildren();
-    $('latency').textContent = '';
-    renderTask();
-    connected = true; startedAt = performance.now();
+    
+    records = [];
+    uiUnits.clear();
+    turns = hits = 0;
+    epoch = 0;
+    
+    connected = true;
+    startedAt = performance.now();
+    
     socket.onmessage = onMessage;
-    socket.onclose = () => cleanup('连接已结束');
-    socket.onerror = () => showError('连接发生错误，请重新开始。');
+    socket.onclose = () => cleanup('Connection closed');
+    socket.onerror = () => showError('Connection error');
+    
     $('startControls').classList.add('hidden');
     $('callControls').classList.remove('hidden');
     $('textForm').classList.remove('hidden');
-    $('mute').classList.toggle('hidden', !voice);
-    $('mute').textContent = '暂停麦克风'; $('mute').setAttribute('aria-pressed','false');
-    $('editTask').disabled = $('prediction').disabled = true;
-    $('connection').textContent = '已连接'; $('connection').classList.add('online');
-    $('modeLabel').textContent = voice ? '实时语音' : '文字对话';
-    $('activity').classList.add('live');
-    timer = setInterval(() => {
-      const seconds = Math.floor((performance.now()-startedAt)/1000);
-      $('duration').textContent = `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`;
-    },1000);
-    send({type:'start', task, voice, audio_protocol:2, predictions:$('prediction').checked});
+    
+    $('connection').textContent = 'CONNECTED';
+    $('connection').classList.add('online');
+    
+    // Initialize waveform animation
+    initWaveform();
+    
+    send({type: 'start', task, voice, audio_protocol: 2, predictions: true});
+    
     if (!voice) $('textInput').focus();
+    
   } catch (error) {
     await cleanup();
-    showError(error.name==='NotAllowedError' ? '没有获得麦克风权限。允许后可重试，也可以先用文字试聊。' : error.message);
+    showError(error.name === 'NotAllowedError' ? 
+      'Microphone permission denied' : error.message);
   } finally {
     inputInFlight = false;
     $('startVoice').disabled = $('startText').disabled = false;
   }
 }
-function onMessage({data}) {
-  if (data instanceof ArrayBuffer) { player?.packet(data); return; }
-  let event;
-  try { event = JSON.parse(data); } catch { return; }
-  switch (event.type) {
-    case 'reply_start':
-      epoch = event.epoch; player?.begin(epoch); $('latency').textContent=''; clearError(); break;
-    case 'utterance':
-      if (event.epoch !== epoch || player?.blocked.has(event.epoch)) break;
-      player?.unit(event);
-      append('assistant',event.text,`${event.epoch}:${event.unit}`); break;
-    case 'utterance_end': player?.finish(event); break;
-    case 'cancel': player?.cancel(event.epoch); markCancelled(event.epoch); break;
-    case 'transcript':
-      if (event.final) { $('partial').textContent=''; append('user',event.text); }
-      else $('partial').textContent = event.text ? `听到：${event.text}` : '';
-      break;
-    case 'state': {
-      $('phase').textContent = phaseNames[event.phase] || '在听，请说';
-      $('activity').classList.toggle('talking', event.phase==='speaking');
-      const status = {active:'对话进行中',complete:'已说明并得到明确确认',paused:'已尊重对方意愿，暂停沟通',declined:'对方已拒绝，结束本次目标'};
-      $('outcomeText').textContent = status[event.status] || '等待开始';
-      for (const li of $('checkpoints').children) {
-        const done = event.delivered.includes(li.dataset.point);
-        li.classList.toggle('done',done); li.querySelector('.check').textContent = done ? '✓' : '';
-      }
-      break;
-    }
-    case 'reply_done':
-      turns++; if(event.reused) hits++;
-      $('cacheStat').textContent=`完成 ${turns} 次回复 · 复用预测 ${hits} 次`;
-      break;
-    case 'latency':
-      if (event.voice_to_playback_ms !== null && event.voice_to_playback_ms !== undefined)
-        $('latency').textContent=`接话 ${(event.voice_to_playback_ms/1000).toFixed(2)}s`;
-      break;
-    case 'error': showError(event.message); break;
-  }
-}
-async function cleanup(label='对话已结束，可以重新开始') {
+
+async function cleanup(message) {
   connected = false;
-  clearInterval(timer);
-  mic?.close(); mic = null;
-  player?.close(); player = null;
-  if (context && context.state !== 'closed') await context.close();
-  context = null;
-  if (socket && socket.readyState < WebSocket.CLOSING) { socket.onclose = null; socket.close(); }
-  $('startControls').classList.remove('hidden');
-  $('callControls').classList.add('hidden'); $('textForm').classList.add('hidden');
-  $('editTask').disabled = $('prediction').disabled = false;
-  $('connection').textContent='未连接'; $('connection').classList.remove('online');
-  $('activity').classList.remove('live','talking');
-  $('partial').textContent=''; $('phase').textContent=label;
-}
-$('startVoice').onclick=()=>start(true);
-$('startText').onclick=()=>start(false);
-$('interrupt').onclick=()=>interrupt();
-$('stop').onclick=()=>{send({type:'stop'});cleanup();};
-$('mute').onclick=()=>{
-  if (!mic) return;
-  mic.muted=!mic.muted;
-  $('mute').textContent=mic.muted?'恢复麦克风':'暂停麦克风';
-  $('mute').setAttribute('aria-pressed',String(mic.muted));
-};
-$('textForm').onsubmit=event=>{
-  event.preventDefault();
-  const text=$('textInput').value.trim();
-  if (!text || !connected) return;
-  interrupt('text'); send({type:'text',text}); $('textInput').value='';
-};
-$('editTask').onclick=()=>{
-  $('editTitle').value=task.title; $('editGoal').value=task.goal; $('editFacts').value=task.facts;
-  $('editPoints').value=task.checkpoints.map(p=>p.description).join('\n'); $('editOpening').value=task.opening;
-  $('taskDialog').showModal();
-};
-$('closeDialog').onclick=()=>$('taskDialog').close();
-$('taskForm').onsubmit=event=>{
-  event.preventDefault();
-  const descriptions=$('editPoints').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  if (!descriptions.length || descriptions.length>8 || descriptions.some(s=>s.length>300)) {
-    $('editPoints').setCustomValidity('请输入1至8个要点，每项不超过300字。'); $('editPoints').reportValidity(); return;
+  if (socket) {
+    socket.close();
+    socket = null;
   }
-  task={title:$('editTitle').value.trim(),goal:$('editGoal').value.trim(),facts:$('editFacts').value.trim(),
-    opening:$('editOpening').value.trim(),checkpoints:descriptions.map((description,i)=>({id:`point_${i+1}`,description}))};
-  localStorage.setItem('g2-task',JSON.stringify(task)); renderTask(); $('taskDialog').close();
-};
-$('editPoints').oninput=()=>$('editPoints').setCustomValidity('');
-$('export').onclick=()=>{
-  const blob=new Blob([JSON.stringify({task,conversation:records},null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url; a.download='ai-call-g2-conversation.json'; a.click();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
-};
-window.addEventListener('beforeunload',()=>{mic?.close();player?.close();socket?.close();});
-try {
-  const config=await (await fetch('/api/config')).json();
-  try { task=JSON.parse(localStorage.getItem('g2-task')); } catch {}
-  if (!task?.checkpoints?.length || !task.goal || !task.opening) task=config.default_task;
-  $('prediction').checked=config.predictions; renderTask();
-  $('connection').textContent='服务就绪'; $('connection').classList.add('online');
-  if (!config.configured) showError('服务尚未配置 API 凭据，请在本地 .env 中填写后重启。');
-} catch { showError('无法载入任务配置，请确认本地服务已启动。'); }
+  if (mic) {
+    mic.close();
+    mic = null;
+  }
+  if (player) {
+    player.close();
+    player = null;
+  }
+  if (context) {
+    await context.close();
+    context = null;
+  }
+  if (animationFrame) {
+    cancelAnimationFrame(animationFrame);
+    animationFrame = null;
+  }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  
+  $('startControls').classList.remove('hidden');
+  $('callControls').classList.add('hidden');
+  $('textForm').classList.add('hidden');
+  $('connection').textContent = 'READY';
+  $('connection').classList.remove('online');
+  $('phaseIndicator').textContent = message || 'Ready';
+  
+  // Clear metrics
+  $('latencyValue').textContent = '--';
+  $('sentimentValue').textContent = '--';
+  $('wpmValue').textContent = '--';
+  $('bargeValue').textContent = '--';
+}
+
+function interrupt() {
+  if (!connected || !epoch) return;
+  const progress = player?.stop(true) || [];
+  send({type: 'interrupt', epoch, progress, source: 'manual'});
+  $('phaseIndicator').textContent = voice ? 'Listening' : 'Interrupted';
+}
+
+// ==================== TEXT INPUT ====================
+function sendText(text) {
+  if (!text.trim() || !connected) return;
+  send({type: 'text', text: text.trim()});
+  addDataCard('User Said', text.trim());
+  $('textInput').value = '';
+}
+
+// ==================== TASK DIALOG ====================
+function openTaskDialog() {
+  const dialog = $('taskDialog');
+  if (!dialog) return;
+  
+  $('editTitle').value = task?.title || '';
+  $('editGoal').value = task?.goal || '';
+  $('editFacts').value = task?.facts || '';
+  $('editPoints').value = task?.checkpoints?.map(p => p.description).join('\n') || '';
+  $('editOpening').value = task?.opening || '';
+  
+  dialog.showModal();
+}
+
+function closeTaskDialog() {
+  $('taskDialog')?.close();
+}
+
+function saveTask(formData) {
+  const points = formData.get('points').split('\n').filter(l => l.trim());
+  
+  task = {
+    title: formData.get('title'),
+    goal: formData.get('goal'),
+    facts: formData.get('facts'),
+    checkpoints: points.map((desc, i) => ({
+      id: `checkpoint_${i}`,
+      description: desc.trim()
+    })),
+    opening: formData.get('opening')
+  };
+  
+  renderPipeline();
+  closeTaskDialog();
+}
+
+// ==================== INITIALIZATION ====================
+async function init() {
+  try {
+    const response = await fetch('/api/config');
+    const config = await response.json();
+    
+    if (config.default_task) {
+      task = config.default_task;
+      renderPipeline();
+    }
+    
+  } catch (error) {
+    console.error('Failed to load config:', error);
+  }
+  
+  // Event listeners
+  $('startVoice')?.addEventListener('click', () => start(true));
+  $('startText')?.addEventListener('click', () => start(false));
+  $('interrupt')?.addEventListener('click', interrupt);
+  $('stop')?.addEventListener('click', () => cleanup('Call ended'));
+  
+  $('textForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendText($('textInput').value);
+  });
+  
+  $('taskForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveTask(new FormData(e.target));
+  });
+  
+  $('closeDialog')?.addEventListener('click', closeTaskDialog);
+  
+  // Initialize waveform canvas
+  if ($('waveformCanvas')) {
+    initWaveform();
+  }
+  
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    if (waveformCanvas) {
+      initWaveform();
+    }
+  });
+}
+
+// Start on load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
