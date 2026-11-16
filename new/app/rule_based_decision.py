@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from .models import Candidate
+if TYPE_CHECKING:
+    from .models import Candidate
 
 
 class RuleBasedDecisionEngine:
@@ -31,8 +32,8 @@ class RuleBasedDecisionEngine:
     def should_reuse(
         self,
         user_input: str,
-        candidates: list[Candidate],
-    ) -> tuple[Literal["reuse", "say", "llm"], Candidate | None]:
+        candidates: list,
+    ) -> tuple[Literal["reuse", "say", "llm"], any]:
         """
         Decide whether to reuse a candidate WITHOUT calling LLM.
         
