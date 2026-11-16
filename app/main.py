@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -247,6 +248,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="智语外呼", version="0.2.0", lifespan=lifespan)
 app.include_router(predictive_router)
+
+# Dev-only split frontend: enable CORS only when DEV_CORS_ORIGINS is set.
+_dev_cors_origins = [x.strip() for x in os.getenv("DEV_CORS_ORIGINS", "").split(",") if x.strip()]
+if _dev_cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_dev_cors_origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
 
 
 def _orc(request: Request) -> Orchestrator:

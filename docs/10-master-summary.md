@@ -1,6 +1,7 @@
 # 10 · 总汇总：架构 / API / 工作清单
 
 > 一页给团队对齐。详细契约见 [03](03-interface-contract-v0.1.md)，事件见 [04](04-event-schema-v0.1.md)，交付见 [09](09-delivery-runtime.md)。
+> 当前两套链路/分支/端口见 [28](28-current-architecture.md)。
 > 范围：三周、单一业务场景、可演示闭环；不追求多场景/高并发/长期记忆。
 
 ---
@@ -17,6 +18,29 @@
 | 合规 | 三层：生成前约束 → 句级门禁 → 工具守卫；BLOCK 必须中断 TTS |
 | 交付 | `docker compose --profile cpu up`；模型内置；localhost/HTTPS；无隧道 |
 | 团队 | 天命（架构/编排/网关/事件/版本/集成）、SinCircle（语音）、pseudonym（Agent）、湖中日月（评测/RSI）、cx（前端/演示） |
+
+### 0.1 当前实际形态（2026-11-16）
+
+master `ee41ae3` 现在是两套实现并存：
+
+```text
+A. 旧正式链路 app/ + web/rtc
+   /rtc 探测 /ws/decision 失败 → 回落 /ws/session + ws_pcm
+   → Orchestrator → Agent / predictive v1 → 合规/工具 → TTS
+
+B. 新独立核心 new/
+   AudioWorklet/AEC3 → WS /ws → Hearing/VAD/ASR
+   → Brain/LLM + 预测 → TTS → 播放
+```
+
+关键事实：
+
+```text
+- 新前端 Decision 已合入，但 /ws/decision 后端未实现，实际会回落 legacy
+- new/ 是 PR #13 合入的独立原型，默认 8088，不等于正式 8081
+- /predictive/v1 属于旧 app 链路，不是 new/ 的接口
+- 远端分支未合并数：0
+```
 
 ---
 
@@ -353,6 +377,7 @@ slots:
 | A10 | 合规守卫集成（3 调用点） | 句级 BLOCK 中断 TTS | 禁语召回 100% |
 | A11 | Eval headless runner | `/eval/sessions` | D 可独立跑批 |
 | A12 | 性能收敛 + 演示 + 提交镜像 | P50/P95 报表、tar | W3 彩排通过 |
+| A13 | 主链路收敛：旧 app 或 new/ 二选一；补 `/ws/decision` 或正式切新核心 | 决策记录、单一入口 | 不再双轨 |
 
 ### 3.2 SinCircle（语音）
 
@@ -382,6 +407,7 @@ slots:
 | C9 | 版本化工件 | prompt/flow 版本 | 可被 Registry pin |
 | C10 | 预测式分类器 | 规则 v1；模型/向量/embedding 评估 | 任意输入有 fallback，契约字段稳定 |
 | C11 | 预测式缓存 | SpeculativeCache、BGE 语义、voice 输入 cache、LLM 异步 Top-K | 命中率/P50 有数，未命中 fallback 稳定 |
+| C12 | new/ 独立核心接入 | 统一接口/配置/部署方案 | 可作主链路候选 |
 
 ### 3.4 湖中日月（评测/RSI）
 
@@ -396,6 +422,7 @@ slots:
 | D7 | 测试音频方案 | 音频 + 转写 + 同意 | 口径确认 |
 | D8 | 分类器评测 | 规则 vs 模型/向量准确率、fallback 率、P50 | 可比较报告 |
 | D9 | 缓存/预测评测 | 命中率、误命中率、预测准确率、首声 | 可比较报告 |
+| D10 | 两条链路统一延迟口径 | first_text/first_packet/voice_to_playback | 可直接对比 |
 
 ### 3.5 cx（前端/演示）
 
@@ -407,6 +434,7 @@ slots:
 | E4 | 事件时间线/指标 | 回放、P50/P95 | 答辩可用 |
 | E5 | 本地 VAD 静音 | `local_muted` | ≤50ms |
 | E6 | 视频/PPT/答辩 | 5min 视频、7min PPT | 两次彩排 |
+| E7 | 新前端 Decision/UI 落地验证 | 接 `/ws/decision` 或明确回落 | 页面可演示 |
 
 ### 3.6 跨人协作
 
@@ -416,6 +444,16 @@ slots:
 | X2 | 每周一次 3min 演示 + 指标页 | 天命 + cx | 可复现 |
 | X3 | 干净 VM 一键启动演练 | 天命 | 每周一次 |
 | X4 | 提交包（方案书/报告/视频/清单） | 天命 + 全员 | 08 checklist 全绿 |
+
+### 3.7 当前整合优先级（2026-11-16）
+
+| 优先级 | 事项 | Owner | 验收 |
+|---|---|---|---|
+| P0 | 决定主推旧 `app/` 还是 `new/` | 天命 | 一条主链路 |
+| P0 | 若主推新前端，补 `/ws/decision` 后端 | 天命 | 前端不再回落 |
+| P0 | 若主推 `new/`，补 `.env`/Docker/正式入口 | 天命 + pseudonym | 8088 可复现 |
+| P1 | 统一延迟口径与页面指标 | 湖中日月 + cx | 可对比 |
+| P1 | 收敛远端/本地分支 | 天命 | 不再双轨 |
 
 ---
 
