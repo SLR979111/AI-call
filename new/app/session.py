@@ -312,6 +312,20 @@ class Session:
                     if output.done() and output.exception():
                         raise output.exception()
                     if kind in {"say", "reuse"}:
+                        # Track decision in decision tracker
+                        if self.decision_tracker:
+                            if kind == "reuse":
+                                self.turn_metrics["reused"] = True
+                                candidate_id = next((c.id for c in candidates if c.reply == value.text), "unknown")
+                                self.decision_tracker.record_reuse(
+                                    candidate_id,
+                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000
+                                )
+                            else:
+                                self.decision_tracker.record_say(
+                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000
+                                )
+                        
                         if kind == "reuse":
                             self.turn_metrics["reused"] = True
                         if "first_text_ms" not in self.turn_metrics:
@@ -332,9 +346,18 @@ class Session:
                 self.forecast = self.spawn(self._predict(epoch, snapshot))
             await output
             if self.is_current(epoch):
+                # End performance tracking
+                if self.performance_monitor:
+                    self.performance_monitor.end_turn()
+                
                 self.reply_completed = all(unit.delivered for unit in current_units)
                 self.phase = "listening"
                 self.log("reply_finished", **{k: v for k, v in self.turn_metrics.items() if k != "started"})
+                
+                # Track task completion
+                if self.memory.status == "complete" and self.performance_monitor:
+                    self.performance_monitor.record_task_completion(success=True)
+                
                 await self.send({"type": "reply_done", "epoch": epoch,
                                  "reused": self.turn_metrics.get("reused", False)})
                 await self.state()
@@ -342,6 +365,10 @@ class Session:
             raise
         except Exception as exc:
             if self.is_current(epoch):
+                # Track error in performance monitor
+                if self.performance_monitor:
+                    self.performance_monitor.record_error(type(exc).__name__)
+                
                 self.reply_completed = False
                 self.candidates = []
                 if self.forecast and not self.forecast.done():
