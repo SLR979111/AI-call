@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#000000">
+<title>AI 通话</title>
+<link rel="stylesheet" href="./display.css">
+</head>
+<body>
+
+<!-- 来电：整屏一个大电话图标，点它才开始 -->
+<section id="incoming" class="stage incoming" aria-label="接听来电">
+  <button id="callBtn" class="call-btn" type="button" aria-label="点击接听">
+    <span class="ring"></span>
+    <span class="ring ring2"></span>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6.9 3.6 9.2 3l1.9 4.3-2 1.4a12.6 12.6 0 0 0 5.2 5.2l1.4-2L20 13.8l-.6 2.3a2.2 2.2 0 0 1-2.4 1.6A16.5 16.5 0 0 1 5.3 6a2.2 2.2 0 0 1 1.6-2.4Z"
+        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M15.5 4.5c1.1.4 2 1.3 2.4 2.4M16 8c.4.2.8.6 1 1"
+        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+  </button>
+  <p class="incoming-label">点击接听</p>
+  <p class="incoming-sub" id="incomingSub">正在准备…</p>
+</section>
+
+<!-- 通话中：纯文字舞台 -->
+<section id="call" class="stage call hidden" aria-live="polite">
+  <div class="hud">
+    <span class="dot" id="dot"></span>
+    <span id="timer">00:00</span>
+    <span class="sep">·</span>
+    <span id="phase">接通中</span>
+    <span class="sep">·</span>
+    <span id="latency"></span>
+  </div>
+  <div id="words" class="words" aria-label="对话文字"></div>
+  <p id="partial" class="partial"></p>
+  <p id="hint" class="hint">点任意处可打断</p>
+  <p id="err" class="err hidden"></p>
+  <button id="stopBtn" class="stop" type="button" aria-label="挂断">✕</button>
+</section>
+
+<script type="module" src="./display.js"></script>
+</body>
+</html>

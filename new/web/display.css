@@ -1,0 +1,326 @@
+/* display.css —— 展示用舞台：黑底 + 纯文字（kinetic typography）
+ *
+ * 视觉目标（对齐参考图）：
+ *   1. 只有文字，没有气泡、没有头像、没有边框。
+ *   2. 同一个人的话用同一种颜色；不同人字号差一个数量级。
+ *   3. 文字块允许被屏幕边缘裁掉，允许旋转、允许竖排。
+ *   4. 最新一句最大，旧的缩小并变淡，整体像"全是文字的视频"。
+ */
+
+:root {
+  /* ── 字幕配色（只影响对话文字）── */
+  --ai: #24baff;
+  --user: #ffffff7e;
+  --mute: #fffafa;
+  --bg: #000;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* ── 来电按钮 / 接听页配色（与字幕完全解耦，改这里不动 AI 字色）──
+     只想换个主色：改 --call 即可；想要一致的高光/暗部，把这 4 个一起改：
+     --call-light ≈ 主色提亮，--call-dark ≈ 主色压暗，--call-glow = 主色 + 透明度 */
+  --call: #ff2f24;                       /* 按钮主色 */
+  --call-light: #ff6a5e;                 /* 径向高光（左上） */
+  --call-dark: #8f140d;                  /* 边缘暗部 */
+  --call-glow: rgba(255, 47, 36, .55);   /* 外发光 + 两圈脉冲环 */
+  --call-icon: #fff;                     /* 话筒图标 */
+  --call-label: #fff;                    /* 「点击接听」文字 */
+  --live: #ff2f24;                       /* 通话中的小圆点 + 呼吸光 */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--user);
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* ============================ 来电 ============================ */
+
+.incoming {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2.6vh;
+}
+
+.call-btn {
+  position: relative;
+  width: clamp(120px, 17vh, 220px);
+  height: clamp(120px, 17vh, 220px);
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: var(--call-icon);
+  background: radial-gradient(circle at 38% 30%, var(--call-light), var(--call) 62%, var(--call-dark));
+  box-shadow: 0 0 6vh -1vh var(--call-glow), 0 2vh 6vh rgba(0, 0, 0, .8);
+  cursor: pointer;
+  transition: transform .18s var(--ease), box-shadow .25s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-btn:hover { transform: scale(1.05); }
+.call-btn:active { transform: scale(.96); }
+.call-btn:focus-visible { outline: 3px solid #fff; outline-offset: 10px; }
+
+.call-btn svg {
+  width: 46%;
+  height: 46%;
+  animation: bob 2.6s ease-in-out infinite;
+}
+
+.ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--call-glow);
+  animation: pulse 2.4s var(--ease) infinite;
+  pointer-events: none;
+}
+.ring2 { animation-delay: 1.2s; }
+
+.incoming-label {
+  margin: 0;
+  font-size: clamp(15px, 1.8vw, 22px);
+  letter-spacing: .42em;
+  text-indent: .42em;
+  color: var(--call-label);
+}
+
+.incoming-sub {
+  margin: 0;
+  font-size: clamp(11px, 1.1vw, 14px);
+  color: var(--mute);
+  letter-spacing: .08em;
+}
+
+/* ============================ 文字舞台 ============================ */
+
+/* 底部词墙：右对齐、可被裁切；字号由 JS 按「角色 + 句长 + 年龄」写进 --fs，
+   这样旧句是真正的字号变小（参与布局），不是 transform:scale 的视觉缩小。 */
+.words {
+  position: absolute;
+  right: 2.5vw;
+  bottom: clamp(44px, 9vh, 120px);
+  width: min(94vw, 1700px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: .8vh;
+  pointer-events: none;
+}
+
+.line {
+  display: flex;
+  justify-content: flex-end;
+  transition: opacity .45s var(--ease);
+}
+
+/* 年龄：越旧越淡（字号变化在 JS 里算，保证布局跟着收） */
+
+.line .t {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--fs, 40px);
+  transition: font-size .45s var(--ease);
+  /* 入场：从下往上顶 + 淡入。时长按角色分开，AI 走慢一点（--rise-dur） */
+  animation: rise var(--rise-dur, .46s) var(--ease) backwards;
+}
+
+/* AI 的入场放慢：字大、位移远，快了会显得"闪"一下 */
+.line.ai { --rise-dur: 1.05s; }
+
+/* 几何：短句单行不折（hero）、长句限宽折行 —— 两种角色共用，保证字号观感一致 */
+.line.hero .t { max-width: none; white-space: nowrap; }
+.line:not(.hero) .t { max-width: 11em; }
+
+/* AI：红字、最重字重 */
+.line.ai .t {
+  color: var(--ai);
+  text-align: right;
+  font-weight: 800;
+}
+.line.ai.hero .t { line-height: .88; letter-spacing: -.04em; }
+.line.ai:not(.hero) .t { line-height: 1.06; letter-spacing: -.02em; font-weight: 750; }
+
+/* 用户句的入场：不走整块 rise，改成逐词脱模糊（每个 .w 依次从模糊到清晰） */
+.line.user .t { animation: none; }
+.line.user .t .w {
+  display: inline-block;
+  animation: unblur .55s linear backwards;
+  animation-delay: calc(var(--i, 0) * var(--step, 26ms));
+}
+
+/* 用户：字号规则与 AI 完全相同，只换颜色和字重 */
+.line.user .t {
+  color: var(--user);
+  text-align: right;
+  font-weight: 560;
+  opacity: .9;
+}
+.line.user.hero .t { line-height: .9; letter-spacing: -.03em; }
+.line.user:not(.hero) .t { line-height: 1.1; }
+
+/* 被打断 / 未播完 */
+.line.struck .t {
+  opacity: .34;
+  text-decoration: line-through;
+  text-decoration-thickness: .06em;
+  text-decoration-color: rgba(255, 47, 36, .8);
+}
+
+/* ============================ 其余层 ============================ */
+
+.hud {
+  position: absolute;
+  top: clamp(18px, 3.2vh, 34px);
+  left: clamp(20px, 3vw, 44px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: clamp(11px, 1.05vw, 14px);
+  letter-spacing: .1em;
+  color: var(--mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud .sep { opacity: .4; }
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--live) 18%, transparent);
+}
+.dot.live { animation: breathe 1.8s ease-in-out infinite; }
+
+/* 实时上屏的识别片段：小号白字，像参考图里那行小字幕 */
+.partial {
+  position: absolute;
+  left: clamp(20px, 3vw, 44px);
+  bottom: clamp(20px, 3.4vh, 40px);
+  max-width: 46vw;
+  margin: 0;
+  font-size: clamp(12px, 1.25vw, 17px);
+  line-height: 1.5;
+  letter-spacing: .04em;
+  color: rgba(245, 245, 245, .72);
+  white-space: pre-wrap;
+}
+
+.hint {
+  position: absolute;
+  right: 3vw;
+  top: clamp(18px, 3.2vh, 34px);
+  margin: 0;
+  font-size: clamp(10px, .95vw, 13px);
+  letter-spacing: .16em;
+  color: rgba(255, 255, 255, .28);
+  transition: opacity .6s var(--ease);
+}
+.hint.fade { opacity: 0; }
+
+.err {
+  position: absolute;
+  left: 50%;
+  top: clamp(18px, 3.2vh, 34px);
+  transform: translateX(-50%);
+  max-width: 70vw;
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(255, 47, 36, .14);
+  border: 1px solid rgba(255, 47, 36, .45);
+  color: #ffd9d6;
+  font-size: clamp(11px, 1.05vw, 14px);
+  letter-spacing: .04em;
+}
+
+.stop {
+  position: absolute;
+  right: clamp(14px, 2vw, 26px);
+  bottom: clamp(14px, 2.6vh, 26px);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .04);
+  color: rgba(255, 255, 255, .6);
+  font-size: 15px;
+  cursor: pointer;
+  transition: border-color .2s, color .2s, background .2s;
+}
+.stop:hover { border-color: var(--call); color: #fff; background: var(--call-glow); }
+
+/* ============================ 动效 ============================ */
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: .9; }
+  70%, 100% { transform: scale(1.55); opacity: 0; }
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(-4%); }
+  50% { transform: translateY(4%); }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--live) 18%, transparent); }
+  50% { opacity: .55; box-shadow: 0 0 0 7px color-mix(in srgb, var(--live) 5%, transparent); }
+}
+
+/* 入场：从下往上顶出来，带一点失焦，像文字视频的切入 */
+@keyframes unblur {
+  /* 模糊量用 em：字号越大起点越糊，小字号也不会糊成一团。
+     中间加两个停靠点，让"糊"的状态停留得住 —— 只有 from/to 两点的话，
+     ease 曲线前段变化太快，肉眼几乎看不到模糊。 */
+  0%   { opacity: .55; filter: blur(.14em); transform: translateY(.08em); }
+  40%  { opacity: .85; filter: blur(.06em);  transform: translateY(.03em); }
+  80%  { opacity: .97; filter: blur(.012em); }
+  100% { opacity: 1;   filter: blur(0);      transform: none; }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6vh) scale(.9);
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* 最新一句的持续摆动（"适时旋转"） */
+
+/* ============================ 降级 ============================ */
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+  .line .t { filter: none !important; }
+}
+
+/* 窄屏：词墙铺满底部，字号靠 vw 自然缩小 */
+@media (max-width: 720px) {
+  .words { right: 4vw; left: 4vw; bottom: 12vh; width: auto; align-items: flex-end; }
+  .line.ai .t { max-width: 5em; }
+  .partial { max-width: 80vw; }
+}

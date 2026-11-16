@@ -58,3 +58,36 @@ jobs:
         env:
           PORT: "8081"
         run: sh scripts/ci_e2e.sh
+
+  new-implementation:
+    name: new/ standalone tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: new
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install uv==0.11.29
+          uv sync --locked --python 3.12 --group dev
+          npm ci --ignore-scripts
+
+      - name: Python regression
+        run: uv run --locked pytest -q
+
+      - name: Player and microphone regression
+        run: npm test
+
+      - name: Verify bundled audio runtimes
+        run: |
+          uv run --locked python -c "from app.vad import SpeechDetector; d = SpeechDetector(); assert d.feed(bytes(1024)) < .1"
+          node --input-type=module -e "import fs from 'node:fs/promises'; import {AcousticInput} from './web/acoustics.js'; const m = await WebAssembly.compile(await fs.readFile('./web/vendor/webrtc-audio-processing/webrtc-audio-processing.wasm')); const d = new AcousticInput(m); d.process(new Float32Array(320), new Float32Array(320)); d.close();"
