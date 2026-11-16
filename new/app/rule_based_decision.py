@@ -13,16 +13,28 @@ class RuleBasedDecisionEngine:
     """Fast pattern-based decision engine that avoids LLM calls for obvious reuse cases."""
     
     def __init__(self):
-        # Simple affirmative patterns
-        self.affirmatives = {
+        # Simple affirmative patterns (with and without punctuation)
+        base_affirmatives = [
             "是", "是的", "对", "对的", "嗯", "好", "好的", "可以", "行",
-            "没错", "确实", "就是", "正是"
-        }
+            "没错", "确实", "就是", "正是", "明白", "明白了", "懂了", "知道了",
+            "了解", "清楚", "清楚了", "收到", "嗯嗯", "好吧", "行吧"
+        ]
+        # Add versions with common Chinese punctuation
+        self.affirmatives = set(base_affirmatives)
+        for word in base_affirmatives:
+            self.affirmatives.add(word + "。")
+            self.affirmatives.add(word + "，")
+            self.affirmatives.add(word + "!")
         
-        # Simple negative patterns
-        self.negatives = {
-            "不是", "不对", "不", "没", "没有", "不行", "不可以", "不用"
-        }
+        # Simple negative patterns (with and without punctuation)
+        base_negatives = [
+            "不是", "不对", "不", "没", "没有", "不行", "不可以", "不用",
+            "不要", "算了", "不了", "不需要"
+        ]
+        self.negatives = set(base_negatives)
+        for word in base_negatives:
+            self.negatives.add(word + "。")
+            self.negatives.add(word + "，")
         
         # Question keywords
         self.question_keywords = {
@@ -47,13 +59,11 @@ class RuleBasedDecisionEngine:
         
         user_input = user_input.strip()
         
-        # Rule 1: Very short affirmatives (≤3 chars) → check candidates
-        if len(user_input) <= 3 and user_input in self.affirmatives:
-            for candidate in candidates:
-                # If the candidate asks a yes/no question, reuse it
-                if self._is_yes_no_question(candidate.when):
-                    return ("reuse", candidate)
-            return ("say", None)
+        # Rule 1: Short affirmatives (≤5 chars including punctuation) → reuse first candidate
+        if len(user_input) <= 5 and user_input in self.affirmatives:
+            # Simple affirmatives like "是的"/"好的"/"可以" typically confirm context
+            # Reuse the first (most relevant) candidate
+            return ("reuse", candidates[0])
         
         # Rule 2: Very short negatives → likely need new response
         if len(user_input) <= 3 and user_input in self.negatives:
