@@ -1,10 +1,11 @@
 # 智语外呼 · 语音外呼客服数字员工
 
 面向 POP 商家资质审核场景的语音外呼 Demo。  
-当前主工作：**预测式对话主链路 v1**。
+当前状态：**旧 `app/` 正式链路与 `new/` 独立核心并存**。
 
 > 原则：先保证合规和可演示，再谈延迟和模型替换。  
-> 8087 是当前验证入口，不是正式 8091；8081 仍是旧镜像，待正式发布。
+> 8087 是旧预测式链路验证入口；8088 是 `new/` 独立核心；8081 仍是旧镜像，待正式发布。  
+> 新前端 Decision 流已合入，但后端 `/ws/decision` 尚未实现，页面会自动回落旧链路。
 
 ---
 
@@ -99,6 +100,26 @@ sequenceDiagram
 
 具体接口字段以 [docs/27](docs/27-predictive-contract-v1.md) 为准，不约束内部实现。
 
+### 1.4 当前两套实现
+
+```text
+A. 旧正式链路：app/ + web/rtc
+   浏览器 /rtc → /ws/decision 探测失败 → 回落 /ws/session + ws_pcm
+   → Orchestrator → Agent / predictive v1 → 合规/工具 → TTS
+
+B. 新独立核心：new/
+   浏览器 new/web → AudioWorklet/AEC3 → WS /ws
+   → Hearing/VAD/ASR → Brain/LLM + 预测 → TTS → 播放
+
+C. UI mock：web/rtc/mock
+   只用于新前端 UI/协议联调
+```
+
+- A 仍是正式旧链路，后端入口在 `app/main.py`。
+- B 是 PR #13 合入的独立原型，默认 8088，依赖自己的 `.env`。
+- `/predictive/v1` 属于 A，不是 B 的接口。
+- 详细现状见 [docs/28](docs/28-current-architecture.md)。
+
 ---
 
 ## 2. 预测式交互
@@ -135,9 +156,11 @@ LLM 怎么调度
 
 | 入口 | 状态 | 说明 |
 |---|---|---|
-| 8081 | 200 | 正式 Docker 容器，仍是旧镜像 |
-| 8087 | 200 | 当前预测式链路验证入口（`PREDICTIVE_DIALOGUE=1`） |
+| 8081 | 旧镜像 | 正式 Docker 容器，待切换 |
+| 8087 | 需手动启动 | 旧预测式链路验证入口 |
+| 8088 | 需手动启动 | `new/` 独立核心 |
 | 8091 | 未启动 | 比赛入口，待正式启用 |
+| 8099 | 需手动启动 | 新前端 mock，仅 UI/联调 |
 
 访问：
 
@@ -188,6 +211,48 @@ curl.exe -sS -o NUL -w "%{http_code}" http://127.0.0.1:7880
 
 不要直接 `docker restart` 当成发布；必须重建/替换镜像。
 
+### 4.4 新独立核心 8088
+
+```text
+cd new
+uv sync --group dev
+# 填 new/.env 的 DEEPSEEK_API_KEY
+.\scripts\start.ps1
+```
+
+页面：
+
+```text
+http://127.0.0.1:8088
+```
+
+### 4.5 前端开发解耦（仅 dev）
+
+后端默认仍同源托管，不改生产行为。开发时前后端分开：
+
+```powershell
+# 终端 1：后端开 dev CORS
+$env:DEV_CORS_ORIGINS = "http://127.0.0.1:5173"
+# 再启动 8087 或 8081（按现有脚本）
+
+# 终端 2：静态前端
+.\scripts\dev-web-rtc.ps1 -Port 5173 -Backend http://127.0.0.1:8087
+```
+
+打开：
+
+```text
+http://127.0.0.1:5173/?app=http://127.0.0.1:8087
+```
+
+说明：
+
+```text
+DEV_CORS_ORIGINS 未设置时，CORS 中间件不启用
+生产默认同源，不受影响
+WebSocket 跨域由浏览器直连，dev 不加 Origin 白名单
+```
+
 ---
 
 ## 5. 当前工作清单
@@ -197,9 +262,11 @@ curl.exe -sS -o NUL -w "%{http_code}" http://127.0.0.1:7880
 | 负责人 | 工作 | 验收 |
 |---|---|---|
 | 天命 | 8081 候选镜像切换、回滚演练 | 8081 200，失败可回滚 |
+| 天命 + cx | 决定主推旧 `app/` 还是 `new/`；补 `/ws/decision` 或正式切新核心 | 一条主链路，不再双轨 |
 | SinCircle | 8081 本地 ASR/TTS 音频回归 | 3 轮有声，延迟有数 |
 | pseudonym | 预测式契约、分类器、六阶段/写回 | 身份不越界，阶段可推进 |
 | pseudonym + 天命 | 预测式路由/缓存演进（方案自选） | 命中率/P50 有数，未命中 fallback 稳定 |
+| 湖中日月 | 两条链路统一延迟口径（first_text/first_packet/voice_to_playback） | 同口径可比较 |
 | 湖中日月 | 分类器评测、P50/P95、合规测试 | 报告可复算 |
 | cx | `/rtc/` 播放、t9、AEC/回声 | 3 轮 t9 非空 |
 
@@ -237,8 +304,10 @@ test_contract / test_voice 受本机 numpy 环境限制未跑
 ## 6. 测试
 
 ```text
-非语音测试：118 passed
+旧 app 非语音测试：118 passed
 跳过：5 项（向量依赖）
+新独立核心 new/：26 passed
+新前端 web/rtc：npm test 全部通过
 ```
 
 覆盖：
@@ -258,6 +327,7 @@ fallback
 ## 7. 目录速览
 
 ```text
+new/                 独立语音核心（PR #13，8088）
 app/agent/           Agent 与 POP 预设/身份分支
 app/predictive/      预生成、分类器、匹配、fallback、v1 API
 app/orchestrator.py  Turn/取消/播放
@@ -277,7 +347,8 @@ web/rtc/             浏览器通话台
 |---|---|
 | [docs/10](docs/10-master-summary.md) | 总汇总与团队任务 |
 | [docs/13](docs/13-status-and-file-map.md) | 现状与文件地图 |
-| [docs/27](docs/27-predictive-contract-v1.md) | 预测式主链路契约 |
+| [docs/27](docs/27-predictive-contract-v1.md) | 旧 app 的预测式契约 |
+| [docs/28](docs/28-current-architecture.md) | 当前两套链路、分支与端口 |
 | [docs/24](docs/24-formal-mainline-regression.md) | 正式 8081 回归与回滚 |
 | [docs/17](docs/17-competition-selfcheck.md) | 比赛自检与合规基线 |
 | [docs/03](docs/03-interface-contract-v0.1.md) | 接口契约 |

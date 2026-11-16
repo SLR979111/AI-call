@@ -7,6 +7,8 @@
 > 状态：**待会签**。会签后冻结 2 周；任何破坏性修改需提前 24h 通知并升版本。
 > 上游：[01 矩阵](01-requirement-metric-module-matrix.md) · [02 架构](02-architecture-v0.1.md)
 
+> 当前仓库存在旧 `app/` 链路与 `new/` 独立核心两套实现；两者的总体现状、分支和端口见 [28](28-current-architecture.md)。
+
 ---
 
 ## 0. 为什么现在必须冻结

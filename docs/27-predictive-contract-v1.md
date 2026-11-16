@@ -1,3 +1,7 @@
+> 适用范围：仅旧 `app/` 链路。  
+> `new/` 独立核心使用自己的预测/reuse 协议，不走本契约；两套不要混用。  
+> 当前总体现状见 [28](28-current-architecture.md)。
+
 # 27 · 预测式对话契约 v1
 
 > 对应 schema：`contracts/schemas/predictive.v1.json`  

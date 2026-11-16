@@ -1,9 +1,9 @@
 # 13 · 项目现状与文件地图
 
-> 更新时间：2026-11-06
-> 仓库：`git@github.com:SLR979111/AI-call.git` ｜ 分支 `master`
-> 当前基线：真实语音 + POP 资质审核驳回外呼场景 ｜ 测试：**58 passed / 5 skipped** ｜ 契约：**90/90**
-> 结论：**真实语音与 POP 场景已接入；真实 LLM、LiveKit、业务系统写回、声学验收待完成。**
+> 更新时间：2026-11-16
+> 仓库：`git@github.com:SLR979111/AI-call.git` ｜ 分支 `master` `ee41ae3`
+> 测试：旧 app 118 passed / 5 skipped；`new/` 26 passed；`web/rtc` npm test 通过
+> 结论：**旧 `app/` 链路与 `new/` 独立核心并存；新前端 Decision 已合入，但后端 `/ws/decision` 未实现。**
 
 ---
 
@@ -24,6 +24,24 @@
 | Docker | ✅ CPU app + GPU sidecar profile；🟡 新镜像待构建验收 |
 | 技术方案书 | 🟡 初稿（`docs/12`），待 W3 真机数据 |
 
+### 0.1 两套链路
+
+```text
+A. 旧正式链路
+   web/rtc (boot.js) → /ws/decision 探测失败 → /ws/session + ws_pcm
+   → app/orchestrator → Agent / predictive v1 → 合规/工具 → TTS
+
+B. 新独立核心 new/
+   new/web → AudioWorklet/AEC3 → WS /ws
+   → Hearing/VAD/ASR → Brain/LLM + 预测 → TTS → 播放
+```
+
+- 新前端 Decision 流已合入 `web/rtc/src/decision.js`、`stream-app.js`。
+- 后端 `/ws/decision` 未实现，当前实际走 A。
+- `/predictive/v1` 只属于 A。
+- `new/` 默认 8088，需要 `new/.env` 的 DeepSeek key。
+- 详细见 [28](28-current-architecture.md)。
+
 ---
 
 ## 1. 仓库结构
@@ -42,6 +60,8 @@ aicall/
 │   │   └── llm_agent.py     LLM JSON 决策 Agent
 │   ├── llm/router.py        OpenAI 兼容主/备 Router
 │   ├── predictive/          预生成候选、规则分类、fallback、v1 API
+│   ├── main.py              旧 app HTTP/WS（含 legacy ws_pcm）
+│   └── 注意：/ws/decision 后端尚未实现
 │   ├── tools/gateway.py     Tool Gateway + Mock 业务
 │   ├── rag/knowledge.py     本地知识检索
 │   ├── flow/pack.py         Flow Pack 加载/状态转移
@@ -49,7 +69,11 @@ aicall/
 │   ├── rsi/gate.py          RSI 对比与回归门禁
 │   ├── media/livekit.py     LiveKit JWT
 │   └── voice/factory.py     语音 Provider 状态
-├── web/                     Demo UI（HTML/CSS/JS，无构建）
+├── new/                     独立语音核心（PR #13，8088）
+│   ├── app/                 Hearing / Brain / Providers
+│   ├── web/                 AudioWorklet/AEC3/播放器
+│   └── tests/               独立测试
+├── web/rtc/                 新前端（Decision 流 + legacy 回落）
 ├── contracts/
 │   ├── schemas/             5 个 JSON Schema
 │   ├── fixtures/            事件 + WS 报文 golden fixture
