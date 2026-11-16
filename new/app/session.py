@@ -16,6 +16,7 @@ from typing import Awaitable, Callable
 from .brain import Brain
 from .models import Candidate, Memory, Say, TaskCard
 from .providers import Cloud, ProviderError
+from .silent_logger import silent_log
 
 
 @dataclass
@@ -35,7 +36,8 @@ class Unit:
 class Session:
     def __init__(self, card: TaskCard, cloud: Cloud, brain: Brain,
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
-                 predictions: bool = True, log_dir: Path | None = None):
+                 predictions: bool = True, log_dir: Path | None = None,
+                 decision_tracker=None, performance_monitor=None):
         self.id = uuid.uuid4().hex[:12]
         self.memory = Memory(card)
         self.cloud, self.brain, self.transport = cloud, brain, send
@@ -55,15 +57,21 @@ class Session:
         self.send_lock = asyncio.Lock()
         self.turn_metrics: dict = {}
         self.log_path = None
+        self.decision_tracker = decision_tracker
+        self.performance_monitor = performance_monitor
         if log_dir:
             log_dir.mkdir(parents=True, exist_ok=True)
             self.log_path = log_dir / f"{self.id}.jsonl"
 
     def log(self, event: str, **fields):
+        # Write to session log file
         if self.log_path:
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"at": time.time(), "event": event, "epoch": self.epoch,
                                          **fields}, ensure_ascii=False) + "\n")
+        
+        # Also write to silent debug log
+        silent_log(event, session_id=self.id, epoch=self.epoch, **fields)
 
     def spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -109,6 +117,11 @@ class Session:
         if not text or self.closed:
             return
         text = text[:2000]
+        
+        # Start performance tracking
+        if self.performance_monitor:
+            self.performance_monitor.start_turn(f"{self.id}-{self.epoch + 1}")
+        
         usable = (self.reply_completed and self.prediction_epoch == self.epoch)
         candidates = list(self.candidates) if usable else []
         await self.interrupt("new_input")
@@ -138,6 +151,11 @@ class Session:
             return
         if (not self.response or self.response.done()) and not self.starting:
             return
+        
+        # Track interrupt in performance monitor
+        if self.performance_monitor:
+            self.performance_monitor.mark_interrupt()
+        
         old_epoch = self.epoch
         self.epoch += 1
         if self.response:

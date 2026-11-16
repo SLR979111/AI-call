@@ -81,7 +81,7 @@ class Cloud:
         temperature = 0.2
         cached_response = self.cache_manager.llm.get(messages, self.settings.model, temperature)
         if cached_response is not None:
-            # Simulate streaming from cache
+            # Cache hit - simulate streaming from cache
             for i in range(0, len(cached_response), 50):
                 yield cached_response[i:i + 50]
             return
