@@ -81,6 +81,58 @@ async def test_gap_invalidates_input_instead_of_submitting_a_truncated_sentence(
     await hearing.close()
 
 
+async def test_complete_short_answer_commits_after_360ms_silence():
+    class ShortASR:
+        async def transcribe(self, pcm):
+            return '是的。'
+
+    results = []
+    async def noop(*a): pass
+    async def text(value, at): results.append(value)
+    hearing = Hearing(ShortASR(), on_start=noop, on_partial=noop,
+                      on_text=text, on_error=noop)
+    feed = Input(hearing)
+    try:
+        await feed.feed(20)
+        await feed.feed(17, 0)
+        assert not results
+        await feed.feed(1, 0)
+        await asyncio.sleep(.01)
+        assert results == ['是的。']
+    finally:
+        await hearing.close()
+
+
+async def test_short_answer_followed_by_continuation_resets_fast_endpoint():
+    class ContinuingASR:
+        def __init__(self):
+            self.calls = 0
+
+        async def transcribe(self, pcm):
+            self.calls += 1
+            return '是的。' if self.calls == 1 else '是的，但是还有材料没准备'
+
+    results = []
+    async def noop(*a): pass
+    async def text(value, at): results.append(value)
+    hearing = Hearing(ContinuingASR(), on_start=noop, on_partial=noop,
+                      on_text=text, on_error=noop)
+    feed = Input(hearing)
+    try:
+        await feed.feed(20)
+        await feed.feed(15, 0)
+        assert hearing.defer_to == 360
+        await feed.feed(20)
+        assert hearing.defer_to == 680
+        await feed.feed(18, 0)
+        assert not results
+        await feed.feed(16, 0)
+        await asyncio.sleep(.01)
+        assert results == ['是的，但是还有材料没准备']
+    finally:
+        await hearing.close()
+
+
 async def test_noise_pulse_does_not_start_a_turn():
     cloud, starts = ASR(), []
     async def start(): starts.append(True)

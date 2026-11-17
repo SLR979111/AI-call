@@ -25,7 +25,7 @@ def replay(directory):
             elif kind == 'reply_finished':
                 complete = True
                 for row in pending.get(e['epoch'], []):
-                    row.update({k: e[k] for k in ('reused', 'candidates_available', 'first_text_ms', 'first_packet_ms', 'voice_to_playback_ms') if k in e})
+                    row.update({k: e[k] for k in ('reused', 'candidates_available', 'first_text_ms', 'first_packet_ms', 'voice_to_playback_ms', 'prediction_audio_hit', 'prediction_audio_bytes', 'bridge_used', 'answer_first_packet_ms', 'voice_to_answer_ms') if k in e})
             elif kind == 'interrupted':
                 candidates, complete, previous = [], False, ''
             elif kind == 'user':
@@ -43,11 +43,19 @@ def replay(directory):
                    local_rate_all=round(sum(r['hit'] for r in rows)/max(1,len(rows)),4),
                    local_rate_available=round(sum(r['hit'] for r in available)/max(1,len(available)),4),
                    historical_measured=len(measured), historical_hits=sum(r['reused'] for r in measured))
+    audio_measured = [r for r in measured if 'prediction_audio_hit' in r]
+    summary['audio_measured_turns'] = len(audio_measured)
+    summary['prediction_audio_hits'] = sum(r['prediction_audio_hit'] for r in audio_measured)
+    summary['prediction_audio_hit_rate'] = (
+        sum(r['prediction_audio_hit'] for r in audio_measured) / len(audio_measured)
+        if audio_measured else None
+    )
     for reuse in (True, False):
         group = [r for r in measured if r['reused'] == reuse]
         summary['historical_reuse' if reuse else 'historical_miss'] = {
             k: median([r[k] for r in group if k in r]) if any(k in r for r in group) else None
-            for k in ('first_text_ms','first_packet_ms','voice_to_playback_ms')}
+            for k in ('first_text_ms', 'first_packet_ms', 'voice_to_playback_ms',
+                      'answer_first_packet_ms', 'voice_to_answer_ms')}
     return dict(summary=summary, rows=rows)
 
 

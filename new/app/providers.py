@@ -208,9 +208,10 @@ class Cloud:
             raise ProviderError("语音合成返回了空音频")
         self.remember(text, bytes(collected))
 
-    async def prefetch(self, text: str):
-        async for _ in self.speech(text):
-            pass
+    async def prefetch(self, text: str) -> bytes:
+        # Return ownership to the forecast even if the shared LRU rejects or
+        # later evicts this sentence. A ready candidate must retain its audio.
+        return b"".join([chunk async for chunk in self.speech(text)])
 
     async def close(self):
         if self.owns_client:

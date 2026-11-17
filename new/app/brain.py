@@ -179,8 +179,19 @@ class Brain:
         )
 
         async def forecast_branch(index: int, instruction: str):
+            branch_snapshot = dict(snapshot)
+            if index == 0:
+                # Anchor the generic branch to actual short utterances instead
+                # of letting all requests invent the same specific new facts.
+                branch_snapshot["forecast_user_inputs"] = ["好的。", "是的。"]
+                instruction += (
+                    "本分支只为 forecast_user_inputs 各生成一条回复。"
+                    "when 必须明确包含对应的用户原话；不要附加用户没有说出的事实。"
+                    "好的只表示承接，不能推断填错字、更名、已补好或已提交。"
+                    "是的只确认上一句明确的是非问句；没有是非问句时按承接处理。"
+                )
             messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
-                        {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
+                        {"role": "user", "content": json.dumps(branch_snapshot, ensure_ascii=False)}]
             text = "".join([part async for part in self.cloud.chat(messages, max_tokens=450)])
             text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             data = json.loads(text)

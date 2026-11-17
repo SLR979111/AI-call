@@ -171,7 +171,8 @@ async def websocket(ws: WebSocket):
                         await session.playback_progress(int(event["epoch"]), int(event["unit"]),
                                                         int(event["samples"]), done=bool(event.get("done")))
                     elif kind == "playback_started":
-                        await session.playback_started(int(event["epoch"]), float(event["client_ms"]))
+                        await session.playback_started(int(event["epoch"]), float(event["client_ms"]),
+                                                       unit_id=int(event["unit"]) if "unit" in event else None)
                     elif kind == "stop":
                         break
             except (ValueError, KeyError, TypeError, ValidationError):

@@ -125,6 +125,24 @@ class ContextAwareDecisionEngine:
             return "llm", None
 
         utterance = self._normalize(user_input)
+        # Parallel forecasts often repeat the same answer intent. Exact short
+        # answers can select among equivalent branches without a model roundtrip.
+        explicit = (
+            (r"(?:已经|已)?(?:重新)?提交了", r"已经.*提交|已.*提交", r"只是保存|没提交|不清楚"),
+            (r"能看清", r"能看清", r"看不清|模糊|只有注册证"),
+            (r"清楚了?", r"说清楚|已知道|表示清楚", r"不清楚|没听懂"),
+            (r"好的?(?:谢谢)?", r"明白或同意继续听|纯承接|简单.*(?:肯定|承接)|用户(?:只)?(?:说|回答|表示)[‘’“”\"']?好的", r"并问|追问|已提交"),
+        )
+        for speech, positive, negative in explicit:
+            if not re.fullmatch(speech, utterance):
+                continue
+            equivalent = [c for c in candidates
+                          if re.search(positive, self._positive_condition(c.when))
+                          and not re.search(negative, self._positive_condition(c.when))]
+            if equivalent:
+                # Shorter audio reaches the next listening opportunity sooner;
+                # stable text/id ordering makes completion order irrelevant.
+                return "reuse", min(equivalent, key=lambda c: (len(c.reply.text), c.reply.text, c.id))
         selected = self._rank_short_reply(utterance, candidates, assistant_last_text)
         if selected is not None:
             return "reuse", selected

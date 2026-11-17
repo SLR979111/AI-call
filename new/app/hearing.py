@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import struct
 from array import array
 from collections import deque
@@ -171,6 +172,11 @@ class Hearing:
         async def decode():
             text = await self.cloud.transcribe(audio)
             if self.active and tick == self.voice_tick:
+                # Only complete, common short answers get the lower endpoint.
+                # Resumed speech still invalidates this decode and resets it.
+                normalized = re.sub(r"[\s，。！？,.!?]", "", text)
+                if re.fullmatch(r"(?:是的|对的|好的|没错|明白了|知道了|可以|没有了|谢谢|再见)+", normalized):
+                    self.defer_to = 360
                 await self.on_partial(text)
             return text
         self.decode = self.spawn(decode())
