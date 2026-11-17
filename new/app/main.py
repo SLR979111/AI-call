@@ -16,6 +16,8 @@ from .models import TaskCard
 from .providers import Cloud, Settings
 from .session import Session
 from .vad import model as voice_detector_model
+from .decision_tracker import DecisionTracker
+from .monitoring import PerformanceMonitor
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +31,8 @@ async def lifespan(app: FastAPI):
     app.state.cloud = Cloud(app.state.settings)
     voice_detector_model()
     app.state.sessions = set()
+    app.state.decision_tracker = DecisionTracker()
+    app.state.performance_monitor = PerformanceMonitor()
     yield
     for session in list(app.state.sessions):
         await session.close()
@@ -49,6 +53,16 @@ async def config():
 async def cache_stats():
     """Return cache performance metrics."""
     return app.state.cloud.cache_manager.report()
+
+
+@app.get("/api/metrics")
+async def performance_metrics():
+    """Return comprehensive performance and decision metrics."""
+    return {
+        "cache": app.state.cloud.cache_manager.report(),
+        "decisions": app.state.decision_tracker.report(),
+        "performance": app.state.performance_monitor.report(),
+    }
 
 
 @app.get("/healthz")
@@ -114,7 +128,9 @@ async def websocket(ws: WebSocket):
                     session = Session(card, cloud, Brain(cloud), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
-                                      log_dir=ROOT / "runtime" / "sessions")
+                                      log_dir=ROOT / "runtime" / "sessions",
+                                      decision_tracker=app.state.decision_tracker,
+                                      performance_monitor=app.state.performance_monitor)
                     app.state.sessions.add(session)
                     if session.voice:
                         hearing = Hearing(cloud,
@@ -155,7 +171,8 @@ async def websocket(ws: WebSocket):
                         await session.playback_progress(int(event["epoch"]), int(event["unit"]),
                                                         int(event["samples"]), done=bool(event.get("done")))
                     elif kind == "playback_started":
-                        await session.playback_started(int(event["epoch"]), float(event["client_ms"]))
+                        await session.playback_started(int(event["epoch"]), float(event["client_ms"]),
+                                                       unit_id=int(event["unit"]) if "unit" in event else None)
                     elif kind == "stop":
                         break
             except (ValueError, KeyError, TypeError, ValidationError):

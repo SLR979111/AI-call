@@ -70,11 +70,12 @@ export class Player {
   report() {
     if (this.blocked.has(this.epoch)) return;
     const now = this.context.currentTime;
-    if (!this.firstReported) {
-      const start = [...this.units.values()].flatMap(u => u.segments).find(s => now >= s.start);
+    for (const unit of this.units.values()) {
+      if (unit.startedReported) continue;
+      const start = unit.segments.find(s => now >= s.start);
       if (start) {
-        this.firstReported = true;
-        this.send({type:'playback_started', epoch:this.epoch,
+        unit.startedReported = true;
+        this.send({type:'playback_started', epoch:this.epoch, unit:unit.id,
           client_ms:performance.now() - (now-start.start)*1000});
       }
     }
