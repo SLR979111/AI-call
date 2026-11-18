@@ -107,7 +107,7 @@ async def test_gap_invalidates_input_instead_of_submitting_a_truncated_sentence(
     await hearing.close()
 
 
-async def test_complete_short_answer_commits_after_360ms_silence():
+async def test_complete_short_answer_commits_after_short_silence():
     class ShortASR:
         async def transcribe(self, pcm):
             return '是的。'
@@ -119,8 +119,9 @@ async def test_complete_short_answer_commits_after_360ms_silence():
                       on_text=text, on_error=noop)
     feed = Input(hearing)
     try:
+        silence = hearing.defer_short // 20
         await feed.feed(20)
-        await feed.feed(17, 0)
+        await feed.feed(silence - 1, 0)
         assert not results
         await feed.feed(1, 0)
         await asyncio.sleep(.01)
@@ -146,13 +147,14 @@ async def test_short_answer_followed_by_continuation_resets_fast_endpoint():
     feed = Input(hearing)
     try:
         await feed.feed(20)
-        await feed.feed(15, 0)
-        assert hearing.defer_to == 360
+        await feed.feed(hearing.defer_short // 20 - 2, 0)
+        assert hearing.defer_to == hearing.defer_short
         await feed.feed(20)
-        assert hearing.defer_to == 680
-        await feed.feed(18, 0)
+        assert hearing.defer_to == hearing.defer_base
+        wait = hearing.defer_base // 20
+        await feed.feed(wait - 2, 0)
         assert not results
-        await feed.feed(16, 0)
+        await feed.feed(2, 0)
         await asyncio.sleep(.01)
         assert results == ['是的，但是还有材料没准备']
     finally:

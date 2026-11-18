@@ -188,7 +188,37 @@ new/.venv/bin/python scripts/export_conversations.py
 每个会话记录轮次、用户文本、客服回复、以及 `e2e_ms`/`asr_final`/`llm_first_token`/`first_sentence`/`tts_first_chunk`/`downlink`/`playback` 分解；G2 侧记录 `voice_to_playback_ms` 与 `reused`。
 
 
-## 10. 复现
+## 11. `new/` G2 链路：命中路径 780 → ~320 ms
+
+用户实测反馈「都命中了但时间还是过长」后，逐层拆开了 G2 命中路径（会话 `new/runtime/sessions/528546a51292.jsonl`）：
+
+| 轮次 | `voice_to_playback_ms` | `first_text_ms`（命中文本就绪） | 剩余耗时来源 |
+|---|---|---|---|
+| 1 | 1197 | 6 | 静音判停 + 云端 ASR |
+| 2 | 813 | 1 | 静音判停 + 云端 ASR |
+| 3 | 780 | 1 | 静音判停 + 云端 ASR |
+| 4 | 1631 | 837 | 本轮预测未命中，走 LLM |
+| 5 | 794 | 1 | 静音判停 + 云端 ASR |
+| 6 | 1548 | 1 | 本轮 ASR 缓存未命中（云端 0.69 s） |
+
+即命中时**文本本身只花 1–6 ms**，剩下的全是「判停等待 + 云端 ASR」。两处改动：
+
+1. **本地 SenseVoice 终稿识别**（`new/app/local_asr.py`，`LOCAL_ASR=1` 默认开）：
+   `sherpa-onnx` 的 SenseVoice 非自回归模型，1.4 s 短句识别 **90–200 ms**，5 s 长句 ~400–530 ms；同一批短句的文本与云端完全一致（`为什么被驳回了？` / `那我要补什么材料？` / `好的。`）。模型缺失、路径不对或识别为空时自动回退云端 `/v1/tools/asr`（回退实测 719 ms）。
+2. **判停阈值**（`new/app/hearing.py`）：基础静音 680 → **480 ms**，确认/否定类短答 360 → **260 ms**，问句 480 → **340 ms**；未完结连接词（「但是/然后/因为…」）仍延长到 1150 ms。三项都可用 `HEARING_DEFER_MS` / `HEARING_DEFER_SHORT_MS` / `HEARING_DEFER_QUESTION_MS` 调。
+
+实测（`.tmp/g2_latency.py`，直接驱动 `ws://127.0.0.1:8088/ws` 的 1316 字节音频包协议，客户端替身按 20 ms 实时送声并回播放回执）：
+
+| 场景 | 改前 | 改后 |
+|---|---|---|
+| 命中（短答「好的。」） | ~780–830 ms | **296 / 322 / 393 / 397 / 408 ms** |
+| 本地 ASR 单句 | — | 90–200 ms（云端 689 ms；缓存命中 0 ms） |
+| 未命中（走 LLM + 云端 TTS） | ~2.2–2.6 s | 不变（LLM 600–800 ms + 云端 TTS 首块 ~750 ms） |
+| 回退云端 ASR（`LOCAL_ASR=0`） | 719 ms | 719 ms |
+
+验证方式：`cd new && .venv/bin/python -m pytest tests -q` → **96 passed**；`python .tmp/g2_latency.py "voice:.tmp/user-ok.wav" "voice:.tmp/user-ok.wav"` → 两轮均命中，v2p 296 / 393 ms。
+
+## 12. 复现
 
 
 ```bash

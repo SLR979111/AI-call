@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -14,6 +15,7 @@ from pydantic import ValidationError
 from .brain import Brain
 from .forecast import OpeningForecastCache
 from .hearing import Hearing
+from .local_asr import load_from_env, make_transcriber
 from .models import TaskCard
 from .providers import Cloud, Settings
 from .session import Session
@@ -34,6 +36,14 @@ async def lifespan(app: FastAPI):
     if not cache_path.is_absolute():
         cache_path = ROOT / cache_path
     app.state.cloud = Cloud(app.state.settings, cache_path=cache_path)
+    app.state.local_asr = load_from_env()
+    app.state.transcriber = make_transcriber(app.state.local_asr, app.state.cloud)
+    if app.state.local_asr is not None:
+        try:
+            await asyncio.to_thread(app.state.local_asr.load)
+        except Exception:  # noqa: BLE001 - the cloud path still works without the model
+            app.state.local_asr = None
+            app.state.transcriber = app.state.cloud.transcribe
     voice_detector_model()
     app.state.sessions = set()
     app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
@@ -150,7 +160,8 @@ async def websocket(ws: WebSocket):
                             on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end),
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
                             on_error=error,
-                            is_playing=lambda: session.phase == "speaking")
+                            is_playing=lambda: session.phase == "speaking",
+                            transcriber=app.state.transcriber)
                     await session.start()
                 elif session:
                     if kind == "text":
