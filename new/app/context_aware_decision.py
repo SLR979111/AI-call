@@ -6,7 +6,8 @@ import re
 from typing import Literal
 
 from .forecast import compatible_short_answer, match_example, spoken_form
-from .models import Candidate
+from .models import Candidate, TaskCard
+from .ticket_phrases import SHORT_NO, SHORT_YES, terms
 
 
 # Each intent has separate surface forms in speech and in forecast conditions.
@@ -119,8 +120,38 @@ class ContextAwareDecisionEngine:
             return scored[0][1]
         return None
 
+    def _broad_match(self, user_input: str, candidates: list[Candidate],
+                     card: TaskCard | None) -> Candidate | None:
+        """Ticket-derived broad match for short answers after exact rules fail."""
+        if card is None:
+            return None
+        normalized = self._normalize(user_input)
+        if not normalized or len(normalized) > 24:
+            return None
+        if EXTRA.search(user_input) or NEGATION.search(user_input):
+            return None
+        if normalized not in SHORT_YES and normalized not in SHORT_NO:
+            # Do not broad-match a bare "好的/是的"; those are handled by the
+            # precise short-answer rules above.
+            if len(normalized) < 3:
+                return None
+        broad_terms = set(terms(card))
+        broad_terms.update({"方便", "提交", "保存", "授权", "截图", "商标", "公司",
+                            "更名", "经销商", "负责人", "材料", "补", "审核"})
+        scored: list[tuple[int, Candidate]] = []
+        for candidate in candidates:
+            source = candidate.when + " " + candidate.reply.text + " " + " ".join(candidate.examples)
+            score = sum(1 for term in broad_terms if term in normalized and term in source)
+            if score:
+                scored.append((score, candidate))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+            return scored[0][1]
+        return None
+
     def should_reuse(
-        self, user_input: str, candidates: list[Candidate], assistant_last_text: str = ""
+        self, user_input: str, candidates: list[Candidate], assistant_last_text: str = "",
+        card: TaskCard | None = None,
     ) -> tuple[Literal["reuse", "say", "llm"], Candidate | None]:
         if not candidates or not user_input.strip():
             return "llm", None
@@ -236,4 +267,7 @@ class ContextAwareDecisionEngine:
         # Overlapping or underspecified forecasts are ambiguous; don't guess by id/order.
         if len(matches) == 1:
             return "reuse", matches[0]
+        broad = self._broad_match(user_input, candidates, card)
+        if broad is not None:
+            return "reuse", broad
         return "llm", None

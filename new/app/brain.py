@@ -144,7 +144,7 @@ class Brain:
             return None
         decision, selected = self.decision_engine.should_reuse(
             memory.history[-1].get("text", ""), candidates,
-            self._last_completed_assistant(memory))
+            self._last_completed_assistant(memory), memory.card)
         return selected if decision == "reuse" else None
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
@@ -175,7 +175,7 @@ class Brain:
             assistant_last_text = self._last_completed_assistant(memory)
 
             decision, selected_candidate = self.decision_engine.should_reuse(
-                last_user_input, candidates, assistant_last_text
+                last_user_input, candidates, assistant_last_text, memory.card
             )
 
             if decision == "reuse":
