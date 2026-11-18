@@ -218,6 +218,16 @@ new/.venv/bin/python scripts/export_conversations.py
 
 验证方式：`cd new && .venv/bin/python -m pytest tests -q` → **96 passed**；`python .tmp/g2_latency.py "voice:.tmp/user-ok.wav" "voice:.tmp/user-ok.wav"` → 两轮均命中，v2p 296 / 393 ms。
 
+### 暖缓存快照
+
+`reports/warm-cache/` 是根链路暖缓存（7 个文件，780 KB：6 段 TTS PCM + 1 条 LLM 回复），可直接恢复后再跑第 10 节：
+
+```bash
+mkdir -p data/cache && cp -r reports/warm-cache/llm reports/warm-cache/audio data/cache/
+```
+
+G2 的 SQLite 缓存 `new/runtime/cache.sqlite3`（13 MB）没有提交：体积大，且含真实通话的转写内容。
+
 ## 12. 复现
 
 

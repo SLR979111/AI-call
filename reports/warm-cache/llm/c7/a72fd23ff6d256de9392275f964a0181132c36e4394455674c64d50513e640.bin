@@ -1,0 +1,1 @@
+{"text": "{\"intent\": \"reschedule\", \"reply\": \"可以帮您改约。\", \"slots\": {\"order_id\": \"A12345678\"}, \"tool\": \"order_query\", \"tool_args\": {\"order_id\": \"A12345678\"}, \"outcome\": \"rescheduled\"}", "provider": "mock", "model": "m", "usage": {"total_tokens": 20}}
