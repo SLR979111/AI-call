@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import math
+import os
 import struct
 import time
 import uuid
@@ -17,6 +18,27 @@ from .brain import Brain
 from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye, farewell_only
 from .providers import Cloud, ProviderError
 from .silent_logger import silent_log
+
+
+PREDICTION_AUDIO_LIMIT_ENV = "PREDICTION_AUDIO_LIMIT"
+
+
+def prediction_audio_limit_from_env() -> int | None:
+    """Number of leading forecast candidates allowed to prepare audio.
+
+    Unset, empty, negative or malformed values mean "no limit", which keeps
+    the production behaviour of preparing audio for every candidate. Zero is a
+    valid experimental arm: it publishes every candidate as text only and lets
+    a reused reply fall back to ordinary TTS.
+    """
+    raw = os.getenv(PREDICTION_AUDIO_LIMIT_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 @dataclass
@@ -795,56 +817,84 @@ class Session:
 
     async def _predict(self, epoch: int, snapshot: dict):
         started = time.perf_counter()
+        limit = prediction_audio_limit_from_env()
+        if limit is not None:
+            self.log("prediction_audio_limit", limit=limit)
         try:
-            ready = []
+            ready: list[tuple[int, Candidate]] = []
             tasks = []
             audio_tasks: dict[str, asyncio.Task] = {}
+            received = 0
 
-            async def prepare(item):
+            async def prepare(item, *, audio_allowed: bool, index: int):
                 text_ready_ms = round((time.perf_counter() - started) * 1000)
                 audio_started = time.perf_counter()
                 pcm = None
+                audio_status = "not_requested"
                 if self.voice:
-                    text = item.reply.text
-                    created_audio = text not in audio_tasks
-                    if created_audio:
-                        audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
-                    pcm = await asyncio.shield(audio_tasks[text])
-                    if not pcm:
-                        # Without prepared audio this is not a cache hit: the
-                        # reply would fall back to a blocking TTS request.
-                        self.log("prediction_audio_miss", candidate_id=item.id,
-                                 text_ready_ms=text_ready_ms)
-                        return
-                    if created_audio and self.decision_tracker:
-                        # Count each actually prefetched PCM buffer once, even
-                        # when several candidates share the same text.
-                        self.decision_tracker.record_prediction_audio(
-                            prefetched_bytes=len(pcm))
+                    if not audio_allowed:
+                        # Beyond the experimental budget the text candidate is
+                        # still useful, but selecting it will use ordinary TTS.
+                        audio_status = "limit_skipped"
+                        self.log("prediction_audio_skipped", candidate_id=item.id,
+                                 limit=limit, text_ready_ms=text_ready_ms)
+                    else:
+                        text = item.reply.text
+                        created_audio = text not in audio_tasks
+                        if created_audio:
+                            audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
+                        pcm = await asyncio.shield(audio_tasks[text])
+                        if not pcm:
+                            # Without prepared audio this is not a cache hit: the
+                            # reply would fall back to a blocking TTS request.
+                            self.log("prediction_audio_miss", candidate_id=item.id,
+                                     text_ready_ms=text_ready_ms)
+                            return
+                        audio_status = "prefetched"
+                        if created_audio and self.decision_tracker:
+                            # Count each actually prefetched PCM buffer once, even
+                            # when several candidates share the same text.
+                            self.decision_tracker.record_prediction_audio(
+                                prefetched_bytes=len(pcm))
                 if self.is_current(epoch):
                     if pcm:
                         self.prediction_audio[item.reply.text] = pcm
-                    ready.append(item)
-                    self.candidates = list(ready)
+                    ready.append((index, item))
+                    # With no budget this keeps the historical publish order
+                    # (audio completion). The experimental arms sort by the
+                    # order candidates arrived so a text-only candidate cannot
+                    # jump ahead of an earlier one that is still synthesizing.
+                    ordered = ready if limit is None else sorted(ready, key=lambda entry: entry[0])
+                    self.candidates = [candidate for _, candidate in ordered]
                     self.prediction_epoch = epoch
                     await self.send({"type": "candidates", "epoch": epoch, "items": [
-                        {"id": candidate.id, "text": candidate.reply.text} for candidate in ready]})
+                        {"id": candidate.id, "text": candidate.reply.text}
+                        for _, candidate in ordered]})
                     self.log("prediction_ready", count=len(ready), candidate_id=item.id,
                              text_ready_ms=text_ready_ms,
                              audio_prepare_ms=round((time.perf_counter() - audio_started) * 1000),
                              ready_ms=round((time.perf_counter() - started) * 1000),
                              audio_bytes=len(pcm) if pcm else 0,
-                             candidates=[candidate.model_dump() for candidate in ready])
+                             audio_status=audio_status,
+                             candidates=[candidate.model_dump() for _, candidate in ordered])
 
             try:
                 if hasattr(self.brain, "predict_batches"):
                     async for batch in self.brain.predict_batches(snapshot):
                         if not self.is_current(epoch):
                             return
-                        tasks.extend(asyncio.create_task(prepare(item)) for item in batch)
+                        for item in batch:
+                            received += 1
+                            tasks.append(asyncio.create_task(prepare(
+                                item, audio_allowed=limit is None or received <= limit,
+                                index=received)))
                 else:
                     batch = await self.brain.predict(snapshot)
-                    tasks.extend(asyncio.create_task(prepare(item)) for item in batch)
+                    for item in batch:
+                        received += 1
+                        tasks.append(asyncio.create_task(prepare(
+                            item, audio_allowed=limit is None or received <= limit,
+                            index=received)))
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for result in results:
                     if isinstance(result, Exception):
