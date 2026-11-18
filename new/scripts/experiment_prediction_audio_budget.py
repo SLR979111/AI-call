@@ -387,7 +387,7 @@ def bytes_label(value: int) -> str:
 
 
 def status_letter(status: str) -> str:
-    return {"prefetched": "P", "limit_skipped": "s", "not_published": "-"}.get(status, "?")
+    return {"prefetched": "P", "preparing": "p", "limit_skipped": "s", "not_published": "-"}.get(status, "?")
 
 
 def path_letter(answer: dict) -> str:
