@@ -110,7 +110,8 @@ async def test_unset_limit_still_prepares_audio_for_every_candidate(monkeypatch)
         assert cloud.prefetch_calls == [item.reply.text for item in items]
         ready = session.events_named("prediction_ready")
         assert len(ready) == 5
-        assert {event["audio_status"] for event in ready} == {"prefetched"}
+        assert {event["audio_status"] for event in ready} == {"preparing"}
+        assert len(session.events_named("prediction_audio_ready")) == 5
         assert not session.events_named("prediction_audio_skipped")
     finally:
         await session.close()
@@ -130,7 +131,7 @@ async def test_limit_prepares_only_the_leading_candidates_but_publishes_all_text
         ready = session.events_named("prediction_ready")
         status = {event["candidate_id"]: event["audio_status"] for event in ready}
         assert [status[f"p{i}"] for i in range(5)] == [
-            "prefetched", "prefetched", "limit_skipped", "limit_skipped", "limit_skipped"]
+            "preparing", "preparing", "limit_skipped", "limit_skipped", "limit_skipped"]
         skipped = session.events_named("prediction_audio_skipped")
         assert [event["candidate_id"] for event in skipped] == ["p2", "p3", "p4"]
         assert all(event["limit"] == 2 for event in skipped)
@@ -139,16 +140,16 @@ async def test_limit_prepares_only_the_leading_candidates_but_publishes_all_text
         await session.close()
 
 
-async def test_budgeted_candidate_without_audio_is_still_not_published(monkeypatch):
+async def test_budgeted_candidate_without_audio_keeps_text_but_has_no_audio(monkeypatch):
     monkeypatch.setenv(PREDICTION_AUDIO_LIMIT_ENV, "2")
     items = [candidate(i) for i in range(5)]
     cloud = FakeCloud(fail_texts=(items[0].reply.text,))
     session, _ = build_session(ScriptedBrain(items), cloud)
     try:
         await session._predict(0, session.brain.snapshot(session.memory))
-        # p0 was inside the audio budget but never got PCM, so it keeps the
-        # production rule and is dropped. The rest are still text candidates.
-        assert [item.id for item in session.candidates] == ["p1", "p2", "p3", "p4"]
+        # Text is published before audio. A failed prefetch leaves the text
+        # candidate available and falls back to ordinary speech when selected.
+        assert [item.id for item in session.candidates] == ["p0", "p1", "p2", "p3", "p4"]
         assert list(session.prediction_audio) == [items[1].reply.text]
         assert session.events_named("prediction_audio_miss")[0]["candidate_id"] == "p0"
     finally:
@@ -183,6 +184,56 @@ class ReuseTextBrain:
 
     async def update_for_reuse(self, memory, selected):
         return Update()
+
+
+class BlockingCloud(FakeCloud):
+    def __init__(self):
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def prefetch(self, text):
+        self.prefetch_calls.append(text)
+        self.started.set()
+        await self.release.wait()
+        return b"\x01\x00" * 960
+
+
+async def test_forecast_promise_is_dropped_before_playout(monkeypatch):
+    monkeypatch.delenv(PREDICTION_AUDIO_LIMIT_ENV, raising=False)
+    bad = candidate(0)
+    bad.reply.text = "您放心，保证通过。"
+    good = candidate(1)
+    cloud = FakeCloud()
+    session, _ = build_session(ScriptedBrain([bad, good]), cloud)
+    try:
+        await session._predict(0, session.brain.snapshot(session.memory))
+        assert [item.id for item in session.candidates] == ["p1"]
+        assert session.events_named("prediction_compliance_drop")[0]["candidate_id"] == "p0"
+        assert list(session.prediction_audio) == [good.reply.text]
+    finally:
+        await session.close()
+
+
+async def test_text_candidate_is_published_before_audio_is_ready(monkeypatch):
+    monkeypatch.delenv(PREDICTION_AUDIO_LIMIT_ENV, raising=False)
+    items = [candidate(0)]
+    cloud = BlockingCloud()
+    session, _ = build_session(ScriptedBrain(items), cloud)
+    try:
+        task = asyncio.create_task(session._predict(0, session.brain.snapshot(session.memory)))
+        await asyncio.wait_for(cloud.started.wait(), timeout=1)
+        # The text is visible while the audio task is still blocked.
+        assert [item.id for item in session.candidates] == ["p0"]
+        assert session.prediction_audio == {}
+        ready = session.events_named("prediction_ready")
+        assert ready and ready[0]["audio_status"] == "preparing"
+        cloud.release.set()
+        await task
+        assert list(session.prediction_audio) == [items[0].reply.text]
+    finally:
+        cloud.release.set()
+        await session.close()
 
 
 async def test_selecting_a_text_only_candidate_falls_back_to_tts(monkeypatch):

@@ -9,56 +9,56 @@
       "text_only_candidate_count": 0,
       "published_count": 10,
       "skipped_count": 0,
-      "forecast_total_ms": 545.8,
-      "audio_all_ready_ms": 545.6,
-      "published_all_ms": 546,
+      "forecast_total_ms": 557.9,
+      "audio_all_ready_ms": 557.7,
+      "published_all_ms": 308,
       "text_generated_ms": {
-        "p0": 49.6,
-        "p1": 49.8,
-        "p2": 87.8,
-        "p3": 88.1,
-        "p4": 127.5,
-        "p5": 191.4,
-        "p6": 221.6,
-        "p7": 250.6,
-        "p8": 275.9,
-        "p9": 303.8
+        "p0": 50.1,
+        "p1": 50.4,
+        "p2": 91.8,
+        "p3": 92.0,
+        "p4": 120.4,
+        "p5": 187.9,
+        "p6": 213.9,
+        "p7": 241.0,
+        "p8": 266.8,
+        "p9": 308.3
       },
       "published_ms": {
-        "p0": 251,
-        "p1": 276,
-        "p2": 304,
-        "p3": 304,
-        "p4": 333,
-        "p5": 405,
-        "p6": 433,
-        "p7": 462,
-        "p8": 488,
-        "p9": 546
+        "p0": 50,
+        "p1": 50,
+        "p2": 92,
+        "p3": 92,
+        "p4": 120,
+        "p5": 188,
+        "p6": 214,
+        "p7": 241,
+        "p8": 267,
+        "p9": 308
       },
       "audio_ready_ms": {
-        "p0": 250.7,
-        "p1": 275.8,
-        "p2": 303.7,
-        "p3": 303.9,
-        "p4": 332.4,
-        "p5": 404.6,
-        "p6": 433.2,
-        "p7": 462.4,
-        "p8": 488.0,
-        "p9": 545.6
+        "p0": 266.7,
+        "p1": 266.9,
+        "p2": 308.3,
+        "p3": 308.5,
+        "p4": 345.5,
+        "p5": 399.6,
+        "p6": 436.8,
+        "p7": 436.9,
+        "p8": 475.1,
+        "p9": 557.7
       },
       "audio_status": {
-        "p0": "prefetched",
-        "p1": "prefetched",
-        "p2": "prefetched",
-        "p3": "prefetched",
-        "p4": "prefetched",
-        "p5": "prefetched",
-        "p6": "prefetched",
-        "p7": "prefetched",
-        "p8": "prefetched",
-        "p9": "prefetched"
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "preparing",
+        "p6": "preparing",
+        "p7": "preparing",
+        "p8": "preparing",
+        "p9": "preparing"
       },
       "audio_bytes_by_candidate": {
         "p0": 96000,
@@ -93,11 +93,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 251,
-            "audio_ready_ms": 250.7
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 266.7
           },
           "late": {
             "at_ms": 900,
@@ -106,8 +106,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 251,
-            "audio_ready_ms": 250.7
+            "published_ms": 50,
+            "audio_ready_ms": 266.7
           }
         },
         {
@@ -117,11 +117,11 @@
             "at_ms": 150,
             "candidate_id": "p1",
             "answer": "我已经提交了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 276,
-            "audio_ready_ms": 275.8
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 266.9
           },
           "late": {
             "at_ms": 900,
@@ -130,8 +130,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 276,
-            "audio_ready_ms": 275.8
+            "published_ms": 50,
+            "audio_ready_ms": 266.9
           }
         },
         {
@@ -141,11 +141,11 @@
             "at_ms": 150,
             "candidate_id": "p2",
             "answer": "只是保存了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 304,
-            "audio_ready_ms": 303.7
+            "path": "text_only_tts",
+            "published_ms": 92,
+            "audio_ready_ms": 308.3
           },
           "late": {
             "at_ms": 900,
@@ -154,8 +154,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 304,
-            "audio_ready_ms": 303.7
+            "published_ms": 92,
+            "audio_ready_ms": 308.3
           }
         },
         {
@@ -165,11 +165,11 @@
             "at_ms": 150,
             "candidate_id": "p3",
             "answer": "我是负责人。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 304,
-            "audio_ready_ms": 303.9
+            "path": "text_only_tts",
+            "published_ms": 92,
+            "audio_ready_ms": 308.5
           },
           "late": {
             "at_ms": 900,
@@ -178,8 +178,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 304,
-            "audio_ready_ms": 303.9
+            "published_ms": 92,
+            "audio_ready_ms": 308.5
           }
         },
         {
@@ -189,11 +189,11 @@
             "at_ms": 150,
             "candidate_id": "p4",
             "answer": "现在有点忙。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 333,
-            "audio_ready_ms": 332.4
+            "path": "text_only_tts",
+            "published_ms": 120,
+            "audio_ready_ms": 345.5
           },
           "late": {
             "at_ms": 900,
@@ -202,8 +202,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 333,
-            "audio_ready_ms": 332.4
+            "published_ms": 120,
+            "audio_ready_ms": 345.5
           }
         },
         {
@@ -216,8 +216,8 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 546,
-            "audio_ready_ms": 545.6
+            "published_ms": 308,
+            "audio_ready_ms": 557.7
           },
           "late": {
             "at_ms": 900,
@@ -226,22 +226,22 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 546,
-            "audio_ready_ms": 545.6
+            "published_ms": 308,
+            "audio_ready_ms": 557.7
           }
         }
       ],
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 0,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 6,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 0,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,
@@ -274,32 +274,32 @@
       "text_only_candidate_count": 10,
       "published_count": 10,
       "skipped_count": 10,
-      "forecast_total_ms": 307.5,
+      "forecast_total_ms": 307.6,
       "audio_all_ready_ms": null,
-      "published_all_ms": 307,
+      "published_all_ms": 308,
       "text_generated_ms": {
-        "p0": 44.4,
-        "p1": 44.5,
-        "p2": 86.7,
-        "p3": 86.8,
-        "p4": 136.0,
-        "p5": 195.4,
-        "p6": 195.6,
-        "p7": 249.6,
-        "p8": 277.2,
-        "p9": 307.4
+        "p0": 50.0,
+        "p1": 65.8,
+        "p2": 94.1,
+        "p3": 109.8,
+        "p4": 125.0,
+        "p5": 185.9,
+        "p6": 214.6,
+        "p7": 241.7,
+        "p8": 279.0,
+        "p9": 307.5
       },
       "published_ms": {
-        "p0": 45,
-        "p1": 45,
-        "p2": 87,
-        "p3": 87,
-        "p4": 136,
-        "p5": 196,
-        "p6": 196,
-        "p7": 250,
-        "p8": 277,
-        "p9": 307
+        "p0": 50,
+        "p1": 66,
+        "p2": 94,
+        "p3": 110,
+        "p4": 125,
+        "p5": 186,
+        "p6": 215,
+        "p7": 242,
+        "p8": 279,
+        "p9": 308
       },
       "audio_ready_ms": {
         "p0": null,
@@ -361,7 +361,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 45,
+            "published_ms": 50,
             "audio_ready_ms": null
           },
           "late": {
@@ -371,7 +371,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 45,
+            "published_ms": 50,
             "audio_ready_ms": null
           }
         },
@@ -385,7 +385,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 45,
+            "published_ms": 66,
             "audio_ready_ms": null
           },
           "late": {
@@ -395,7 +395,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 45,
+            "published_ms": 66,
             "audio_ready_ms": null
           }
         },
@@ -409,7 +409,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 87,
+            "published_ms": 94,
             "audio_ready_ms": null
           },
           "late": {
@@ -419,7 +419,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 87,
+            "published_ms": 94,
             "audio_ready_ms": null
           }
         },
@@ -433,7 +433,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 87,
+            "published_ms": 110,
             "audio_ready_ms": null
           },
           "late": {
@@ -443,7 +443,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 87,
+            "published_ms": 110,
             "audio_ready_ms": null
           }
         },
@@ -457,7 +457,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 136,
+            "published_ms": 125,
             "audio_ready_ms": null
           },
           "late": {
@@ -467,7 +467,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 136,
+            "published_ms": 125,
             "audio_ready_ms": null
           }
         },
@@ -481,7 +481,7 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 307,
+            "published_ms": 308,
             "audio_ready_ms": null
           },
           "late": {
@@ -491,7 +491,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 307,
+            "published_ms": 308,
             "audio_ready_ms": null
           }
         }
@@ -536,35 +536,35 @@
       "text_only_candidate_count": 9,
       "published_count": 10,
       "skipped_count": 9,
-      "forecast_total_ms": 310.8,
-      "audio_all_ready_ms": 252.4,
-      "published_all_ms": 311,
+      "forecast_total_ms": 306.5,
+      "audio_all_ready_ms": 251.6,
+      "published_all_ms": 306,
       "text_generated_ms": {
-        "p0": 50.5,
-        "p1": 50.6,
-        "p2": 89.9,
-        "p3": 90.1,
-        "p4": 131.6,
-        "p5": 183.7,
-        "p6": 211.5,
-        "p7": 252.3,
-        "p8": 282.4,
-        "p9": 310.7
+        "p0": 43.4,
+        "p1": 68.4,
+        "p2": 80.9,
+        "p3": 106.3,
+        "p4": 131.4,
+        "p5": 185.3,
+        "p6": 212.4,
+        "p7": 251.5,
+        "p8": 280.7,
+        "p9": 306.3
       },
       "published_ms": {
-        "p0": 253,
-        "p1": 51,
-        "p2": 90,
-        "p3": 90,
-        "p4": 132,
-        "p5": 184,
+        "p0": 44,
+        "p1": 68,
+        "p2": 81,
+        "p3": 106,
+        "p4": 131,
+        "p5": 185,
         "p6": 212,
-        "p7": 253,
-        "p8": 282,
-        "p9": 311
+        "p7": 252,
+        "p8": 281,
+        "p9": 306
       },
       "audio_ready_ms": {
-        "p0": 252.4,
+        "p0": 251.6,
         "p1": null,
         "p2": null,
         "p3": null,
@@ -576,7 +576,7 @@
         "p9": null
       },
       "audio_status": {
-        "p0": "prefetched",
+        "p0": "preparing",
         "p1": "limit_skipped",
         "p2": "limit_skipped",
         "p3": "limit_skipped",
@@ -620,11 +620,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 253,
-            "audio_ready_ms": 252.4
+            "path": "text_only_tts",
+            "published_ms": 44,
+            "audio_ready_ms": 251.6
           },
           "late": {
             "at_ms": 900,
@@ -633,8 +633,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 253,
-            "audio_ready_ms": 252.4
+            "published_ms": 44,
+            "audio_ready_ms": 251.6
           }
         },
         {
@@ -647,7 +647,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 51,
+            "published_ms": 68,
             "audio_ready_ms": null
           },
           "late": {
@@ -657,7 +657,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 51,
+            "published_ms": 68,
             "audio_ready_ms": null
           }
         },
@@ -671,7 +671,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 90,
+            "published_ms": 81,
             "audio_ready_ms": null
           },
           "late": {
@@ -681,7 +681,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 90,
+            "published_ms": 81,
             "audio_ready_ms": null
           }
         },
@@ -695,7 +695,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 90,
+            "published_ms": 106,
             "audio_ready_ms": null
           },
           "late": {
@@ -705,7 +705,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 90,
+            "published_ms": 106,
             "audio_ready_ms": null
           }
         },
@@ -719,7 +719,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 132,
+            "published_ms": 131,
             "audio_ready_ms": null
           },
           "late": {
@@ -729,7 +729,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 132,
+            "published_ms": 131,
             "audio_ready_ms": null
           }
         },
@@ -743,7 +743,7 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 311,
+            "published_ms": 306,
             "audio_ready_ms": null
           },
           "late": {
@@ -753,7 +753,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 311,
+            "published_ms": 306,
             "audio_ready_ms": null
           }
         }
@@ -761,14 +761,14 @@
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 4,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 1,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 4,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,
@@ -800,36 +800,36 @@
       "text_only_candidate_count": 8,
       "published_count": 10,
       "skipped_count": 8,
-      "forecast_total_ms": 304.3,
-      "audio_all_ready_ms": 274.5,
-      "published_all_ms": 304,
+      "forecast_total_ms": 315.3,
+      "audio_all_ready_ms": 282.8,
+      "published_all_ms": 315,
       "text_generated_ms": {
-        "p0": 51.7,
-        "p1": 51.8,
-        "p2": 82.9,
-        "p3": 108.4,
-        "p4": 108.5,
-        "p5": 191.7,
-        "p6": 220.5,
-        "p7": 248.2,
-        "p8": 274.6,
-        "p9": 304.2
+        "p0": 41.0,
+        "p1": 66.1,
+        "p2": 66.3,
+        "p3": 107.8,
+        "p4": 123.5,
+        "p5": 188.4,
+        "p6": 214.3,
+        "p7": 241.1,
+        "p8": 282.7,
+        "p9": 315.0
       },
       "published_ms": {
-        "p0": 248,
-        "p1": 275,
-        "p2": 83,
-        "p3": 109,
-        "p4": 109,
-        "p5": 192,
-        "p6": 221,
-        "p7": 248,
-        "p8": 275,
-        "p9": 304
+        "p0": 41,
+        "p1": 66,
+        "p2": 66,
+        "p3": 108,
+        "p4": 124,
+        "p5": 189,
+        "p6": 214,
+        "p7": 241,
+        "p8": 283,
+        "p9": 315
       },
       "audio_ready_ms": {
-        "p0": 248.3,
-        "p1": 274.5,
+        "p0": 241.3,
+        "p1": 282.8,
         "p2": null,
         "p3": null,
         "p4": null,
@@ -840,8 +840,8 @@
         "p9": null
       },
       "audio_status": {
-        "p0": "prefetched",
-        "p1": "prefetched",
+        "p0": "preparing",
+        "p1": "preparing",
         "p2": "limit_skipped",
         "p3": "limit_skipped",
         "p4": "limit_skipped",
@@ -884,11 +884,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 248,
-            "audio_ready_ms": 248.3
+            "path": "text_only_tts",
+            "published_ms": 41,
+            "audio_ready_ms": 241.3
           },
           "late": {
             "at_ms": 900,
@@ -897,8 +897,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 248,
-            "audio_ready_ms": 248.3
+            "published_ms": 41,
+            "audio_ready_ms": 241.3
           }
         },
         {
@@ -908,11 +908,11 @@
             "at_ms": 150,
             "candidate_id": "p1",
             "answer": "我已经提交了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 275,
-            "audio_ready_ms": 274.5
+            "path": "text_only_tts",
+            "published_ms": 66,
+            "audio_ready_ms": 282.8
           },
           "late": {
             "at_ms": 900,
@@ -921,8 +921,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 275,
-            "audio_ready_ms": 274.5
+            "published_ms": 66,
+            "audio_ready_ms": 282.8
           }
         },
         {
@@ -935,7 +935,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 83,
+            "published_ms": 66,
             "audio_ready_ms": null
           },
           "late": {
@@ -945,7 +945,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 83,
+            "published_ms": 66,
             "audio_ready_ms": null
           }
         },
@@ -959,7 +959,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 109,
+            "published_ms": 108,
             "audio_ready_ms": null
           },
           "late": {
@@ -969,7 +969,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 109,
+            "published_ms": 108,
             "audio_ready_ms": null
           }
         },
@@ -983,7 +983,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 109,
+            "published_ms": 124,
             "audio_ready_ms": null
           },
           "late": {
@@ -993,7 +993,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 109,
+            "published_ms": 124,
             "audio_ready_ms": null
           }
         },
@@ -1007,7 +1007,7 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 304,
+            "published_ms": 315,
             "audio_ready_ms": null
           },
           "late": {
@@ -1017,7 +1017,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 304,
+            "published_ms": 315,
             "audio_ready_ms": null
           }
         }
@@ -1025,14 +1025,14 @@
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 3,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 2,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 3,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,
@@ -1065,37 +1065,37 @@
       "text_only_candidate_count": 7,
       "published_count": 10,
       "skipped_count": 7,
-      "forecast_total_ms": 299.5,
-      "audio_all_ready_ms": 299.1,
-      "published_all_ms": 299,
+      "forecast_total_ms": 305.1,
+      "audio_all_ready_ms": 304.9,
+      "published_all_ms": 305,
       "text_generated_ms": {
-        "p0": 44.5,
-        "p1": 44.6,
-        "p2": 86.8,
-        "p3": 86.9,
-        "p4": 124.6,
-        "p5": 182.2,
-        "p6": 210.7,
-        "p7": 241.7,
-        "p8": 270.6,
-        "p9": 299.2
+        "p0": 49.5,
+        "p1": 49.7,
+        "p2": 87.3,
+        "p3": 87.5,
+        "p4": 129.2,
+        "p5": 187.1,
+        "p6": 218.5,
+        "p7": 245.4,
+        "p8": 273.8,
+        "p9": 305.0
       },
       "published_ms": {
-        "p0": 242,
-        "p1": 271,
-        "p2": 299,
+        "p0": 50,
+        "p1": 50,
+        "p2": 87,
         "p3": 87,
-        "p4": 125,
-        "p5": 182,
-        "p6": 211,
-        "p7": 242,
-        "p8": 271,
-        "p9": 299
+        "p4": 129,
+        "p5": 187,
+        "p6": 219,
+        "p7": 245,
+        "p8": 274,
+        "p9": 305
       },
       "audio_ready_ms": {
-        "p0": 241.8,
-        "p1": 270.6,
-        "p2": 299.1,
+        "p0": 273.7,
+        "p1": 273.9,
+        "p2": 304.9,
         "p3": null,
         "p4": null,
         "p5": null,
@@ -1105,9 +1105,9 @@
         "p9": null
       },
       "audio_status": {
-        "p0": "prefetched",
-        "p1": "prefetched",
-        "p2": "prefetched",
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
         "p3": "limit_skipped",
         "p4": "limit_skipped",
         "p5": "limit_skipped",
@@ -1149,11 +1149,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 242,
-            "audio_ready_ms": 241.8
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 273.7
           },
           "late": {
             "at_ms": 900,
@@ -1162,8 +1162,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 242,
-            "audio_ready_ms": 241.8
+            "published_ms": 50,
+            "audio_ready_ms": 273.7
           }
         },
         {
@@ -1173,11 +1173,11 @@
             "at_ms": 150,
             "candidate_id": "p1",
             "answer": "我已经提交了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 271,
-            "audio_ready_ms": 270.6
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 273.9
           },
           "late": {
             "at_ms": 900,
@@ -1186,8 +1186,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 271,
-            "audio_ready_ms": 270.6
+            "published_ms": 50,
+            "audio_ready_ms": 273.9
           }
         },
         {
@@ -1197,11 +1197,11 @@
             "at_ms": 150,
             "candidate_id": "p2",
             "answer": "只是保存了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 299,
-            "audio_ready_ms": 299.1
+            "path": "text_only_tts",
+            "published_ms": 87,
+            "audio_ready_ms": 304.9
           },
           "late": {
             "at_ms": 900,
@@ -1210,8 +1210,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 299,
-            "audio_ready_ms": 299.1
+            "published_ms": 87,
+            "audio_ready_ms": 304.9
           }
         },
         {
@@ -1248,7 +1248,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 125,
+            "published_ms": 129,
             "audio_ready_ms": null
           },
           "late": {
@@ -1258,7 +1258,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 125,
+            "published_ms": 129,
             "audio_ready_ms": null
           }
         },
@@ -1272,7 +1272,7 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 299,
+            "published_ms": 305,
             "audio_ready_ms": null
           },
           "late": {
@@ -1282,7 +1282,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 299,
+            "published_ms": 305,
             "audio_ready_ms": null
           }
         }
@@ -1290,14 +1290,14 @@
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 2,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 3,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 2,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,
@@ -1331,39 +1331,39 @@
       "text_only_candidate_count": 5,
       "published_count": 10,
       "skipped_count": 5,
-      "forecast_total_ms": 349.6,
-      "audio_all_ready_ms": 349.5,
-      "published_all_ms": 350,
+      "forecast_total_ms": 331.4,
+      "audio_all_ready_ms": 331.3,
+      "published_all_ms": 303,
       "text_generated_ms": {
-        "p0": 44.8,
-        "p1": 45.0,
-        "p2": 88.7,
-        "p3": 88.8,
-        "p4": 128.2,
-        "p5": 182.7,
-        "p6": 224.2,
-        "p7": 252.5,
-        "p8": 278.8,
-        "p9": 307.3
+        "p0": 40.5,
+        "p1": 67.0,
+        "p2": 67.1,
+        "p3": 110.2,
+        "p4": 110.4,
+        "p5": 190.0,
+        "p6": 217.8,
+        "p7": 244.8,
+        "p8": 276.9,
+        "p9": 303.2
       },
       "published_ms": {
-        "p0": 253,
-        "p1": 253,
-        "p2": 308,
-        "p3": 308,
-        "p4": 350,
-        "p5": 183,
-        "p6": 224,
-        "p7": 253,
-        "p8": 279,
-        "p9": 307
+        "p0": 41,
+        "p1": 67,
+        "p2": 67,
+        "p3": 110,
+        "p4": 110,
+        "p5": 190,
+        "p6": 218,
+        "p7": 245,
+        "p8": 277,
+        "p9": 303
       },
       "audio_ready_ms": {
-        "p0": 252.6,
-        "p1": 252.6,
-        "p2": 307.3,
-        "p3": 307.4,
-        "p4": 349.5,
+        "p0": 244.8,
+        "p1": 277.0,
+        "p2": 276.9,
+        "p3": 331.3,
+        "p4": 331.2,
         "p5": null,
         "p6": null,
         "p7": null,
@@ -1371,11 +1371,11 @@
         "p9": null
       },
       "audio_status": {
-        "p0": "prefetched",
-        "p1": "prefetched",
-        "p2": "prefetched",
-        "p3": "prefetched",
-        "p4": "prefetched",
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
         "p5": "limit_skipped",
         "p6": "limit_skipped",
         "p7": "limit_skipped",
@@ -1415,11 +1415,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 253,
-            "audio_ready_ms": 252.6
+            "path": "text_only_tts",
+            "published_ms": 41,
+            "audio_ready_ms": 244.8
           },
           "late": {
             "at_ms": 900,
@@ -1428,8 +1428,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 253,
-            "audio_ready_ms": 252.6
+            "published_ms": 41,
+            "audio_ready_ms": 244.8
           }
         },
         {
@@ -1439,11 +1439,11 @@
             "at_ms": 150,
             "candidate_id": "p1",
             "answer": "我已经提交了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 253,
-            "audio_ready_ms": 252.6
+            "path": "text_only_tts",
+            "published_ms": 67,
+            "audio_ready_ms": 277.0
           },
           "late": {
             "at_ms": 900,
@@ -1452,8 +1452,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 253,
-            "audio_ready_ms": 252.6
+            "published_ms": 67,
+            "audio_ready_ms": 277.0
           }
         },
         {
@@ -1463,11 +1463,11 @@
             "at_ms": 150,
             "candidate_id": "p2",
             "answer": "只是保存了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 308,
-            "audio_ready_ms": 307.3
+            "path": "text_only_tts",
+            "published_ms": 67,
+            "audio_ready_ms": 276.9
           },
           "late": {
             "at_ms": 900,
@@ -1476,8 +1476,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 308,
-            "audio_ready_ms": 307.3
+            "published_ms": 67,
+            "audio_ready_ms": 276.9
           }
         },
         {
@@ -1487,11 +1487,11 @@
             "at_ms": 150,
             "candidate_id": "p3",
             "answer": "我是负责人。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 308,
-            "audio_ready_ms": 307.4
+            "path": "text_only_tts",
+            "published_ms": 110,
+            "audio_ready_ms": 331.3
           },
           "late": {
             "at_ms": 900,
@@ -1500,8 +1500,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 308,
-            "audio_ready_ms": 307.4
+            "published_ms": 110,
+            "audio_ready_ms": 331.3
           }
         },
         {
@@ -1511,11 +1511,11 @@
             "at_ms": 150,
             "candidate_id": "p4",
             "answer": "现在有点忙。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 350,
-            "audio_ready_ms": 349.5
+            "path": "text_only_tts",
+            "published_ms": 110,
+            "audio_ready_ms": 331.2
           },
           "late": {
             "at_ms": 900,
@@ -1524,8 +1524,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 350,
-            "audio_ready_ms": 349.5
+            "published_ms": 110,
+            "audio_ready_ms": 331.2
           }
         },
         {
@@ -1538,7 +1538,7 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 307,
+            "published_ms": 303,
             "audio_ready_ms": null
           },
           "late": {
@@ -1548,7 +1548,7 @@
             "published": true,
             "audio": false,
             "path": "text_only_tts",
-            "published_ms": 307,
+            "published_ms": 303,
             "audio_ready_ms": null
           }
         }
@@ -1556,14 +1556,14 @@
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 0,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 5,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 0,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,
@@ -1599,56 +1599,56 @@
       "text_only_candidate_count": 0,
       "published_count": 10,
       "skipped_count": 0,
-      "forecast_total_ms": 532.7,
-      "audio_all_ready_ms": 532.5,
-      "published_all_ms": 533,
+      "forecast_total_ms": 544.7,
+      "audio_all_ready_ms": 544.6,
+      "published_all_ms": 304,
       "text_generated_ms": {
-        "p0": 40.4,
-        "p1": 68.6,
-        "p2": 68.7,
-        "p3": 107.6,
-        "p4": 107.7,
-        "p5": 190.3,
-        "p6": 218.2,
-        "p7": 245.4,
-        "p8": 274.3,
-        "p9": 301.8
+        "p0": 54.1,
+        "p1": 54.2,
+        "p2": 83.0,
+        "p3": 112.6,
+        "p4": 112.8,
+        "p5": 195.3,
+        "p6": 195.4,
+        "p7": 249.5,
+        "p8": 278.9,
+        "p9": 304.3
       },
       "published_ms": {
-        "p0": 245,
-        "p1": 302,
-        "p2": 274,
-        "p3": 329,
-        "p4": 329,
-        "p5": 395,
-        "p6": 435,
-        "p7": 462,
-        "p8": 491,
-        "p9": 533
+        "p0": 54,
+        "p1": 54,
+        "p2": 83,
+        "p3": 113,
+        "p4": 113,
+        "p5": 195,
+        "p6": 195,
+        "p7": 250,
+        "p8": 279,
+        "p9": 304
       },
       "audio_ready_ms": {
-        "p0": 245.5,
-        "p1": 301.8,
-        "p2": 274.2,
-        "p3": 328.6,
-        "p4": 328.5,
-        "p5": 394.8,
-        "p6": 435.0,
-        "p7": 462.0,
-        "p8": 490.5,
-        "p9": 532.5
+        "p0": 278.9,
+        "p1": 279.1,
+        "p2": 279.0,
+        "p3": 329.8,
+        "p4": 304.5,
+        "p5": 420.9,
+        "p6": 420.8,
+        "p7": 462.4,
+        "p8": 488.0,
+        "p9": 544.6
       },
       "audio_status": {
-        "p0": "prefetched",
-        "p1": "prefetched",
-        "p2": "prefetched",
-        "p3": "prefetched",
-        "p4": "prefetched",
-        "p5": "prefetched",
-        "p6": "prefetched",
-        "p7": "prefetched",
-        "p8": "prefetched",
-        "p9": "prefetched"
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "preparing",
+        "p6": "preparing",
+        "p7": "preparing",
+        "p8": "preparing",
+        "p9": "preparing"
       },
       "audio_bytes_by_candidate": {
         "p0": 96000,
@@ -1683,11 +1683,11 @@
             "at_ms": 150,
             "candidate_id": "p0",
             "answer": "好的，您现在方便吗？",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 245,
-            "audio_ready_ms": 245.5
+            "path": "text_only_tts",
+            "published_ms": 54,
+            "audio_ready_ms": 278.9
           },
           "late": {
             "at_ms": 900,
@@ -1696,8 +1696,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 245,
-            "audio_ready_ms": 245.5
+            "published_ms": 54,
+            "audio_ready_ms": 278.9
           }
         },
         {
@@ -1707,11 +1707,11 @@
             "at_ms": 150,
             "candidate_id": "p1",
             "answer": "我已经提交了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 302,
-            "audio_ready_ms": 301.8
+            "path": "text_only_tts",
+            "published_ms": 54,
+            "audio_ready_ms": 279.1
           },
           "late": {
             "at_ms": 900,
@@ -1720,8 +1720,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 302,
-            "audio_ready_ms": 301.8
+            "published_ms": 54,
+            "audio_ready_ms": 279.1
           }
         },
         {
@@ -1731,11 +1731,11 @@
             "at_ms": 150,
             "candidate_id": "p2",
             "answer": "只是保存了。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 274,
-            "audio_ready_ms": 274.2
+            "path": "text_only_tts",
+            "published_ms": 83,
+            "audio_ready_ms": 279.0
           },
           "late": {
             "at_ms": 900,
@@ -1744,8 +1744,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 274,
-            "audio_ready_ms": 274.2
+            "published_ms": 83,
+            "audio_ready_ms": 279.0
           }
         },
         {
@@ -1755,11 +1755,11 @@
             "at_ms": 150,
             "candidate_id": "p3",
             "answer": "我是负责人。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 329,
-            "audio_ready_ms": 328.6
+            "path": "text_only_tts",
+            "published_ms": 113,
+            "audio_ready_ms": 329.8
           },
           "late": {
             "at_ms": 900,
@@ -1768,8 +1768,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 329,
-            "audio_ready_ms": 328.6
+            "published_ms": 113,
+            "audio_ready_ms": 329.8
           }
         },
         {
@@ -1779,11 +1779,11 @@
             "at_ms": 150,
             "candidate_id": "p4",
             "answer": "现在有点忙。",
-            "published": false,
+            "published": true,
             "audio": false,
-            "path": "not_ready",
-            "published_ms": 329,
-            "audio_ready_ms": 328.5
+            "path": "text_only_tts",
+            "published_ms": 113,
+            "audio_ready_ms": 304.5
           },
           "late": {
             "at_ms": 900,
@@ -1792,8 +1792,8 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 329,
-            "audio_ready_ms": 328.5
+            "published_ms": 113,
+            "audio_ready_ms": 304.5
           }
         },
         {
@@ -1806,8 +1806,8 @@
             "published": false,
             "audio": false,
             "path": "not_ready",
-            "published_ms": 533,
-            "audio_ready_ms": 532.5
+            "published_ms": 304,
+            "audio_ready_ms": 544.6
           },
           "late": {
             "at_ms": 900,
@@ -1816,22 +1816,22 @@
             "published": true,
             "audio": true,
             "path": "prediction_audio",
-            "published_ms": 533,
-            "audio_ready_ms": 532.5
+            "published_ms": 304,
+            "audio_ready_ms": 544.6
           }
         }
       ],
       "summary": {
         "early_ms": 150,
         "late_ms": 900,
-        "early_text_hits": 0,
+        "early_text_hits": 5,
         "early_audio_hits": 0,
         "late_text_hits": 6,
         "late_audio_hits": 6,
         "answer_count": 6
       },
       "coverage": {
-        "early_published": 0,
+        "early_published": 5,
         "early_audio": 0,
         "early_total": 10,
         "late_published": 10,

@@ -150,15 +150,17 @@ async def test_short_answer_after_speech_interrupt_reuses_staged_audio():
     assert not session.jobs
 
 
-async def test_short_answer_without_staged_audio_is_not_reused():
+async def test_short_answer_without_staged_audio_reuses_text_and_falls_back_to_tts():
     pcm = b"\x01\x00" * 96
     chats = []
+    speech_calls = []
 
     class Cloud:
         async def prefetch(self, text):
             return pcm
 
         async def speech(self, text):
+            speech_calls.append(text)
             yield pcm
 
         async def chat(self, messages, **kwargs):
@@ -177,17 +179,20 @@ async def test_short_answer_without_staged_audio_is_not_reused():
                                "delivery": "complete"}]
     session.candidates = [prepared]
     session.prediction_epoch = session.epoch
-    # Voice candidates without prepared PCM are not reusable.
+    # Text candidates are staged even without prepared PCM. The selected
+    # reply must remain reusable and fall back to ordinary TTS.
     session.prediction_audio = {}
     session.response = session.spawn(asyncio.Event().wait())
     try:
         await session.interrupt("speech")
-        assert not session.staged_candidates
+        assert session.staged_candidates == [prepared]
+        assert session.staged_audio == {}
         await session.user_text("好的")
-        assert session.turn_metrics["staged_reuse"] is False
-        assert session.turn_metrics["reused"] is False
-        assert session.turn_metrics["candidates_available"] == 0
-        await until(lambda: bool(chats))  # full model response, not a reuse
+        await until(lambda: bool(speech_calls))
+        assert session.turn_metrics["staged_reuse"] is True
+        assert session.turn_metrics["reused"] is True
+        assert session.turn_metrics["prediction_audio_hit"] is False
+        assert speech_calls == [prepared.reply.text]
     finally:
         await session.close()
     assert not session.jobs
