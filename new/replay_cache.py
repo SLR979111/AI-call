@@ -14,11 +14,11 @@ def replay(directory):
     for path in sorted(Path(directory).glob('*.jsonl')):
         candidates, previous, epoch, complete = [], '', None, False
         pending = {}
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding='utf-8').splitlines():
             e = json.loads(line)
             kind = e['event']
             if kind == 'prediction_ready':
-                candidates = [Candidate.model_validate(c) for c in e['candidates']]
+                candidates = [Candidate.model_validate(c) for c in e.get('candidates', [])]
                 epoch = e['epoch']
             elif kind == 'delivered':
                 previous = e['text']
@@ -53,7 +53,7 @@ def replay(directory):
     for reuse in (True, False):
         group = [r for r in measured if r['reused'] == reuse]
         summary['historical_reuse' if reuse else 'historical_miss'] = {
-            k: median([r[k] for r in group if k in r]) if any(k in r for r in group) else None
+            k: median(values) if (values := [r[k] for r in group if r.get(k) is not None]) else None
             for k in ('first_text_ms', 'first_packet_ms', 'voice_to_playback_ms',
                       'answer_first_packet_ms', 'voice_to_answer_ms')}
     return dict(summary=summary, rows=rows)

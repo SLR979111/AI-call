@@ -408,7 +408,7 @@ class Session:
                         if self.decision_tracker:
                             if kind == "reuse":
                                 self.turn_metrics["reused"] = True
-                                candidate_id = next((c.id for c in (candidates or []) if c.reply == value), "unknown")
+                                candidate_id = next((c.id for c in (candidates or []) if c.reply.text == value.text), "unknown")
                                 self.decision_tracker.record_reuse(
                                     candidate_id,
                                     (time.perf_counter() - self.turn_metrics["started"]) * 1000
@@ -425,7 +425,7 @@ class Session:
                                 (time.perf_counter() - self.turn_metrics["started"]) * 1000)
                             await self.send({"type": "response_source", "epoch": epoch,
                                              "source": "prediction" if kind == "reuse" else "direct"})
-                        candidate_id = next((c.id for c in candidates or [] if c.reply == value), None) if kind == "reuse" else None
+                        candidate_id = next((c.id for c in candidates or [] if c.reply.text == value.text), None) if kind == "reuse" else None
                         await say(value, candidate_id=candidate_id)
                     else:
                         self.memory.apply(value, user, epoch, before)
@@ -444,6 +444,7 @@ class Session:
             # only becomes eligible after ALL of these units finish playback.
             if self.predictions and self.memory.status == "active":
                 snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
+                snapshot["opening"] = opening
                 snapshot["pending_reply"] = [u.say.model_dump() for u in current_units]
                 self.forecast = self.spawn(self._predict(epoch, snapshot))
             await output

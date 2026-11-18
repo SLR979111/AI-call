@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from typing import AsyncIterator
 
+from .forecast import OpeningForecastCache, likely_short_answers, stream_candidates
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
@@ -51,9 +52,10 @@ FORECAST = BEHAVIOR + """
 为这个目标对话准备2条最可能用上的简短回复。结合任务卡和刚刚计划播出的回复，预测用户下一句。
 只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。
 两条候选是针对不同用户回答的替代方案，每条都能独立使用，不是先说第一条再接第二条的连续台词。
+examples 写一到两种用户可能实际说出口的完整短句，每句必须独立满足 when 的全部条件。纯承接不能代表材料已准备或已提交。把最可能的分支写在数组第一项。
 每个 when 要说明完整适用条件和不能忽略的限制。候选只帮助提速，不要穷举意图。
 when 是内部适用条件，reply.text 是直接对人说的话，两者必须分开。reply.text 遵守上面的口语要求，不得带入“先确认/记下/判断用户”等准备过程；不要为了让候选通用而写空泛的流程旁白。
-只输出一个 JSON：{"candidates":[{"id":"c1","when":"用户...，且没有...","reply":{"text":"...","covers":[],"question":"..."}}]}。
+只输出一个 JSON：{"candidates":[{"id":"c1","when":"用户...，且没有...","examples":["用户原话"],"reply":{"text":"...","covers":[],"question":"..."}}]}。
 covers 只能使用本句实际说明的任务卡 checkpoint id。question 必须逐字摘自text中实际的问句，没有提问就为空。总共最多2条，每条text不超过100字。
 """
 
@@ -87,8 +89,9 @@ async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
 
 
 class Brain:
-    def __init__(self, cloud: Cloud):
+    def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None):
         self.cloud = cloud
+        self.opening_forecasts = opening_forecasts
         self.decision_engine = ContextAwareDecisionEngine()
 
     @staticmethod
@@ -159,9 +162,10 @@ class Brain:
                 if say.question not in say.text:
                     say.question = ""
                 say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
+                prepared = said == 0 and any(c.reply.text == say.text for c in candidates)
                 said += 1
                 asked = bool(say.question)
-                yield "say", say
+                yield "reuse" if prepared else "say", say
             elif kind == "reuse" and said == 0:
                 match = next((c for c in candidates if c.id == event.get("id")), None)
                 if match is None:
@@ -181,6 +185,15 @@ class Brain:
         return [item async for batch in self.predict_batches(snapshot) for item in batch]
 
     async def predict_batches(self, snapshot: dict) -> AsyncIterator[list[Candidate]]:
+        key = None
+        generated = []
+        if self.opening_forecasts is not None and snapshot.get("opening"):
+            key = json.dumps(snapshot["task"], sort_keys=True, ensure_ascii=False)
+            generated, complete = self.opening_forecasts.get(key)
+            if generated:
+                yield list(generated)
+            if complete:
+                return
         # Separate requests keep common acknowledgements from competing with
         # specific questions for the same two forecast slots.
         branches = (
@@ -190,12 +203,15 @@ class Brain:
             "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）以及结束意愿。",
         )
 
+        queue = asyncio.Queue()
+        valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
+
         async def forecast_branch(index: int, instruction: str):
             branch_snapshot = dict(snapshot)
             if index == 0:
                 # Anchor the generic branch to actual short utterances instead
                 # of letting all requests invent the same specific new facts.
-                branch_snapshot["forecast_user_inputs"] = ["好的。", "是的。"]
+                branch_snapshot["forecast_user_inputs"] = likely_short_answers(snapshot)
                 instruction += (
                     "本分支只为 forecast_user_inputs 各生成一条回复。"
                     "when 必须明确包含对应的用户原话；不要附加用户没有说出的事实。"
@@ -204,37 +220,46 @@ class Brain:
                 )
             messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
                         {"role": "user", "content": json.dumps(branch_snapshot, ensure_ascii=False)}]
-            text = "".join([part async for part in self.cloud.chat(messages, max_tokens=450)])
-            text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            data = json.loads(text)
-            batch = [Candidate.model_validate(item) for item in data["candidates"][:2]]
-            for number, item in enumerate(batch):
-                item.id = f"p{index}_{number}"
-            return batch
-
-        tasks = [asyncio.create_task(forecast_branch(i, instruction))
-                 for i, instruction in enumerate(branches)]
-        emitted = False
-        error = None
-        valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
-        try:
-            for task in asyncio.as_completed(tasks):
-                try:
-                    items = await task
-                except Exception as exc:
-                    error = exc
-                    continue
-                for item in items:
+            try:
+                number = 0
+                async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600), 2):
+                    item.id = f"p{index}_{number}"
+                    number += 1
                     item.reply.covers = [p for p in item.reply.covers if p in valid_points]
                     if item.reply.question not in item.reply.text:
                         item.reply.question = ""
-                if items:
+                    queue.put_nowait(item)
+            except Exception as exc:
+                queue.put_nowait(exc)
+            finally:
+                queue.put_nowait(None)
+
+        tasks = [asyncio.create_task(forecast_branch(i, instruction))
+                 for i, instruction in enumerate(branches)]
+        remaining = len(tasks)
+        emitted = False
+        error = None
+        try:
+            while remaining:
+                item = await queue.get()
+                if item is None:
+                    remaining -= 1
+                elif isinstance(item, Exception):
+                    error = item
+                else:
                     emitted = True
-                    yield items
+                    if any(c.id == item.id for c in generated):
+                        continue
+                    generated.append(item)
+                    if key:
+                        self.opening_forecasts.store(key, generated, complete=False)
+                    yield [item]
             if not emitted:
-                if error is not None:
+                if error:
                     raise error
-                raise ProviderError("所有预测分支均失败")
+                raise ProviderError("所有预测分支均未产生候选")
+            if key and not error:
+                self.opening_forecasts.store(key, generated, complete=True)
         finally:
             for task in tasks:
                 if not task.done():

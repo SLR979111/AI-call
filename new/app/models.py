@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -70,6 +70,7 @@ class Update(BaseModel):
 class Candidate(BaseModel):
     id: str = Field(min_length=1, max_length=32)
     when: str = Field(min_length=1, max_length=300)
+    examples: list[Annotated[str, Field(min_length=1, max_length=90)]] = Field(default_factory=list, max_length=2)
     reply: Say
 
 

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .brain import Brain
+from .forecast import OpeningForecastCache
 from .hearing import Hearing
 from .models import TaskCard
 from .providers import Cloud, Settings
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     app.state.cloud = Cloud(app.state.settings)
     voice_detector_model()
     app.state.sessions = set()
+    app.state.opening_forecasts = OpeningForecastCache()
     app.state.decision_tracker = DecisionTracker()
     app.state.performance_monitor = PerformanceMonitor()
     yield
@@ -128,7 +130,7 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
-                    session = Session(card, cloud, Brain(cloud), send,
+                    session = Session(card, cloud, Brain(cloud, app.state.opening_forecasts), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
