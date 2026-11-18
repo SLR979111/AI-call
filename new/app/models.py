@@ -76,7 +76,7 @@ class Candidate(BaseModel):
 
 def farewell_only(text: str) -> bool:
     text = re.sub(r"[\s，,。.!！?？；;]", "", text).lower()
-    return bool(re.fullmatch(r"(?:好的?|嗯+|呃|哦|那|就|先这样|再见|拜拜|拜|我?先?挂了|谢谢您?|ok|吧|啊|呀|了)+", text))
+    return bool(re.fullmatch(r"(?:好的?|行|嗯+|呃|哦|那|就|先这样|再见|拜拜|拜|我?先?挂了|谢谢您?|ok|吧|啊|呀|了)+", text))
 
 
 def wants_to_end(text: str) -> bool:
@@ -178,25 +178,39 @@ class Memory:
         return recap, user[match.end():].lstrip("，,。.!！?？ ")
 
     def ready_to_say_goodbye(self, user: str, last_reply: Say) -> bool:
-        # Even a valid confirmation can be followed by a new request to keep talking.
-        return (self.status == "complete" and not self.questions
-                and not re.search(r"[？?]|(?:别|不要|先不)挂|还(?:想|要)问|还有(?:个|一个)?问题", user)
-                and not last_reply.question and not last_reply.text.rstrip().endswith(("？", "?")))
+        # A spoken closing and business completion are independent. ASR can
+        # omit punctuation, so also check for a follow-up or a request to stay.
+        if (last_reply.question or re.search(r"[？?]", last_reply.text)
+                or re.search(r"[？?]|(?:别|不要|先不)挂|还没说完|等一下|还(?:想|要)问|还有(?:个|一个)?问题", user)):
+            return False
+        goodbye = ends_with_goodbye(last_reply.text)
+        if goodbye and ends_with_goodbye(user):
+            return True
+        if self.questions or (self.status != "complete" and not goodbye):
+            return False
+        # Without punctuation a question can still look like a statement to ASR.
+        return not re.search(r"(?:^|[，,。]\s*)(?:那|请问|我想问|还要问)?(?:怎么|如何|找谁|多久|哪里|哪份)"
+                             r"|(?:找谁|多久|哪里|哪份|吗|怎么办)[呀啊呢]?[。！!\s]*$", user)
 
     def closing_reason(self, user: str) -> str:
         # Ending a call and completing its business objective are separate.
         # In particular, a second goodbye must not depend on checkpoint credit.
         if wants_to_end(user):
             return "requested"
-        if not farewell_only(user):
+        if not farewell_only(user) or re.search(r"[？?]", user):
             return ""
         index = next((i for i in range(len(self.history) - 1, -1, -1)
                       if self.history[i]["role"] == "user"), len(self.history))
         previous = self.history[:index]
-        assistant = next((entry for entry in reversed(previous)
-                          if entry["role"] == "assistant" and entry.get("delivery") == "complete"), {})
-        if re.search(r"再见|拜拜", assistant.get("text", "")):
-            return "goodbye_acknowledged"
+        assistant = previous[-1] if previous and previous[-1]["role"] == "assistant" else {}
+        if assistant.get("delivery") == "complete" and not assistant.get("bridge") and not assistant.get("filler"):
+            if ends_with_goodbye(assistant["text"]):
+                return "goodbye_acknowledged"
+            if (not self.questions and not self.last_question and not re.search(r"[？?]", assistant["text"])
+                    and all(point.id in self.delivered for point in self.card.checkpoints)
+                    and (ends_with_goodbye(user) or
+                         re.fullmatch(r"[嗯哦啊，,。！!\s]*(?:好(?:的|了)?|谢谢您?|行)[，,。！!\s]*", user))):
+                return "instructions_acknowledged"
         has_goodbye = bool(re.search(r"再见|拜拜|先这样|挂了", user))
         if not has_goodbye:
             return ""

@@ -15,7 +15,7 @@ from typing import Awaitable, Callable
 
 from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
 from .brain import Brain
-from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye, farewell_only
+from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
 from .silent_logger import silent_log
 
@@ -506,16 +506,12 @@ class Session:
                 last_reply = current_units[-1].say
                 hangup = (self.memory.ready_to_say_goodbye(user, last_reply)
                           or self.memory.status in {"paused", "declined"})
-                if ends_with_goodbye(user) and not farewell_only(user) and ends_with_goodbye(last_reply.text):
-                    if self.memory.status == "active":
-                        self.memory.status = "paused"
-                    hangup = True
                 if hangup and not ends_with_goodbye(last_reply.text):
                     await say(Say(text="再见。"))
             await queue.put(None)
             # Forecast the next user reply while this response is playing. It
             # only becomes eligible after ALL of these units finish playback.
-            if self.predictions and self.memory.status == "active":
+            if self.predictions and not hangup and self.memory.status == "active":
                 snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
                 snapshot["opening"] = opening
                 snapshot["pending_reply"] = [u.say.model_dump() for u in current_units]
@@ -538,8 +534,13 @@ class Session:
                                  "reused": self.turn_metrics.get("reused", False)})
                 await self.state()
                 if hangup and self.reply_completed and self.is_current(epoch):
+                    if self.memory.status == "active":
+                        self.memory.status = "paused"
                     self.ended = True
                     self.phase = "ended"
+                    self.candidates = []
+                    self.prediction_epoch = -1
+                    await self.state()
                     await self.send({"type": "hangup", "epoch": epoch, "reason": self.memory.status})
                     if self.on_hangup:
                         await self.on_hangup()
