@@ -107,3 +107,11 @@ def test_new_question_blocks_proactive_goodbye():
     assert not memory.ready_to_say_goodbye("明白了", Say(text="您还有什么疑问？"))
     memory.questions = ["审核多久"]
     assert not memory.ready_to_say_goodbye("明白了", Say(text="好的。"))
+
+
+def test_explicit_goodbye_after_confirmation_leaves_room_for_real_followup_questions():
+    from app.models import wants_to_end
+    assert wants_to_end("明白了，先这样，再见。")
+    assert wants_to_end("我马上进会了，先挂了，谢谢。")
+    assert not wants_to_end("你先挂了电话，我怎么联系你？")
+    assert not wants_to_end("明白了，先这样，再见之前再问一句，周六几点关门？")

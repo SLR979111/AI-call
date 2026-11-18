@@ -23,14 +23,20 @@ from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PACK = "jd-qualification"
+TASK_PACKS = (DEFAULT_PACK, "jd-submitted", "jd-authorization", "jd-busy", "jd-goodbye", "jd-long-call",
+              "jd-category-report", "jd-license-appendix", "jd-license-scope",
+              "jd-trademark-renewal", "jd-brand-mixup")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.settings = Settings.load()
-    app.state.default_card = TaskCard.model_validate_json(
-        (ROOT / "tasks" / "jd-qualification.json").read_text(encoding="utf-8")
-    )
+    app.state.task_packs = {
+        name: TaskCard.model_validate_json((ROOT / "tasks" / f"{name}.json").read_text(encoding="utf-8"))
+        for name in TASK_PACKS
+    }
+    app.state.default_card = app.state.task_packs[DEFAULT_PACK]
     app.state.cloud = Cloud(app.state.settings)
     voice_detector_model()
     app.state.first_pass = FirstPassASR.load()
@@ -59,6 +65,7 @@ async def config():
               for name in ("home-broadband-support.json", "legacy/jd-qualification-v1.json", "legacy/jd-qualification-v2.json")]
     return {"configured": bool(settings.api_key), "model": settings.model,
             "legacy_default_tasks": legacy, "legacy_default_task": legacy[0],
+            "task_packs": {name: card.model_dump() for name, card in app.state.task_packs.items()},
             "predictions": settings.predictions, "default_task": app.state.default_card.model_dump()}
 
 

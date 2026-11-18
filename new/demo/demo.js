@@ -201,7 +201,16 @@
     const ms = example.turns.reduce((duration, [role, words]) => duration + engine.graphemes(words).length * LETTER_MS + 140 + (role === 'user' ? 1050 : 1400), 450);
     const seconds = Math.round(ms / 1000);
     const duration = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-    addExampleButton($('callExamples'), example.id, example.title, example.description, `${example.turns.length} 段对话 · ${duration}`);
+    const row = document.createElement('div');
+    row.className = 'example-row';
+    $('callExamples').append(row);
+    const live = document.createElement('a');
+    const pack = example.id === 'jd-materials' ? 'jd-qualification' : example.id;
+    live.href = '/?pack=' + encodeURIComponent(pack);
+    live.textContent = '进入互动通话';
+    live.setAttribute('aria-label', example.title + '：进入互动通话');
+    addExampleButton(row, example.id, example.title, example.description, `${example.turns.length} 段对话 · ${duration}`);
+    row.append(live);
   }
   for (const id of ['full', 'stream', 'revision', 'prediction', 'interrupt']) {
     addExampleButton($('motionExamples'), id, names[id]);

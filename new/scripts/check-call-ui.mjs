@@ -122,11 +122,48 @@ try {
   await page.getByRole('button', {name: '结束对话', exact: true}).click();
   report.edited_task_is_preserved = true;
   await page.getByRole('button', {name: '任务设置', exact: true}).click();
-  assert.equal(await page.getByRole('link', {name: '电话例子库'}).getAttribute('href'), '/demo/?library=1');
+  assert.equal(await page.getByRole('link', {name: '观看对话回放'}).getAttribute('href'), '/demo/?library=1');
   await page.getByRole('button', {name: '恢复默认任务', exact: true}).click();
   await page.getByRole('button', {name: '保存任务', exact: true}).click();
   assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('g2-task'))), config.default_task);
   report.restore_default_and_library_entry = true;
+  await page.getByRole('button', {name: '任务设置', exact: true}).click();
+  assert.deepEqual(await page.locator('#taskPack option').evaluateAll(options => options.slice(1).map(o => o.value)),
+    Object.keys(config.task_packs));
+  assert.ok(Object.keys(config.task_packs).every(id => id.startsWith('jd-')));
+  await page.locator('#taskPack').selectOption('jd-category-report');
+  await page.locator('#saveTask').click();
+  // Simulate a revision to the saved preset between visits.
+  await page.evaluate(() => {
+    const selected = JSON.parse(localStorage.getItem('g2-task-pack'));
+    selected.card.facts = '先前版本的资料';
+    localStorage.setItem('g2-task-pack', JSON.stringify(selected));
+    localStorage.setItem('g2-task', JSON.stringify(selected.card));
+  });
+  await page.reload();
+  await page.locator('#editTask').click();
+  assert.equal(await page.locator('#taskPack').inputValue(), 'jd-category-report');
+  assert.equal(await page.locator('#editFacts').inputValue(), config.task_packs['jd-category-report'].facts);
+  await page.locator('#taskPack').selectOption('');
+  assert.equal(await page.locator('#editTitle').inputValue(), '保留我的自定义任务');
+  await page.locator('#closeDialog').click();
+  await page.goto(base + '/?pack=jd-brand-mixup');
+  await page.locator('#startText').click();
+  await page.locator('[data-id="reply-1"] .copy').waitFor();
+  assert.deepEqual(sent.filter(event => event.type === 'start').at(-1).task, config.task_packs['jd-brand-mixup']);
+  await page.locator('#editTask').click();
+  assert.equal(await page.locator('#taskPack').isDisabled(), true);
+  await page.locator('#closeDialog').click();
+  await page.locator('#stop').click();
+  await page.goto(base + '/demo/?library=1');
+  const links = await page.locator('#callExamples a').evaluateAll(anchors => anchors.map(a => new URL(a.href).searchParams.get('pack')));
+  assert.equal(links.length, 6);
+  assert.equal(new Set(links).size, 6);
+  assert.ok(links.every(id => Object.hasOwn(config.task_packs, id)));
+  await page.locator('#callExamples a').last().click();
+  await page.locator('#startText:enabled').waitFor();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('g2-task')).opening), config.task_packs['jd-long-call'].opening);
+  report.interactive_work_orders = true;
   assert.deepEqual(errors, []); report.errors = errors; report.passed = true;
 } finally {
   await fs.writeFile(path.join(out, 'call-ui-check.json'), JSON.stringify(report, null, 2));

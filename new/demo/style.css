@@ -15,3 +15,7 @@
 .motion-examples .example-card { padding: 10px 14px; }
 .library-note { margin-bottom: 0; font-size: 11px; }
 @media (max-width: 390px) { .controls .button-group { gap: 5px; } .example-card { padding: 12px; } }
+
+.example-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.example-row .example-card { width: 100%; }
+.example-row a { color: #ddd; font-size: .8rem; text-underline-offset: .22em; }
