@@ -101,9 +101,9 @@ npm run test:browser
 
 ### 切换云端或纯本地通话
 
-打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen3 4B Instruct 生成回复、Piper 的华妍中文音色朗读。两种模式各自保存预测与音频缓存。
+打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、Piper 的华妍中文音色朗读。两种模式各自保存预测与音频缓存。
 
-首次使用纯本地时，先安装并启动 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M) · [华妍音色](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
+首次使用纯本地时，先安装并启动 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen2.5:7b-instruct) · [华妍音色](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
 
 ```powershell
 .\scripts\setup-local.ps1
@@ -111,7 +111,7 @@ npm run test:browser
 
 ### 正文首字延迟
 
-Windows 启动脚本会一次性下载校验过的 Paraformer 小模型，供本机在短暂停顿时提前准备回复。手动启动 Uvicorn 时可先运行 `uv run python -m app.local_asr`。下载失败时继续使用云识别。最终转写和对话状态均匹配后，才允许发送准备好的回复与音频。[模型说明](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/paraformer-models.html)
+Windows 启动脚本会一次性下载校验过的 Paraformer 小模型，供本机在短暂停顿时提前准备回复。手动启动 Uvicorn 时可先运行 `uv run python -m app.local_asr`。下载失败时继续使用云识别。最终转写和对话状态均匹配后，才允许发送准备好的回复与音频。云识别在停声约 1.05 秒后仍未返回时，可采用同一段完整录音的本机识别结果。已经选定的云端正文若再等 650 毫秒仍无音频，可向同一音色发起一次补充合成，只播放先到的一路。[模型说明](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/paraformer-models.html)
 
 在运行中的服务上执行以下命令。首次生成八条合成麦克风录音，之后可用同一批文件比较版本。每条录音各开一通电话，从输入末尾的有声窗口量到浏览器开始播放正文的首个有声窗口。接话音与音频开头的静音均排除。脚本保存逐条记录，P50 达到 2 秒或任一轮超过 3 秒时以失败退出。
 

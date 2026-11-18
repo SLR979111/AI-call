@@ -24,12 +24,14 @@ class Hearing:
                  on_partial: Callable[[str], Awaitable],
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
-                 detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None):
+                 detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None, min_silence_ms=0):
         self.cloud = cloud
         self.first_pass, self.on_draft = first_pass, on_draft
+        self.min_silence_ms = min_silence_ms
         self.lead_started = False
         self.on_lead = on_lead
         self.discard_draft = discard_draft
+        self.local_final = None
         self.draft_job = None
         self.draft_at = -1
         self.on_start, self.on_text = on_start, on_text
@@ -176,7 +178,7 @@ class Hearing:
                 self.request_first_pass()
             if self.quiet >= 80 and self.decode_at != self.voiced_end:
                 self.request_decode()
-            if self.quiet >= self.defer_to and (not self.finalizer or self.finalizer.done()):
+            if self.quiet >= max(self.min_silence_ms, self.defer_to) and (not self.finalizer or self.finalizer.done()):
                 self.finalizer = self.spawn(self.finish(self.voice_tick, self.last_client_ms))
 
     def request_first_pass(self, *, for_lead=False):
@@ -195,6 +197,7 @@ class Hearing:
                 if for_lead:
                     self.lead_started = self.on_lead(text)
                 else:
+                    self.local_final = (decoded_at, text)
                     self.on_draft(text)
 
         if self.draft_job and not self.draft_job.done():
@@ -232,7 +235,18 @@ class Hearing:
         if self.decode_at != self.voiced_end or self.decode is None:
             self.request_decode()
         try:
-            text = await asyncio.shield(self.decode)
+            local_final = self.local_final
+            if local_final and local_final[0] == self.voiced_end:
+                # A slow cloud call cannot hold a complete locally recognized
+                # clip past the recognition budget. Endpoint checks below
+                # still reject a resumed utterance or a trailing conjunction.
+                remaining = max(0, (1050 - self.quiet) / 1000)
+                try:
+                    text = await asyncio.wait_for(asyncio.shield(self.decode), remaining)
+                except Exception:
+                    text = local_final[1]
+            else:
+                text = await asyncio.shield(self.decode)
             if not self.active or tick != self.voice_tick or self.closed:
                 return
             if text.rstrip("，。！？,.!? ").endswith(("但是", "然后", "因为", "如果", "我想", "那个")) and self.quiet < 1150:
@@ -259,6 +273,7 @@ class Hearing:
                 job.cancel()
         self.decode = self.finalizer = None
         self.draft_at = self.decode_at = -1
+        self.local_final = None
         self.lead_started = False
         self.active = False
         self.buffer.clear()

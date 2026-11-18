@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import time
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 
 from pydantic import ValidationError
 
@@ -53,7 +53,8 @@ def same_transcript(draft, final):
 class PredictedLead:
     """Publish a single candidate as soon as its text is ready, while TTS runs."""
 
-    def __init__(self, partial):
+    def __init__(self, partial, number):
+        self.id = f"live_lead_{number}"
         self.prefix = transcript_key(partial)
         self.candidate = None
         self.task = None
@@ -69,7 +70,7 @@ class PredictedLead:
         text = "".join([chunk async for chunk in cloud.chat(messages, max_tokens=72)]).strip()
         if not re.fullmatch(r"[\u3400-\u9fffA-Za-z0-9、，,：:%％.。！!?？（）() ]{5,44}", text):
             return None
-        self.candidate = Candidate(id="live_lead", when="仅为预合成首句，须按本轮完整原话核实",
+        self.candidate = Candidate(id=self.id, when="仅为预合成首句，须按本轮完整原话核实",
                                    reply=Say(text=text))
         return await cloud.prefetch(text)
 
@@ -106,10 +107,12 @@ class VoicePreview:
         self.suffix_queue = None
         self.task = None
 
-    async def prepare(self, brain, cloud, memory, candidates, lead=None):
+    async def prepare(self, brain, cloud, memory, candidates, leads=()):
+        self.local = getattr(cloud, "is_local", False)
         async def synthesize(text, target):
             try:
-                if lead and lead.candidate and text == lead.candidate.reply.text:
+                lead = next((item for item in leads if item.candidate and text == item.candidate.reply.text), None)
+                if lead:
                     try:
                         pcm = await asyncio.shield(lead.task)
                     except asyncio.CancelledError:
@@ -177,17 +180,46 @@ class VoicePreview:
             emitted = True
             yield event
 
-    async def audio(self, fallback):
-        emitted = False
+    async def prepared_audio(self):
         for queue in (self.audio_queue, self.suffix_queue):
-            if queue is None:
-                continue
-            while (packet := await queue.get()) is not None:
-                if isinstance(packet, Exception):
-                    if emitted:
+            if queue is not None:
+                while (packet := await queue.get()) is not None:
+                    if isinstance(packet, Exception):
                         raise packet
-                    async for chunk in fallback():
-                        yield chunk
-                    return
-                emitted = True
-                yield packet
+                    yield packet
+
+    async def audio(self, fallback):
+        # Only a confirmed, selected reply can hedge. The alternative uses
+        # the same configured voice, and only one stream can reach the player.
+        async with AsyncExitStack() as stack:
+            prepared = await stack.enter_async_context(aclosing(self.prepared_audio()))
+            first = asyncio.create_task(anext(prepared))
+            pending = {first: prepared}
+            tasks = [first]
+            try:
+                done, _ = await asyncio.wait(pending, timeout=None if self.local else .65)
+                if not done or first.exception() is not None:
+                    other = await stack.enter_async_context(aclosing(fallback()))
+                    request = asyncio.create_task(anext(other))
+                    pending[request] = other
+                    tasks.append(request)
+                while pending:
+                    done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for request in done:
+                        stream = pending.pop(request)
+                        try:
+                            packet = request.result()
+                        except Exception:
+                            if not pending:
+                                raise
+                            continue
+                        for loser in pending:
+                            loser.cancel()
+                        yield packet
+                        async for packet in stream:
+                            yield packet
+                        return
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)

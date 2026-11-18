@@ -16,7 +16,7 @@ from typing import AsyncIterator
 import httpx
 from dotenv import load_dotenv
 
-from .speech_start import first_sound, spoken_prefix
+from .speech_start import first_sound
 
 from .enhanced_cache import EnhancedCacheManager
 
@@ -59,6 +59,7 @@ def wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 class Cloud:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.settings = settings
+        self.forecast_slots = asyncio.Semaphore(3)
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(25, connect=8), trust_env=False,
             limits=httpx.Limits(max_connections=12, max_keepalive_connections=8),
@@ -220,22 +221,7 @@ class Cloud:
         self.remember(text, bytes(collected))
 
     async def prefetch(self, text: str) -> bytes:
-        cached = self.cached(text)
-        if cached is not None:
-            return cached
-
-        async def render(part):
-            return b"".join([chunk async for chunk in self.speech(part)])
-
-        prefix = spoken_prefix(text)
-        if not prefix or prefix == text:
-            return await render(text)
-        async with asyncio.TaskGroup() as group:
-            first = group.create_task(render(prefix))
-            rest = group.create_task(render(text[len(prefix):]))
-        pcm = first.result() + rest.result()
-        self.remember(text, pcm)
-        return pcm
+        return b"".join([chunk async for chunk in self.speech(text)])
 
     async def close(self):
         if self.owns_client:

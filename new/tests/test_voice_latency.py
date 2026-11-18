@@ -1,3 +1,4 @@
+import asyncio
 from array import array
 
 import pytest
@@ -98,3 +99,34 @@ def test_credit_exact_spoken_checkpoint_even_when_the_model_omits_its_id():
     assert memory.delivered_covers(Say(text=statement + "。")) == ["reason"]
     assert memory.delivered_covers(Say(text=statement + "？")) == []
     assert memory.delivered_covers(Say(text="缺少截图。")) == []
+
+async def test_confirmed_audio_hedge_plays_only_one_stream():
+    from app.voice_preview import VoicePreview
+
+    preview = VoicePreview("事实", {})
+    preview.local = False
+    async def alternate():
+        yield b"same-voice-first"
+        preview.audio_queue.put_nowait(b"late-first")
+        preview.audio_queue.put_nowait(None)
+        yield b"same-voice-second"
+    assert [chunk async for chunk in preview.audio(alternate)] == [b"same-voice-first", b"same-voice-second"]
+
+
+async def test_stalled_cloud_asr_uses_only_the_complete_local_clip():
+    from app.hearing import Hearing
+
+    committed = []
+    async def noop(*args): pass
+    async def commit(text, end):
+        committed.append((text, end))
+    hearing = Hearing(None, on_start=noop, on_text=commit, on_partial=noop, on_error=noop,
+                      detector=object())
+    hearing.active = True
+    hearing.quiet = 1100
+    hearing.voiced_end = hearing.decode_at = 9600
+    hearing.local_final = (9600, "这是最新完整原话")
+    hearing.decode = hearing.spawn(asyncio.sleep(30))
+    await hearing.finish(hearing.voice_tick, 1234)
+    await hearing.close()
+    assert committed == [("这是最新完整原话", 1234)]

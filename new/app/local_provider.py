@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import re
+from contextlib import aclosing
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -15,7 +17,7 @@ from .speech_start import first_sound
 from .voice_preview import first_clause
 
 VOICE = "vits-piper-zh_CN-huayan-medium"
-MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+MODEL = "qwen2.5:7b-instruct"
 VOICE_FILES = ("zh_CN-huayan-medium.onnx", "zh_CN-huayan-medium.onnx.json", "MODEL_CARD")
 INSTALL_HELP = "请先安装 Ollama 并运行 scripts/setup-local.ps1，然后重试。"
 
@@ -67,7 +69,7 @@ class LocalProvider(Cloud):
                 self.engine = await asyncio.get_running_loop().run_in_executor(self.worker, load_voice)
 
     async def chat(self, messages, *, max_tokens=650, schema=None):
-        payload = {"model": MODEL, "messages": messages, "stream": True, "keep_alive": "15m",
+        payload = {"model": MODEL, "messages": messages, "stream": True, "think": False, "keep_alive": "15m",
                    "options": {"temperature": 0.2, "num_predict": max_tokens, "num_ctx": 8192}}
         if schema is not None:
             payload["format"] = schema
@@ -83,17 +85,47 @@ class LocalProvider(Cloud):
                         yield piece
 
     async def structured(self, model, instruction, context, max_tokens, on_first_clause=None):
-        messages = [{"role": "system", "content": instruction},
-                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
+        schema = model.model_json_schema()
+        messages = [{"role": "system", "content": instruction}]
+        if model is Say:
+            # Keep task instructions out of the caller's role. A small local
+            # model must distinguish actual statements from conditional examples.
+            grounding = {"task": context["task"], "state": context["state"]}
+            cutoffs = [e for e in context["dialogue"][-8:] if "remaining_text" in e]
+            if cutoffs:
+                grounding["打断记录"] = cutoffs
+            messages[0]["content"] += "\n参考资料：" + json.dumps(grounding, ensure_ascii=False)
+            for entry in context["dialogue"]:
+                if entry.get("delivery") == "unplayed" or entry.get("filler") or entry.get("bridge"):
+                    continue
+                if entry.get("text"):
+                    messages.append({"role": entry["role"], "content": entry["text"]})
+            points = [p["id"] for p in context["task"]["checkpoints"]]
+            del schema["properties"]["question"]
+            schema["properties"]["covers"]["items"] = {"type": "string", "enum": points}
+            schema["properties"]["text"]["maxLength"] = 100
+        else:
+            messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
+        for obj in [schema, *schema.get("$defs", {}).values()]:
+            if obj.get("type") == "object":
+                obj["additionalProperties"] = False
+                obj["required"] = list(obj["properties"])
         raw = ""
-        async for chunk in self.chat(messages, max_tokens=max_tokens, schema=model.model_json_schema()):
-            raw += chunk
-            obj = raw.lstrip()
-            if on_first_clause and obj.startswith("{"):
-                ready = first_clause('{"type":"say",' + obj[1:])
-                if ready:
-                    on_first_clause(ready)
-                    on_first_clause = None
+        async with aclosing(self.chat(messages, max_tokens=max_tokens, schema=schema)) as stream:
+            async for chunk in stream:
+                raw += chunk
+                obj = raw.lstrip()
+                if on_first_clause and obj.startswith("{"):
+                    ready = first_clause('{"type":"say",' + obj[1:])
+                    if ready:
+                        on_first_clause(ready)
+                        on_first_clause = None
+                if raw.rstrip().endswith("}"):
+                    try:
+                        value = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    return model.model_validate(value)
         return model.model_validate_json(raw)
 
     async def respond_local(self, snapshot, candidates, on_first_clause=None):
@@ -105,18 +137,24 @@ class LocalProvider(Cloud):
             line = match.reply
             yield "reuse", line
         else:
-            context = {**snapshot, "本轮需要回答的整句话": latest}
             line = await self.structured(Say,
                 "你是中文电话客服。优先处理最后一句中的新情况和具体问题。"
-                "text 首句直接给出适用于当前情况的事实或操作，最多两句。不要说将要介绍什么，不重复询问用户已经说过的事。"
+                "只基于本轮用户原话和此前已经说过的话判断当前情况。资料中含有‘若/如果/可能/后来’的内容仅是条件，禁止把这些情况当作用户已报告的事实。"
+                "text 只用一句话先回答眼前的一件事，通常15至35个字。只确认负责或方便时就说明现有记录里的第一个问题。"
+                "不要用‘您提到/您已经’引出对方没说过的事，不复述整套流程，不加例行反问。"
                 "只用给出的事实。对方明确改了做法时，回答新做法下的要求。没提供的信息就说无法确认。不要说明推理，不承诺查询或回电。"
                 "打断历史的 text 是已听到的部分。忙或拒绝时尊重对方。"
-                "covers 只填本句完整讲清的 checkpoint id；question 只抄 text 中问出的整句，无问句留空。",
-                context, 240, on_first_clause)
+                "covers 只填本句完整讲清的 checkpoint id。",
+                snapshot, 240, on_first_clause)
+            if len(line.text) >= 98 and line.text[-1] not in "。！？!?":
+                end = max(line.text.rfind(mark) for mark in "。！？!?")
+                if end >= 5:
+                    line.text = line.text[:end + 1]
+                    line.covers = []
             valid = {p["id"] for p in snapshot["task"]["checkpoints"]}
             line.covers = [point for point in line.covers if point in valid]
-            if line.question not in line.text:
-                line.question = ""
+            question = re.search(r"[^。！？?]*[？?]$", line.text.strip())
+            line.question = question[0] if question else ""
             yield "say", line
         update = await self.structured(Update,
             "根据任务对话、本轮用户原话和本轮回复更新状态。facts 只记录用户明确说过的事，quote 须逐字抄原话。"

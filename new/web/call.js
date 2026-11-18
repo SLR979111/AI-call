@@ -104,7 +104,7 @@ async function start(useVoice) {
       $('duration').textContent = Math.floor(seconds / 60).toString().padStart(2, '0') + ':' + (seconds % 60).toString().padStart(2, '0');
     }, 1000);
     send({type: 'start', task, voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
-    notice();
+    notice(mode === 'local' ? '正在准备本地模型…' : '');
     showText(!voice);
   } catch (error) {
     await cleanup();
@@ -118,6 +118,7 @@ function onMessage({data}) {
   if (data instanceof ArrayBuffer) { player?.packet(data); return; }
   let event; try { event = JSON.parse(data); } catch { return; }
   switch (event.type) {
+    case 'ready': notice(); break;
     case 'reply_start':
       if (!view.handle(event)) break;
       epoch = event.epoch; replyActive = true; player?.begin(epoch); $('latency').textContent = ''; clearError(); break;

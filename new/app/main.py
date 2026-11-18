@@ -164,6 +164,7 @@ async def websocket(ws: WebSocket):
                             on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end),
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
                             first_pass=None if local else app.state.first_pass, on_draft=session.prepare_voice,
+                            min_silence_ms=680 if local else 0,
                             discard_draft=session.discard_voice,
                             on_lead=session.prepare_lead if session.predictions and not local else None,
                             on_error=error,

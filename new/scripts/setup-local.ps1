@@ -6,6 +6,6 @@ if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
 & uv run --locked python -m app.local_provider
 if ($LASTEXITCODE -ne 0) { throw 'Local speech model installation failed.' }
 $env:OLLAMA_HOST = '127.0.0.1:11434'
-& ollama pull qwen3:4b-instruct-2507-q4_K_M
+& ollama pull qwen2.5:7b-instruct
 if ($LASTEXITCODE -ne 0) { throw 'Start Ollama and retry model installation.' }
 Write-Output 'Offline models ready. Restart AI Call and select local mode in Task settings.'
