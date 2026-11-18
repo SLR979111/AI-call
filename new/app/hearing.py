@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 import struct
 from array import array
@@ -24,11 +25,15 @@ class Hearing:
                  on_partial: Callable[[str], Awaitable],
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
-                 detector=None):
+                 detector=None, transcriber=None):
         self.cloud = cloud
         self.on_start, self.on_text = on_start, on_text
         self.on_partial, self.on_error = on_partial, on_error
         self.is_playing = is_playing
+        self.transcriber = transcriber or self.cloud.transcribe
+        self.defer_base = int(os.getenv("HEARING_DEFER_MS", "480"))
+        self.defer_short = int(os.getenv("HEARING_DEFER_SHORT_MS", "260"))
+        self.defer_question = int(os.getenv("HEARING_DEFER_QUESTION_MS", "340"))
         self.detector = detector or SpeechDetector()
         self.raw_detector = detector or SpeechDetector()
         self.last_onset: dict = {}
@@ -51,7 +56,7 @@ class Hearing:
         self.decode_at = -1
         self.finalizer: asyncio.Task | None = None
         self.jobs: set[asyncio.Task] = set()
-        self.defer_to = 680
+        self.defer_to = self.defer_base
         self.blocked = False
         self.closed = False
 
@@ -148,7 +153,7 @@ class Hearing:
             return
         if voiced:
             self.quiet = 0
-            self.defer_to = 680
+            self.defer_to = self.defer_base
             self.voiced_end = len(self.buffer)
             self.voice_tick += 1
             self.last_client_ms = client_ms
@@ -178,16 +183,16 @@ class Hearing:
         decoded_at = self.decode_at
 
         async def decode():
-            text = await self.cloud.transcribe(audio)
+            text = await self.transcriber(audio)
             if (self.active and not self.closed and utterance_id == self.utterance_id
                     and decoded_at > self.partial_at):
                 self.partial_at = decoded_at
                 if decoded_at == self.voiced_end:
                     normalized = re.sub(r"[\s，。！？,.!?]", "", text)
                     if re.fullmatch(r"(?:是的|对的|好的|没错|明白了|知道了|可以|没有了|谢谢|再见)+", normalized):
-                        self.defer_to = 360
+                        self.defer_to = self.defer_short
                     elif text.strip().endswith(("？", "?")):
-                        self.defer_to = 480
+                        self.defer_to = self.defer_question
                 if text.strip() and text != self.partial_text:
                     self.partial_text = text
                     await self.on_partial(text)
@@ -228,7 +233,7 @@ class Hearing:
         self.preroll.clear()
         self.onset_window.clear()
         self.attack = self.quiet = self.voiced_end = 0
-        self.defer_to = 680
+        self.defer_to = self.defer_base
         self.voice_tick += 1
         self.utterance_id += 1
         self.partial_at = -1

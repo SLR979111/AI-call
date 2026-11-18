@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from pydantic import ValidationError
 from .brain import Brain
 from .forecast import OpeningForecastCache
 from .hearing import Hearing
+from .local_asr import load_from_env, make_transcriber
 from .models import TaskCard
 from .providers import Cloud, Settings
 from .session import Session
@@ -29,10 +32,21 @@ async def lifespan(app: FastAPI):
     app.state.default_card = TaskCard.model_validate_json(
         (ROOT / "tasks" / "jd-qualification.json").read_text(encoding="utf-8")
     )
-    app.state.cloud = Cloud(app.state.settings)
+    cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
+    if not cache_path.is_absolute():
+        cache_path = ROOT / cache_path
+    app.state.cloud = Cloud(app.state.settings, cache_path=cache_path)
+    app.state.local_asr = load_from_env()
+    app.state.transcriber = make_transcriber(app.state.local_asr, app.state.cloud)
+    if app.state.local_asr is not None:
+        try:
+            await asyncio.to_thread(app.state.local_asr.load)
+        except Exception:  # noqa: BLE001 - the cloud path still works without the model
+            app.state.local_asr = None
+            app.state.transcriber = app.state.cloud.transcribe
     voice_detector_model()
     app.state.sessions = set()
-    app.state.opening_forecasts = OpeningForecastCache()
+    app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
     app.state.decision_tracker = DecisionTracker()
     app.state.performance_monitor = PerformanceMonitor()
     yield
@@ -57,14 +71,14 @@ async def config():
 @app.get("/api/cache/stats")
 async def cache_stats():
     """Return cache performance metrics."""
-    return app.state.cloud.cache_manager.report()
+    return app.state.cloud.cache_report()
 
 
 @app.get("/api/metrics")
 async def performance_metrics():
     """Return comprehensive performance and decision metrics."""
     return {
-        "cache": app.state.cloud.cache_manager.report(),
+        "cache": app.state.cloud.cache_report(),
         "decisions": app.state.decision_tracker.report(),
         "performance": app.state.performance_monitor.report(),
     }
@@ -130,7 +144,9 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
-                    session = Session(card, cloud, Brain(cloud, app.state.opening_forecasts), send,
+                    session = Session(card, cloud, Brain(
+                        cloud, app.state.opening_forecasts,
+                        forecast_branches=app.state.settings.forecast_branches), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
@@ -144,7 +160,8 @@ async def websocket(ws: WebSocket):
                             on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end),
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
                             on_error=error,
-                            is_playing=lambda: session.phase == "speaking")
+                            is_playing=lambda: session.phase == "speaking",
+                            transcriber=app.state.transcriber)
                     await session.start()
                 elif session:
                     if kind == "text":

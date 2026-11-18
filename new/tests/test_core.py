@@ -33,7 +33,7 @@ class Cloud:
             raise
 
     async def prefetch(self, text):
-        pass
+        return b'\x01\x00' * 960
 
 
 class TestBrain:
@@ -186,3 +186,88 @@ async def test_speech_arriving_during_transcript_send_cannot_start_an_obsolete_r
     await asyncio.gather(user_task, cancellation)
     assert brain.seen == []
     await session.close()
+
+
+async def test_voice_candidate_without_prepared_audio_is_not_published():
+    brain, cloud, events = TestBrain(), Cloud(), []
+    brain.forecast_release.set()
+
+    async def no_prefetch(text):
+        return None
+
+    cloud.prefetch = no_prefetch
+
+    async def send(event):
+        events.append(event)
+
+    session = Session(DEFAULT_CARD, cloud, brain, send, voice=True)
+    await session.start()
+    await session.user_text("为什么？")
+    await until(lambda: any(isinstance(e, dict) and e.get("type") == "utterance_end"
+                            for e in events))
+    await session.playback_progress(session.epoch, 1, 1920, done=True)
+    await until(lambda: session.reply_completed)
+    await until(lambda: session.forecast is not None and session.forecast.done())
+    assert session.candidates == []
+    assert not any(isinstance(e, dict) and e.get("type") == "candidates"
+                   for e in events)
+    await session.close()
+
+
+async def test_cached_reply_is_not_blocked_by_state_update():
+    brain, cloud, events = TestBrain(), Cloud(), []
+
+    class ReuseBrain:
+        def __init__(self):
+            self.release = asyncio.Event()
+            self.update_started = asyncio.Event()
+
+        async def respond(self, memory, candidates):
+            yield "reuse", Say(text="好的，已经记录。", covers=["reason"])
+            yield "update_async", Candidate(
+                id="c1", when="用户确认", reply=Say(text="好的，已经记录。", covers=["reason"]))
+
+        async def update_for_reuse(self, memory, selected):
+            self.update_started.set()
+            await self.release.wait()
+            return Update()
+
+    brain = ReuseBrain()
+
+    async def send(event):
+        events.append(event)
+
+    session = Session(DEFAULT_CARD, cloud, brain, send, voice=False, predictions=False)
+    await session.start()
+    await session.user_text("好的")
+    await until(lambda: brain.update_started.is_set())
+    await until(lambda: any(isinstance(e, dict) and e.get("type") == "reply_done"
+                            for e in events))
+    assert not session.response.done()
+    brain.release.set()
+    await until(lambda: session.response.done())
+    await session.close()
+
+
+async def test_five_forecast_branches_fan_out():
+    class FanoutCloud:
+        def __init__(self):
+            self.calls = 0
+            self.all_started = asyncio.Event()
+
+        async def chat(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 5:
+                self.all_started.set()
+            await asyncio.wait_for(self.all_started.wait(), 1)
+            yield json.dumps({"candidates": [{
+                "id": "c1", "when": "用户确认",
+                "reply": {"text": "好的。", "covers": []},
+            }]})
+
+    cloud = FanoutCloud()
+    result = await Brain(cloud, forecast_branches=5).predict(
+        Brain.snapshot(Memory(DEFAULT_CARD)))
+    assert cloud.calls == 5
+    assert len(result) == 5
+    assert len({c.id for c in result}) == 5

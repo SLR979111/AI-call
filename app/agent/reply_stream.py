@@ -81,8 +81,12 @@ class ReplyExtractor:
             value = json.loads('"' + raw + '"')
         except (TypeError, ValueError):
             return None
+        # Cut at the first clause boundary, not only at a full stop: the
+        # caller starts TTS on this prefix, so waiting for 。 can cost several
+        # hundred milliseconds of extra first-audio latency. Require a few
+        # characters first so a bare "您好，" is not spoken as its own clause.
         for index, char in enumerate(value):
-            if char in "。！？!?；;" and index >= 1:
+            if char in "。！？!?；;，、," and index >= 2:
                 sentence = value[:index + 1]
                 if sentence == self.partial_emitted:
                     return None

@@ -16,6 +16,7 @@ import httpx
 from dotenv import load_dotenv
 
 from .enhanced_cache import EnhancedCacheManager
+from .persistent_cache import PersistentCache
 
 
 class ProviderError(RuntimeError):
@@ -29,6 +30,7 @@ class Settings:
     model: str = "deepseek-flash"
     voice: str = "stella"
     predictions: bool = True
+    forecast_branches: int = 5
 
     @classmethod
     def load(cls):
@@ -40,6 +42,7 @@ class Settings:
             model=os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-flash"),
             voice=os.getenv("DEEPSEEK_TTS_VOICE", "stella"),
             predictions=os.getenv("PREDICTION_ENABLED", "1") == "1",
+            forecast_branches=max(1, min(int(os.getenv("PREDICTION_BRANCHES", "5")), 5)),
         )
 
 
@@ -54,16 +57,24 @@ def wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 
 
 class Cloud:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None,
+                 cache_path: str | Path | None = None):
         self.settings = settings
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(25, connect=8), trust_env=False,
             limits=httpx.Limits(max_connections=12, max_keepalive_connections=8),
         )
         self.owns_client = client is None
+        self.persistent = PersistentCache(cache_path) if cache_path else None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.cache_bytes = 0
-        self.cache_manager = EnhancedCacheManager()
+        self.cache_manager = EnhancedCacheManager(self.persistent)
+        if self.persistent is not None:
+            for record in reversed(self.persistent.load(
+                "tts", max_entries=48, max_bytes=12_000_000,
+            )):
+                self.cache[record.key] = record.value
+                self.cache_bytes += len(record.value)
 
     @property
     def headers(self):
@@ -79,7 +90,9 @@ class Cloud:
     async def chat(self, messages: list[dict], *, max_tokens: int = 650) -> AsyncIterator[str]:
         # Check LLM cache first
         temperature = 0.2
-        cached_response = self.cache_manager.llm.get(messages, self.settings.model, temperature)
+        cached_response = self.cache_manager.llm.get(
+            messages, self.settings.model, temperature, max_tokens=max_tokens,
+        )
         if cached_response is not None:
             # Cache hit - simulate streaming from cache
             for i in range(0, len(cached_response), 50):
@@ -116,7 +129,10 @@ class Cloud:
         # Cache the full response
         if collected:
             full_response = "".join(collected)
-            self.cache_manager.llm.put(messages, self.settings.model, temperature, full_response)
+            self.cache_manager.llm.put(
+                messages, self.settings.model, temperature, full_response,
+                max_tokens=max_tokens,
+            )
 
     async def transcribe(self, pcm: bytes) -> str:
         # Check ASR cache first
@@ -142,21 +158,57 @@ class Cloud:
         except (ValueError, KeyError, TypeError) as exc:
             raise ProviderError("语音识别没有返回有效文本") from exc
 
+    def _tts_key(self, text: str) -> str:
+        # Voice is part of the identity: a cached PCM must match its speaker.
+        return f"{self.settings.voice}\0{text}"
+
+    def _trim_tts(self):
+        while len(self.cache) > 48 or self.cache_bytes > 12_000_000:
+            key, removed = self.cache.popitem(last=False)
+            self.cache_bytes -= len(removed)
+            if self.persistent is not None:
+                self.persistent.delete("tts", key)
+
     def cached(self, text: str) -> bytes | None:
-        pcm = self.cache.get(text)
+        key = self._tts_key(text)
+        pcm = self.cache.get(key)
+        if pcm is None and self.persistent is not None:
+            record = self.persistent.get("tts", key)
+            if record is not None:
+                pcm = record.value
+                self.cache[key] = pcm
+                self.cache_bytes += len(pcm)
+                self._trim_tts()
         if pcm is not None:
-            self.cache.move_to_end(text)
+            self.cache.move_to_end(key)
+            if self.persistent is not None:
+                self.persistent.touch("tts", key)
         return pcm
 
     def remember(self, text: str, pcm: bytes):
         if len(pcm) > 2_000_000:
             return
-        previous = self.cache.pop(text, b"")
+        key = self._tts_key(text)
+        previous = self.cache.pop(key, b"")
         self.cache_bytes += len(pcm) - len(previous)
-        self.cache[text] = pcm
-        while len(self.cache) > 48 or self.cache_bytes > 12_000_000:
-            _, removed = self.cache.popitem(last=False)
-            self.cache_bytes -= len(removed)
+        self.cache[key] = pcm
+        if self.persistent is not None:
+            self.persistent.put(
+                "tts", key, pcm, max_entries=48, max_bytes=12_000_000,
+            )
+        self._trim_tts()
+
+    def cache_report(self) -> dict:
+        report = self.cache_manager.report()
+        report["tts"] = {
+            "entries": len(self.cache),
+            "size_mb": round(self.cache_bytes / (1024 * 1024), 2),
+            "persistent": self.persistent is not None,
+        }
+        if self.persistent is not None:
+            report["tts"]["disk"] = self.persistent.stats("tts")
+        report["persistent"] = self.persistent is not None
+        return report
 
     async def speech(self, text: str) -> AsyncIterator[bytes]:
         cached = self.cached(text)
@@ -216,3 +268,5 @@ class Cloud:
     async def close(self):
         if self.owns_client:
             await self.client.aclose()
+        if self.persistent is not None:
+            self.persistent.close()

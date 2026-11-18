@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Sequence
@@ -10,6 +11,7 @@ from typing import Any, AsyncIterator, Sequence
 import httpx
 
 from ..events import EventBus
+from ..cache import cache_key, llm_cache
 
 
 @dataclass
@@ -54,6 +56,23 @@ class StreamChunk:
 SENTENCE_TERMINATORS = {"。", "！", "？", "；", "\n"}
 SENTENCE_SEPARATORS = {"，", "、"}
 
+# Reasoning-capable cloud models answer with hidden reasoning by default: the
+# whole max_tokens budget is spent before any visible content, so replies come
+# back empty with finish_reason=length and first audio never arrives. Unless the
+# operator opts in via LLM_<PREFIX>_THINKING, disable thinking for these models.
+_DEBUG_STREAM = os.getenv("LLM_DEBUG_STREAM") == "1"
+
+_THINKING_DEFAULT_OFF = (
+    "deepseek-flash", "deepseek-v3", "deepseek-v3.1", "deepseek-v3.2",
+    "qwen3", "kimi-k2", "glm-4.5", "minimax-m2", "gpt-oss",
+)
+
+
+def default_thinking(model: str) -> str | None:
+    """Return the thinking mode to request when the env var is unset."""
+    name = (model or "").lower()
+    return "disabled" if any(tag in name for tag in _THINKING_DEFAULT_OFF) else None
+
 
 class LLMRouter:
     """OpenAI-compatible LLM client with primary/secondary failover.
@@ -76,6 +95,7 @@ class LLMRouter:
         self.daily_budget_cny = daily_budget_cny
         self.spent_cny = 0.0
         self.transport = transport
+        self.cache = llm_cache()
         self._failures = 0
         self._open_until = 0.0
 
@@ -93,7 +113,7 @@ class LLMRouter:
             model=model,
             timeout_ms=int(os.getenv("LLM_TIMEOUT_MS", "3000")),
             price_per_1k_cny=float(os.getenv("LLM_PRICE_PER_1K_CNY", "0.002")),
-            thinking=os.getenv(f"LLM_{prefix}_THINKING", "").strip() or None,
+            thinking=os.getenv(f"LLM_{prefix}_THINKING", "").strip() or default_thinking(model),
         )
 
     @property
@@ -268,6 +288,38 @@ class LLMRouter:
             yield StreamChunk(type="error", error={"code": "LLM_NOT_CONFIGURED", "message": "set LLM_PRIMARY_* env vars"})
             return
 
+        # A cached completion replays the exact chunk sequence the caller
+        # expects, so a repeated conversation pays no cloud round trip at all.
+        cache_key_value: str | None = None
+        if self.cache is not None and not tools:
+            cache_key_value = cache_key(
+                "llm-v1", providers[0].model, list(messages), temperature, max_tokens, response_format,
+            )
+            cached = self.cache.get_json("llm", cache_key_value)
+            if isinstance(cached, dict) and str(cached.get("text") or "").strip():
+                name = str(cached.get("provider") or providers[0].name)
+                model = str(cached.get("model") or providers[0].model)
+                text = str(cached["text"])
+                yield StreamChunk(type="first_token", latency_ms=0.0, provider=name, model=model,
+                                  usage={"cached": True})
+                buffer = ""
+                for offset in range(0, len(text), 8):
+                    piece = text[offset:offset + 8]
+                    buffer += piece
+                    yield StreamChunk(type="token", text=piece, provider=name, model=model)
+                    if self._detect_sentence_boundary(buffer):
+                        yield StreamChunk(type="sentence", text=buffer.strip(), provider=name, model=model)
+                        buffer = ""
+                if buffer.strip():
+                    yield StreamChunk(type="sentence", text=buffer.strip(), provider=name, model=model)
+                await self._emit(
+                    session_id=session_id, type="CacheHit", module="agent", turn_id=turn_id,
+                    trace_id=trace_id, payload={"store": "llm", "chars": len(text)},
+                )
+                yield StreamChunk(type="done", text=text, usage=cached.get("usage") or {},
+                                  cost_cny=0.0, provider=name, model=model)
+                return
+
         last_error: dict[str, Any] | None = None
         for index, provider in enumerate(providers):
             if index > 0 and self._open_until > time.time():
@@ -360,6 +412,9 @@ class LLMRouter:
                             # 处理 content
                             if "content" in delta and delta["content"]:
                                 text = delta["content"]
+                                if _DEBUG_STREAM:
+                                    print(f"[llm-stream +{(time.perf_counter()-start)*1000:6.0f}ms] {text!r}",
+                                          file=sys.stderr, flush=True)
                                 accumulated_text += text
                                 sentence_buffer += text
                                 
@@ -434,6 +489,14 @@ class LLMRouter:
                              "usage": usage_data, "cost_cny": round(cost, 6)},
                 )
                 
+                # Persist the completion so a repeated question is answered
+                # from disk instead of paying cloud TTFT again.
+                if self.cache is not None and cache_key_value and not tool_calls_data and accumulated_text.strip():
+                    self.cache.put_json("llm", cache_key_value, {
+                        "text": accumulated_text, "provider": provider.name,
+                        "model": provider.model, "usage": usage_data,
+                    })
+
                 # 流式结束
                 yield StreamChunk(type="done", text=accumulated_text, 
                                 usage=usage_data, cost_cny=round(cost, 6),

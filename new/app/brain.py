@@ -89,10 +89,22 @@ async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
         yield obj
 
 
+FORECAST_BRANCHES = (
+    "优先覆盖纯肯定/承接（是的、好的、明白了、可以）以及否定/没有。"
+    "纯承接的回复应推进尚未说明的内容，不把好的当成材料已提交。",
+    "优先覆盖当前话题的具体追问和选择（第一项、怎么补、哪份）。",
+    "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）。",
+    "优先覆盖用户的纠正、否认和补充条件（不是、我说的是、还没、但是）。",
+    "优先覆盖用户忙、稍后再说和结束通话的意愿，同时保留一句可继续的话题。",
+)
+
+
 class Brain:
-    def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None):
+    def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
+                 *, forecast_branches: int = 3):
         self.cloud = cloud
         self.opening_forecasts = opening_forecasts
+        self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
 
     @staticmethod
@@ -131,18 +143,12 @@ class Brain:
             )
             
             if decision == "reuse":
-                # Context-aware reuse (skip LLM decision, but still need state update)
+                # The cached audio is already prepared. Return it before asking
+                # for the state update so playback and the next forecast can
+                # start while the update request is still in flight.
                 yield "reuse", selected_candidate.reply
-                # Generate state update
-                snapshot = self.snapshot(memory)
-                snapshot["selected_reply"] = selected_candidate.reply.model_dump()
-                update_messages = [{"role": "system", "content": POLICY + "\n本轮已选择 selected_reply 作为回复，请据此只输出一行 update，不再输出 say 或 reuse。是否播完仍以 dialogue 的 delivery 和 state.delivered 为准。"},
-                                   {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
-                async for event in json_lines(self.cloud.chat(update_messages)):
-                    if event.get("type") == "update":
-                        yield "update", Update.model_validate(event)
-                        return
-                raise ProviderError("模型回复缺少状态更新")
+                yield "update_async", selected_candidate
+                return
             elif decision == "say":
                 # Context-aware rejection (generate new, ignore candidates)
                 candidates = []
@@ -184,6 +190,19 @@ class Brain:
         if not said or not updated:
             raise ProviderError("模型回复缺少内容或状态更新")
 
+    async def update_for_reuse(self, memory: Memory, selected: Candidate) -> Update:
+        """Resolve only the state update for an already-played cached reply."""
+        snapshot = self.snapshot(memory)
+        snapshot["selected_reply"] = selected.reply.model_dump()
+        update_messages = [
+            {"role": "system", "content": POLICY + "\n本轮已选择 selected_reply 作为回复，请据此只输出一行 update，不再输出 say 或 reuse。是否播完仍以 dialogue 的 delivery 和 state.delivered 为准。"},
+            {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)},
+        ]
+        async for event in json_lines(self.cloud.chat(update_messages)):
+            if event.get("type") == "update":
+                return Update.model_validate(event)
+        raise ProviderError("模型回复缺少状态更新")
+
     async def predict(self, snapshot: dict) -> list[Candidate]:
         return [item async for batch in self.predict_batches(snapshot) for item in batch]
 
@@ -191,20 +210,20 @@ class Brain:
         key = None
         generated = []
         if self.opening_forecasts is not None and snapshot.get("opening"):
-            key = json.dumps(snapshot["task"], sort_keys=True, ensure_ascii=False)
+            # Task-only reuse could cross model versions, so include the model.
+            # Voice does not change text; audio is always prepared per session.
+            model = getattr(getattr(self.cloud, "settings", None), "model", "")
+            key = json.dumps({"task": snapshot["task"], "model": model},
+                             sort_keys=True, ensure_ascii=False)
             generated, complete = self.opening_forecasts.get(key)
             if generated:
                 yield list(generated)
             if complete:
                 return
         # Separate requests keep common acknowledgements from competing with
-        # specific questions for the same two forecast slots.
-        branches = (
-            "优先覆盖纯肯定/承接（是的、好的、明白了、可以）以及否定/没有。"
-            "纯承接的回复应推进尚未说明的内容，不把好的当成材料已提交。",
-            "优先覆盖当前话题的具体追问和选择（第一项、怎么补、哪份）。",
-            "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）以及结束意愿。",
-        )
+        # specific questions for the same two forecast slots. More branches are
+        # launched together in production to widen cache coverage.
+        branches = FORECAST_BRANCHES[:self.forecast_branches]
 
         queue = asyncio.Queue()
         valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}

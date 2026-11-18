@@ -69,6 +69,7 @@ class Session:
         self.jobs: set[asyncio.Task] = set()
         self.response: asyncio.Task | None = None
         self.forecast: asyncio.Task | None = None
+        self.pending_update: asyncio.Task | None = None
         self.candidates: list[Candidate] = []
         self.prediction_audio: dict[str, bytes] = {}
         self.bridge_text = "嗯。"
@@ -194,6 +195,12 @@ class Session:
         self.starting = False
         if self.forecast and not self.forecast.done():
             self.forecast.cancel()
+        if self.pending_update and not self.pending_update.done():
+            # The cached reply was already spoken; an interrupted turn drops
+            # its late state update rather than applying it out of order.
+            self.log("reuse_update_cancelled", reason=reason)
+            self.pending_update.cancel()
+        self.pending_update = None
         for unit in self.units.values():
             unit.record_cutoff()
         self.candidates = []
@@ -343,6 +350,7 @@ class Session:
         children.append(output)
         before = set(self.memory.delivered)
         current_units: list[Unit] = []
+        pending_update: asyncio.Task | None = None
         hangup = False
 
         first_answer = asyncio.Event()
@@ -427,6 +435,13 @@ class Session:
                                              "source": "prediction" if kind == "reuse" else "direct"})
                         candidate_id = next((c.id for c in candidates or [] if c.reply.text == value.text), None) if kind == "reuse" else None
                         await say(value, candidate_id=candidate_id)
+                    elif kind == "update_async":
+                        # Do not await the update here: the cached audio is
+                        # already playing and the update must not hold it up.
+                        if pending_update is None:
+                            pending_update = self.spawn(
+                                self.brain.update_for_reuse(self.memory, value))
+                            self.pending_update = pending_update
                     else:
                         self.memory.apply(value, user, epoch, before)
                         await self.state()
@@ -464,6 +479,20 @@ class Session:
                 await self.send({"type": "reply_done", "epoch": epoch,
                                  "reused": self.turn_metrics.get("reused", False)})
                 await self.state()
+                if pending_update is not None:
+                    try:
+                        update = await pending_update
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self.log("reuse_update_error", error=type(exc).__name__)
+                    else:
+                        if self.is_current(epoch):
+                            self.memory.apply(update, user, epoch, before)
+                            await self.state()
+                    finally:
+                        if self.pending_update is pending_update:
+                            self.pending_update = None
                 if hangup and self.reply_completed and self.is_current(epoch):
                     self.ended = True
                     self.phase = "ended"
@@ -491,6 +520,12 @@ class Session:
                 await self.send({"type": "error", "message": message, "recoverable": True})
                 await self.state()
         finally:
+            if pending_update is not None:
+                if not pending_update.done():
+                    pending_update.cancel()
+                await asyncio.gather(pending_update, return_exceptions=True)
+            if self.pending_update is pending_update:
+                self.pending_update = None
             for child in children:
                 if not child.done():
                     child.cancel()
@@ -526,6 +561,12 @@ class Session:
                     if text not in audio_tasks:
                         audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
                     pcm = await asyncio.shield(audio_tasks[text])
+                    if not pcm:
+                        # Without prepared audio this is not a cache hit: the
+                        # reply would fall back to a blocking TTS request.
+                        self.log("prediction_audio_miss", candidate_id=item.id,
+                                 text_ready_ms=text_ready_ms)
+                        return
                 if self.is_current(epoch):
                     if pcm:
                         self.prediction_audio[item.reply.text] = pcm
