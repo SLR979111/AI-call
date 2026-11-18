@@ -6,15 +6,43 @@ from collections import OrderedDict
 from contextlib import aclosing
 
 from .models import Candidate
+from .persistent_cache import PersistentCache
 
 
 class OpeningForecastCache:
-    """Share only the first-turn forecasts for identical task cards."""
+    """Share first-turn forecasts for identical task cards, across restarts."""
 
-    def __init__(self):
+    namespace = "opening"
+
+    def __init__(self, disk: PersistentCache | None = None):
+        self.disk = disk
         self.entries = OrderedDict()
+        if self.disk is not None:
+            for record in reversed(self.disk.load(
+                self.namespace, max_entries=16, max_bytes=2_000_000,
+            )):
+                parsed = self._decode(record.key, record.value)
+                if parsed is not None:
+                    self.entries[record.key] = parsed
+
+    @staticmethod
+    def _decode(key, value):
+        try:
+            payload = json.loads(value)
+            items = [Candidate.model_validate(item) for item in payload["items"]]
+            return items, bool(payload["complete"])
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def get(self, key):
+        if key not in self.entries and self.disk is not None:
+            record = self.disk.get(self.namespace, key)
+            if record is not None:
+                parsed = self._decode(key, record.value)
+                if parsed is not None:
+                    self.entries[key] = parsed
+        if len(self.entries) > 16:
+            self.entries.popitem(last=False)
         if key not in self.entries:
             return [], False
         items, complete = self.entries[key]
@@ -29,8 +57,19 @@ class OpeningForecastCache:
             return
         self.entries[key] = [item.model_copy(deep=True) for item in items], complete
         self.entries.move_to_end(key)
+        if self.disk is not None:
+            payload = json.dumps({
+                "complete": complete,
+                "items": [item.model_dump() for item in items],
+            }, ensure_ascii=False).encode("utf-8")
+            self.disk.put(
+                self.namespace, key, payload,
+                max_entries=16, max_bytes=2_000_000,
+            )
         if len(self.entries) > 16:
-            self.entries.popitem(last=False)
+            evicted, _ = self.entries.popitem(last=False)
+            if self.disk is not None:
+                self.disk.delete(self.namespace, evicted)
 
 
 async def stream_candidates(chunks, limit):

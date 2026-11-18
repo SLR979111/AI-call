@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,10 +30,13 @@ async def lifespan(app: FastAPI):
     app.state.default_card = TaskCard.model_validate_json(
         (ROOT / "tasks" / "jd-qualification.json").read_text(encoding="utf-8")
     )
-    app.state.cloud = Cloud(app.state.settings)
+    cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
+    if not cache_path.is_absolute():
+        cache_path = ROOT / cache_path
+    app.state.cloud = Cloud(app.state.settings, cache_path=cache_path)
     voice_detector_model()
     app.state.sessions = set()
-    app.state.opening_forecasts = OpeningForecastCache()
+    app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
     app.state.decision_tracker = DecisionTracker()
     app.state.performance_monitor = PerformanceMonitor()
     yield
@@ -57,14 +61,14 @@ async def config():
 @app.get("/api/cache/stats")
 async def cache_stats():
     """Return cache performance metrics."""
-    return app.state.cloud.cache_manager.report()
+    return app.state.cloud.cache_report()
 
 
 @app.get("/api/metrics")
 async def performance_metrics():
     """Return comprehensive performance and decision metrics."""
     return {
-        "cache": app.state.cloud.cache_manager.report(),
+        "cache": app.state.cloud.cache_report(),
         "decisions": app.state.decision_tracker.report(),
         "performance": app.state.performance_monitor.report(),
     }
