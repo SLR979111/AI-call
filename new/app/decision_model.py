@@ -1,0 +1,77 @@
+"""Short candidate-selection model used after the lexical rules are unsure.
+
+It only chooses a forecast id or asks for a fresh reply. It never writes a new
+reply, so the candidate text/audio pair stays intact.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+from typing import Any
+
+from .models import Candidate
+from .providers import Cloud, ProviderError
+
+SYSTEM = """你是候选回复选择器。只判断候选回复是否已经完整、直接地回答了用户本轮这句话。
+只输出一个 JSON：
+{"decision":"reuse","id":"候选id"}
+或
+{"decision":"generate"}
+不要输出新回复，不要输出解释，不要输出 Markdown。
+只有候选完整覆盖用户这句话时才 reuse；候选缺失信息、只覆盖一部分、或用户提出了新问题时输出 generate。"""
+
+
+class DecisionModel:
+    """A short, separate model request. It is deliberately last after rules."""
+
+    def __init__(self, cloud: Cloud, *, enabled: bool | None = None,
+                 timeout: float = 0.9):
+        self.cloud = cloud
+        self.timeout = timeout
+        self.enabled = (enabled if enabled is not None
+                        else os.getenv("DECISION_ENABLED", "1") != "0")
+
+    @staticmethod
+    def _payload(user_input: str, assistant_last: str, candidates: list[Candidate]) -> dict[str, Any]:
+        return {
+            "user": user_input,
+            "previous_assistant": assistant_last,
+            "candidates": [
+                {"id": c.id, "when": c.when, "examples": c.examples,
+                 "reply": c.reply.text}
+                for c in candidates
+            ],
+        }
+
+    async def decide(self, user_input: str, assistant_last: str,
+                     candidates: list[Candidate]) -> Candidate | None:
+        if not self.enabled or not candidates:
+            return None
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": json.dumps(
+                self._payload(user_input, assistant_last, candidates),
+                ensure_ascii=False)},
+        ]
+        async def run():
+            chunks = []
+            async for chunk in self.cloud.chat(messages, max_tokens=60):
+                chunks.append(chunk)
+            text = "".join(chunks).strip()
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+            if data.get("decision") != "reuse":
+                return None
+            wanted = data.get("id")
+            return next((c for c in candidates if c.id == wanted), None)
+        try:
+            return await asyncio.wait_for(run(), timeout=self.timeout)
+        except (asyncio.TimeoutError, ProviderError, OSError, ValueError):
+            return None

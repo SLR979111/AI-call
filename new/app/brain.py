@@ -11,6 +11,7 @@ from .forecast import OpeningForecastCache, has_unasked_question, likely_short_a
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
+from .decision_model import DecisionModel
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -102,8 +103,9 @@ FORECAST_BRANCHES = (
 
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
-                 *, forecast_branches: int = 5):
+                 *, forecast_branches: int = 5, decision_model: DecisionModel | None = None):
         self.cloud = cloud
+        self.decision_model = decision_model
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
@@ -188,6 +190,17 @@ class Brain:
             elif decision == "say":
                 # Context-aware rejection (generate new, ignore candidates)
                 candidates = []
+            elif decision == "llm" and self.decision_model is not None:
+                # A short, separate request selects an existing candidate. It
+                # never writes a reply, so text and prepared audio stay paired.
+                selected = await self.decision_model.decide(
+                    last_user_input, assistant_last_text, candidates)
+                if selected is not None:
+                    self.last_decision = {"kind": "reuse", "path": "decision_model",
+                                          "candidate_id": selected.id}
+                    yield "reuse", selected.reply
+                    yield "update_async", selected
+                    return
 
         # Slow path: LLM-based decision
         snapshot = self.snapshot(memory)
