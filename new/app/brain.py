@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from typing import AsyncIterator
 
-from .forecast import OpeningForecastCache, likely_short_answers, stream_candidates
+from .forecast import OpeningForecastCache, has_unasked_question, likely_short_answers, stream_candidates
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
@@ -33,6 +33,7 @@ text 里只能放真正要说出口的回复。判断意图、分析原因、选
 """
 
 POLICY = BEHAVIOR + """
+对方说还有别的问题但没有问出内容时，请对方直接讲，不继续推进原先的事项。
 输出 JSONL，每一行一个完整 JSON，不要代码围栏，不要其他文字。按下列顺序：
 1. 一或两行 say，或一行 reuse。把能独立播出的具体答复放在第一行，通常8至16字。先说结论，再用下一句解释。
 {"type":"say","text":"需要补上商标状态截图，再在原入口提交。您清楚这个要求吗？","covers":["next_step"],"question":"您清楚这个要求吗？"}
@@ -100,6 +101,8 @@ class Brain:
                 "dialogue": memory.history[-24:]}
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
+        if memory.history and has_unasked_question(memory.history[-1]["text"]):
+            candidates = []
         position = memory.interrupted_position()
         if position:
             recap, followup = position

@@ -135,6 +135,11 @@ def compatible_short_answer(key, previous, candidate):
     return True
 
 
+def has_unasked_question(text: str) -> bool:
+    return bool(re.search(r"还有(?:一个|个|一些)?(?:别的|其他|其它|另外的)?(?:问题|事)"
+                          r"|还(?:想|要)问(?:个|一个)(?:别的|其他|其它)?问题", text))
+
+
 def match_example(user: str, candidates: list[Candidate], previous: str):
     key = spoken_form(user)
     if not key or re.search(r"但是|不过|另外|还有.*问题|没听|再说一遍|不是这个意思", key):

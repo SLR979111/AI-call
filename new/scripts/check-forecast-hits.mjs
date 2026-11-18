@@ -72,6 +72,7 @@ try {
     const latency = Math.round(play.at - start);
     const row = {input, available, reused: done.reused, firstBodyPlaybackReceiptMs: latency,
       answer: units.map(u => u.text).join(''), session: inEvents.find(e => e.type === 'ready').session_id};
+    if (input.includes('别的问题')) assert.equal(row.reused, false, 'A new question needs a fresh turn');
     rows.push(row); console.log(row);
     await page.close();
   }

@@ -92,6 +92,18 @@ async def test_model_spelling_out_a_cached_line_keeps_current_turn_metadata():
     assert events[0][1].covers == ["reason"]
 
 
+async def test_unasked_followup_skips_candidates_even_when_model_would_choose_one():
+    class Cloud:
+        async def chat(self, messages, **kwargs):
+            snapshot = json.loads(messages[-1]["content"])
+            assert snapshot["candidates"] == []
+            yield '{"type":"say","text":"您说，是什么问题？"}\n{"type":"update"}\n'
+
+    memory = Memory(DEFAULT_CARD, history=[{"role": "user", "text": "没提交，我还有别的问题。"}])
+    events = [event async for event in Brain(Cloud()).respond(memory, [branch()])]
+    assert events[0][0] == "say"
+
+
 async def test_only_identical_openings_share_forecasts_across_sessions():
     class Cloud:
         calls = 0
