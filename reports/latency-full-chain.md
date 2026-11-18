@@ -157,8 +157,38 @@ LLM 轮内部分解：`reply` 字段首字节 685 ms、首个可播子句 1363 m
 - 以模板/预设为主的对话（本业务主流路径）P50 ≈ 0.34 s，**稳定 < 1 s**；
 - 若 LLM 现编轮占比超过一半，P50 会升到 1.1 s 附近，此时只能靠预生成（predictive）缓存进一步压低。
 
+## 9. 磁盘缓存（跨进程重启生效）
 
-## 9. 复现
+根链路原本没有任何 LLM/TTS 磁盘缓存（`app/` 内只有会话事件落盘）。新增 `app/cache/persistent.py`：
+
+- 键：`sha256(json(parts))`；布局 `data/cache/<ns>/<aa>/<sha256>.bin`；原子写（tmp + `os.replace`）；按 LRU 大小预算 `prune()`。
+- **LLM**（`app/llm/router.py:complete_stream`）：键含 model + messages + temperature + max_tokens + response_format。命中时按原 chunk 序列重放（`first_token`/`token`/`sentence`/`done`）并发 `CacheHit` 事件；带 tools 的请求不读也不写缓存。
+- **TTS**（`app/voice/melo.py:synthesize`）：键含 `speed|voice|sample_rate|text`，命中后把 PCM 按 20 ms 帧直出（约 1 ms）。
+- 环境变量：`DISK_CACHE`（默认开）、`DISK_CACHE_DIR`（默认 `data/cache`）、`DISK_CACHE_MAX_MB`（256）、`DISK_CACHE_AUDIO_MAX_MB`（512）。
+
+### 冷/暖对比（重启进程验证，脚本化 5 轮对话）
+
+| 轮次 | 冷启动（空缓存） | 重启后（命中磁盘缓存） |
+|---|---|---|
+| LLM 轮正式答案 | 2504.9 ms | **66.7 ms** |
+| LLM 轮首句就绪 | 2102.1 ms | **43.0 ms** |
+| 文本轮 e2e | 314.7 / 52.8 / 48.8 / 36.9 ms | **40.8 / 46.7 / 47.6 / 37.9 ms** |
+
+10 轮混合对话（缓存已热）首音频 e2e P50 **43.4 ms**（max 70.7 ms）、正式答案 P50 **41.7 ms**（max 68.8 ms）。
+
+### 对话日志整理落盘
+
+`scripts/export_conversations.py` 把两端的原始日志归一化到 `reports/conversations/`：
+
+```bash
+new/.venv/bin/python scripts/export_conversations.py
+# -> reports/conversations/{root,g2}/<session_id>.json + index.json + index.md（185 个会话）
+```
+
+每个会话记录轮次、用户文本、客服回复、以及 `e2e_ms`/`asr_final`/`llm_first_token`/`first_sentence`/`tts_first_chunk`/`downlink`/`playback` 分解；G2 侧记录 `voice_to_playback_ms` 与 `reused`。
+
+
+## 10. 复现
 
 
 ```bash
@@ -171,6 +201,13 @@ new/.venv/bin/python .tmp/latency_full_chain.py --rounds 4 --warmup 1
 new/.venv/bin/python .tmp/final_latency.py
 # 4) 分支自带套件
 cd new && .venv/bin/python -m pytest tests/test_latency.py -v -s
+# 5) 磁盘缓存冷/暖对比：先 rm -rf data/cache 跑一次，再重启服务跑一次
+rm -rf data/cache && .tmp/start_server.sh   # 冷
+new/.venv/bin/python .tmp/final_latency.py
+# Ctrl-C 后重新 .tmp/start_server.sh（暖，缓存从磁盘加载）
+new/.venv/bin/python .tmp/final_latency.py
+# 6) 整理对话日志
+new/.venv/bin/python scripts/export_conversations.py
 ```
 
-原始数据：`reports/latency-full-chain-scripted.json`、`reports/latency-full-chain-aggregate.json`。
+原始数据：`reports/latency-full-chain-scripted.json`、`reports/latency-full-chain-aggregate.json`、`reports/conversations/index.json`。

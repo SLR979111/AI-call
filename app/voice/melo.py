@@ -13,6 +13,7 @@ from app.cancel import TurnCancelled
 
 from .sherpa_asr import require_files
 from .streaming import thread_stream
+from ..cache import cache_key, tts_cache
 from .types import AudioChunk, VoiceError, mono_ms
 
 _SPOKEN_INITIALISMS = {"AI": "人工智能", "APP": "应用"}
@@ -108,6 +109,24 @@ class MeloTts:
             yield AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
             return
 
+        # Completed sentences are deterministic for a fixed speed/rate, so the
+        # decoded PCM survives a restart. A hit streams in ~1 ms instead of
+        # paying ~0.3 s of VITS inference per sentence.
+        audio_key = cache_key("melo-v1", self.speed, voice, sample_rate, text)
+        store = tts_cache()
+        cached_pcm = store.get_bytes("pcm", audio_key)
+        if cached_pcm:
+            frame_bytes = max(2, (sample_rate // 50) * 2)
+            seq = 0
+            for offset in range(0, len(cached_pcm), frame_bytes):
+                cancel.check()
+                yield AudioChunk(cached_pcm[offset:offset + frame_bytes], seq,
+                                 ts_mono_ms=mono_ms(), sample_rate=sample_rate)
+                seq += 1
+            cancel.check()
+            yield AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
+            return
+
         def produce(emit, stop):
             import numpy as np
             from scipy.signal import resample_poly
@@ -121,6 +140,7 @@ class MeloTts:
             else:
                 return
             seq = 0
+            collected = bytearray()
             try:
                 if stop.is_set():
                     return
@@ -134,6 +154,7 @@ class MeloTts:
                         factor = gcd(sample_rate, self.sample_rate)
                         samples = resample_poly(samples, sample_rate // factor, self.sample_rate // factor)
                     pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
+                    collected.extend(pcm)
                     chunk = AudioChunk(pcm, seq, ts_mono_ms=mono_ms(), sample_rate=sample_rate)
                     seq += 1
                     return int(emit(chunk))
@@ -141,6 +162,7 @@ class MeloTts:
                 self.model.generate(spoken_text, sid=0, speed=self.speed, callback=callback)
                 if not stop.is_set():
                     emit(AudioChunk(b"", seq, is_last=True, ts_mono_ms=mono_ms(), sample_rate=sample_rate))
+                    store.put_bytes("pcm", audio_key, bytes(collected))
             finally:
                 self.lock.release()
 

@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Sequence
 import httpx
 
 from ..events import EventBus
+from ..cache import cache_key, llm_cache
 
 
 @dataclass
@@ -94,6 +95,7 @@ class LLMRouter:
         self.daily_budget_cny = daily_budget_cny
         self.spent_cny = 0.0
         self.transport = transport
+        self.cache = llm_cache()
         self._failures = 0
         self._open_until = 0.0
 
@@ -286,6 +288,38 @@ class LLMRouter:
             yield StreamChunk(type="error", error={"code": "LLM_NOT_CONFIGURED", "message": "set LLM_PRIMARY_* env vars"})
             return
 
+        # A cached completion replays the exact chunk sequence the caller
+        # expects, so a repeated conversation pays no cloud round trip at all.
+        cache_key_value: str | None = None
+        if self.cache is not None and not tools:
+            cache_key_value = cache_key(
+                "llm-v1", providers[0].model, list(messages), temperature, max_tokens, response_format,
+            )
+            cached = self.cache.get_json("llm", cache_key_value)
+            if isinstance(cached, dict) and str(cached.get("text") or "").strip():
+                name = str(cached.get("provider") or providers[0].name)
+                model = str(cached.get("model") or providers[0].model)
+                text = str(cached["text"])
+                yield StreamChunk(type="first_token", latency_ms=0.0, provider=name, model=model,
+                                  usage={"cached": True})
+                buffer = ""
+                for offset in range(0, len(text), 8):
+                    piece = text[offset:offset + 8]
+                    buffer += piece
+                    yield StreamChunk(type="token", text=piece, provider=name, model=model)
+                    if self._detect_sentence_boundary(buffer):
+                        yield StreamChunk(type="sentence", text=buffer.strip(), provider=name, model=model)
+                        buffer = ""
+                if buffer.strip():
+                    yield StreamChunk(type="sentence", text=buffer.strip(), provider=name, model=model)
+                await self._emit(
+                    session_id=session_id, type="CacheHit", module="agent", turn_id=turn_id,
+                    trace_id=trace_id, payload={"store": "llm", "chars": len(text)},
+                )
+                yield StreamChunk(type="done", text=text, usage=cached.get("usage") or {},
+                                  cost_cny=0.0, provider=name, model=model)
+                return
+
         last_error: dict[str, Any] | None = None
         for index, provider in enumerate(providers):
             if index > 0 and self._open_until > time.time():
@@ -455,6 +489,14 @@ class LLMRouter:
                              "usage": usage_data, "cost_cny": round(cost, 6)},
                 )
                 
+                # Persist the completion so a repeated question is answered
+                # from disk instead of paying cloud TTFT again.
+                if self.cache is not None and cache_key_value and not tool_calls_data and accumulated_text.strip():
+                    self.cache.put_json("llm", cache_key_value, {
+                        "text": accumulated_text, "provider": provider.name,
+                        "model": provider.model, "usage": usage_data,
+                    })
+
                 # 流式结束
                 yield StreamChunk(type="done", text=accumulated_text, 
                                 usage=usage_data, cost_cny=round(cost, 6),
