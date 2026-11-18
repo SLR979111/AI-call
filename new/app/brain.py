@@ -116,6 +116,34 @@ class Brain:
         return {"task": memory.card.model_dump(), "state": memory.view(),
                 "dialogue": memory.history[-24:]}
 
+    @staticmethod
+    def _last_completed_assistant(memory: Memory) -> str:
+        """Only an utterance heard in full can anchor a short answer."""
+        for entry in reversed(memory.history[:-1]):
+            if entry.get("role") == "assistant":
+                return entry.get("text", "") if entry.get("delivery") == "complete" else ""
+        return ""
+
+    def match_reuse(self, memory: Memory, candidates: list[Candidate]) -> Candidate | None:
+        """Return the forecast the deterministic content rules confirm, if any.
+
+        This is the same gate ``respond`` uses for its fast path. Interrupted
+        turns may offer staged forecasts to the next user turn, but a model
+        decision must never resurrect them.
+        """
+        if not candidates or not memory.history:
+            return None
+        if has_unasked_question(memory.history[-1].get("text", "")):
+            return None
+        if memory.interrupted_position():
+            return None
+        if memory.history[-1].get("role") != "user":
+            return None
+        decision, selected = self.decision_engine.should_reuse(
+            memory.history[-1].get("text", ""), candidates,
+            self._last_completed_assistant(memory))
+        return selected if decision == "reuse" else None
+
     async def respond(self, memory: Memory, candidates: list[Candidate]):
         self.last_decision = None
         if memory.history and has_unasked_question(memory.history[-1]["text"]):
@@ -141,14 +169,7 @@ class Brain:
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
-
-            # Only an utterance heard in full can anchor a short answer.
-            assistant_last_text = ""
-            for entry in reversed(memory.history[:-1]):
-                if entry.get("role") == "assistant":
-                    if entry.get("delivery") == "complete":
-                        assistant_last_text = entry.get("text", "")
-                    break
+            assistant_last_text = self._last_completed_assistant(memory)
 
             decision, selected_candidate = self.decision_engine.should_reuse(
                 last_user_input, candidates, assistant_last_text

@@ -72,6 +72,12 @@ class Session:
         self.pending_update: asyncio.Task | None = None
         self.candidates: list[Candidate] = []
         self.prediction_audio: dict[str, bytes] = {}
+        # Forecasts prepared for the turn a speech onset interrupted. They are
+        # only candidates: the next user turn still has to pass the content
+        # rules, and they expire as soon as another turn starts.
+        self.staged_candidates: list[Candidate] = []
+        self.staged_audio: dict[str, bytes] = {}
+        self.staged_epoch = -1
         self.bridge_text = "嗯。"
         self.bridge_audio: bytes | None = None
         self.bridge_delay = 0.35
@@ -181,6 +187,59 @@ class Session:
     def is_current(self, epoch: int):
         return not self.closed and not self.ended and epoch == self.epoch
 
+    def _clear_staged(self):
+        self.staged_candidates = []
+        self.staged_audio = {}
+        self.staged_epoch = -1
+
+    def _stage_predictions(self, epoch: int) -> bool:
+        """Keep forecasts that were ready for the turn a speech onset interrupted.
+
+        A speech onset consumes the turn before its transcript arrives. The
+        prepared replies and PCM are still valid for the immediately following
+        user turn, but only the deterministic content rules may select them.
+        """
+        if self.prediction_epoch != epoch or not self.candidates:
+            return False
+        if self.voice:
+            candidates = [c for c in self.candidates
+                          if c.reply.text in self.prediction_audio]
+            audio = {c.reply.text: self.prediction_audio[c.reply.text]
+                     for c in candidates}
+        else:
+            candidates = list(self.candidates)
+            audio = {}
+        if not candidates:
+            return False
+        self.staged_candidates = candidates
+        self.staged_audio = audio
+        self.staged_epoch = epoch
+        self.log("predictions_staged", interrupted_epoch=epoch, candidates=len(candidates),
+                 audio_bytes=sum(len(pcm) for pcm in audio.values()))
+        return True
+
+    def _take_staged(self):
+        """Consume forecasts only for the turn that immediately follows them."""
+        if not self.staged_candidates or self.staged_epoch != self.epoch - 1:
+            self._clear_staged()
+            return None
+        candidates, audio = self.staged_candidates, self.staged_audio
+        self._clear_staged()
+        return candidates, audio
+
+    def _confirmed_staged(self, candidates: list[Candidate]) -> Candidate | None:
+        """Reuse a staged forecast only when the content rules select it."""
+        if not candidates:
+            return None
+        matcher = getattr(self.brain, "match_reuse", None)
+        if matcher is None:
+            return None
+        try:
+            return matcher(self.memory, candidates)
+        except Exception as exc:
+            self.log("staged_reuse_error", error=type(exc).__name__)
+            return None
+
     async def user_text(self, text: str, *, source: str = "text", end_ms: float | None = None):
         text = text.strip()
         if not text or self.closed or self.ended:
@@ -190,6 +249,13 @@ class Session:
         usable = (self.reply_completed and self.prediction_epoch == self.epoch)
         candidates = list(self.candidates) if usable else []
         audio = dict(self.prediction_audio) if usable else {}
+        staged = None
+        if usable:
+            self._clear_staged()
+        else:
+            # A speech onset cleared the live slot; the forecasts it interrupted
+            # may still answer this next user turn.
+            staged = self._take_staged()
         self.prediction_audio.clear()
         await self.interrupt("new_input")
         if self.forecast and not self.forecast.done():
@@ -203,10 +269,28 @@ class Session:
         self.units = {}
         self.reply_completed = False
         self.memory.history.append({"role": "user", "text": text})
+        staged_reuse = False
+        if not usable and staged is not None:
+            staged_candidates, staged_audio = staged
+            if self.voice:
+                staged_candidates = [c for c in staged_candidates
+                                     if c.reply.text in staged_audio]
+            confirmed = self._confirmed_staged(staged_candidates)
+            if confirmed is not None:
+                candidates = [confirmed]
+                audio = ({confirmed.reply.text: staged_audio[confirmed.reply.text]}
+                         if self.voice else {})
+                staged_reuse = True
+                self.log("predictions_reused_after_interrupt", candidate_id=confirmed.id)
+            else:
+                candidates, audio = [], {}
+                self.log("predictions_dropped_after_interrupt",
+                         candidates=len(staged_candidates))
         self._begin_turn(source)
         self.turn_metrics.update(last_voice_client_ms=end_ms,
-                                 candidates_available=len(candidates))
-        self.log("user", text=text, source=source)
+                                 candidates_available=len(candidates),
+                                 staged_reuse=staged_reuse)
+        self.log("user", text=text, source=source, staged_reuse=staged_reuse)
         await self.send({"type": "transcript", "text": text, "final": True, "epoch": self.epoch})
         if self.is_current(epoch):
             self.starting = False
@@ -226,6 +310,14 @@ class Session:
             self.performance_monitor.mark_interrupt()
         
         old_epoch = self.epoch
+        # Barge-in is the one interrupt that can still serve the next user
+        # turn with already prepared replies. Any other reason discards them,
+        # and the staged set never survives a second turn boundary.
+        if reason == "speech":
+            staged = self._stage_predictions(old_epoch)
+        else:
+            self._clear_staged()
+            staged = False
         self.epoch += 1
         if self.response:
             self.response.cancel()
@@ -249,8 +341,10 @@ class Session:
         self.phase = "listening"
         self.turn_metrics["interrupted"] = True
         self.log("interrupted", cancelled_epoch=old_epoch, reason=reason,
-                 evidence=evidence, cutoff=[u.entry.copy() for u in self.units.values()
-                                            if u.entry.get("delivery") == "partial"],
+                 evidence=evidence, staged=staged,
+                 staged_candidates=len(self.staged_candidates),
+                 cutoff=[u.entry.copy() for u in self.units.values()
+                         if u.entry.get("delivery") == "partial"],
                  **{k: v for k, v in self.turn_metrics.items() if k != "started"})
         self._finish_turn(completed=False)
         await self.send({"type": "cancel", "epoch": old_epoch, "reason": reason})
@@ -575,13 +669,16 @@ class Session:
                 if hangup and not ends_with_goodbye(last_reply.text):
                     await say(Say(text="再见。"))
             await queue.put(None)
-            # Forecast the next user reply while this response is playing. It
-            # only becomes eligible after ALL of these units finish playback.
+            # Forecast the next user reply while this response is playing. The
+            # reuse path's state update is still in flight, so the forecast
+            # gets a private copy and merges that update before snapshotting;
+            # playback is never blocked. Eligibility still requires complete
+            # playback (see user_text).
             if self.predictions and self.memory.status == "active":
-                snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
-                snapshot["opening"] = opening
-                snapshot["pending_reply"] = [u.say.model_dump() for u in current_units]
-                self.forecast = self.spawn(self._predict(epoch, snapshot))
+                base = copy.deepcopy(self.memory)
+                self.forecast = self.spawn(self._forecast(
+                    epoch, opening, pending_update, base, user, before,
+                    [u.say.model_dump() for u in current_units]))
             await output
             if self.is_current(epoch):
                 self.reply_completed = all(unit.delivered for unit in current_units)
@@ -663,6 +760,39 @@ class Session:
         except Exception as exc:
             self.log("bridge_unavailable", error=type(exc).__name__)
 
+    async def _forecast(self, epoch: int, opening: bool, pending_update: asyncio.Task | None,
+                        base: Memory, user: str, before: set[str], pending_reply: list[dict]):
+        """Snapshot the next-turn forecast after this turn's state update lands.
+
+        A reused reply starts playing before the model produces the update for
+        that same user turn. Waiting here (in the forecast task, never in the
+        playback path) and merging the update into a private copy keeps the
+        snapshot in order without delaying audio. Live memory is still only
+        committed after playback, and the update is never applied twice.
+        """
+        merged = False
+        if pending_update is not None:
+            try:
+                update = await pending_update
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.log("prediction_update_error", error=type(exc).__name__)
+            else:
+                if not self.is_current(epoch):
+                    return
+                base.apply(update, user, epoch, before)
+                merged = True
+        if not self.is_current(epoch):
+            return
+        snapshot = copy.deepcopy(self.brain.snapshot(base))
+        snapshot["opening"] = opening
+        snapshot["pending_reply"] = pending_reply
+        self.log("prediction_snapshot", state_update=merged,
+                 questions=len(base.questions), facts=len(base.facts),
+                 status=base.status, delivered=len(base.delivered))
+        await self._predict(epoch, snapshot)
+
     async def _predict(self, epoch: int, snapshot: dict):
         started = time.perf_counter()
         try:
@@ -743,5 +873,6 @@ class Session:
         self._finish_turn(completed=False)
         self.candidates.clear()
         self.prediction_audio.clear()
+        self._clear_staged()
         self.bridge_audio = None
         self.log("closed")
