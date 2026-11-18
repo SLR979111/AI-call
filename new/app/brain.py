@@ -102,7 +102,7 @@ FORECAST_BRANCHES = (
 
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
-                 *, forecast_branches: int = 3):
+                 *, forecast_branches: int = 5):
         self.cloud = cloud
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))

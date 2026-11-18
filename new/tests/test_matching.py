@@ -362,7 +362,7 @@ async def test_forecast_branches_run_concurrently():
             yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
 
     cloud = Cloud()
-    result = await Brain(cloud).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
+    result = await Brain(cloud, forecast_branches=3).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
     assert cloud.calls == 3
     assert len(result) == 3
     assert len({c.id for c in result}) == 3
@@ -387,7 +387,7 @@ async def test_fast_forecast_is_available_before_slow_branches():
             yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
 
     cloud = Cloud()
-    batches = Brain(cloud).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
+    batches = Brain(cloud, forecast_branches=3).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
     first = await asyncio.wait_for(anext(batches), 1)
     assert len(first) == 1
     await batches.aclose()
