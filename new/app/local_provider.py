@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import numpy as np
+import soxr
 
 from .forecast import match_example
 from .local_asr import install_model, model_dir
@@ -16,25 +17,37 @@ from .providers import Cloud, ProviderError, Settings
 from .speech_start import first_sound
 from .voice_preview import first_clause
 
-VOICE = "vits-piper-zh_CN-huayan-medium"
+VOICE = "vits-melo-tts-zh_en"
 MODEL = "qwen2.5:7b-instruct"
-VOICE_FILES = ("zh_CN-huayan-medium.onnx", "zh_CN-huayan-medium.onnx.json", "MODEL_CARD")
+PRONUNCIATION_RULES = ("phone.fst", "date.fst", "number.fst", "new_heteronym.fst")
+VOICE_FILES = ("model.onnx", "lexicon.txt", "tokens.txt", "LICENSE", *PRONUNCIATION_RULES,
+               "dict/jieba.dict.utf8", "dict/hmm_model.utf8", "dict/user.dict.utf8",
+               "dict/idf.utf8", "dict/stop_words.utf8", "dict/pos_dict/char_state_tab.utf8",
+               "dict/pos_dict/prob_emit.utf8", "dict/pos_dict/prob_start.utf8", "dict/pos_dict/prob_trans.utf8")
 INSTALL_HELP = "请先安装 Ollama 并运行 scripts/setup-local.ps1，然后重试。"
 
 
 def install_voice():
     install_model("tts", VOICE, "tts-models",
-                  "dbdfec42b91d9cee31cce9ff4b3e9c305eb6fbf60546d071f7e46273554cce6b",
+                  "e58351ed7149f290a54534538badd4077cdbe6fddc964b24d0bee870415d1514",
                   VOICE_FILES)
 
 
 def load_voice():
-    from piper import PiperVoice
+    import sherpa_onnx
 
     root = model_dir("tts", VOICE)
     if not all((root / name).is_file() for name in VOICE_FILES):
-        raise ProviderError("尚未安装本地中文音色。" + INSTALL_HELP)
-    return PiperVoice.load(root / VOICE_FILES[0])
+        raise ProviderError("尚未安装 MeloTTS 本地中文音色。" + INSTALL_HELP)
+    model = sherpa_onnx.OfflineTtsVitsModelConfig(
+        model=str(root / "model.onnx"), tokens=str(root / "tokens.txt"),
+        lexicon=str(root / "lexicon.txt"), dict_dir=str(root / "dict"),
+    )
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=sherpa_onnx.OfflineTtsModelConfig(vits=model, num_threads=8),
+        rule_fsts=",".join(str(root / name) for name in PRONUNCIATION_RULES),
+    )
+    return sherpa_onnx.OfflineTts(config)
 
 
 class LocalProvider(Cloud):
@@ -179,14 +192,12 @@ class LocalProvider(Cloud):
         return await self.recognizer.transcribe(pcm)
 
     def render(self, text):
-        pieces = []
-        for chunk in self.engine.synthesize(text):
-            samples = np.frombuffer(chunk.audio_int16_bytes, dtype="<i2")
-            times = np.arange(round(len(samples) * 24000 / chunk.sample_rate)) * (chunk.sample_rate / 24000)
-            pieces.append(np.interp(times, np.arange(len(samples)), samples).astype("<i2").tobytes())
-        pcm = b"".join(pieces)
-        if not pcm:
+        audio = self.engine.generate(text, sid=0, speed=1.0)
+        samples = np.asarray(audio.samples, dtype=np.float32)
+        if not samples.size:
             raise ProviderError("本地合成未返回语音。")
+        samples = soxr.resample(samples, audio.sample_rate, 24000)
+        pcm = np.rint(np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
         return pcm[first_sound(pcm) or 0:]
 
     async def speech(self, text):

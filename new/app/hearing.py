@@ -223,10 +223,14 @@ class Hearing:
                         self.defer_to = 360
                     elif text.strip().endswith(("？", "?")):
                         self.defer_to = 480
-                if text.strip() and text != self.partial_text:
+                # An earlier partial may already contain the complete wording.
+                # The decode covering the final voiced frame can still start synthesis.
+                local = getattr(self.cloud, "is_local", False)
+                changed = text != self.partial_text
+                if self.on_draft and decoded_at == self.voiced_end and text.strip() and (local or changed):
+                    self.on_draft(text, origin="local" if local else "cloud")
+                if text.strip() and changed:
                     self.partial_text = text
-                    if self.on_draft and decoded_at == self.voiced_end:
-                        self.on_draft(text, origin="cloud")
                     await self.on_partial(text)
             return text
         self.decode = self.spawn(decode())

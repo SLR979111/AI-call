@@ -101,9 +101,9 @@ npm run test:browser
 
 ### 切换云端或纯本地通话
 
-打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、Piper 的华妍中文音色朗读。两种模式各自保存预测与音频缓存。
+打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、MeloTTS 的普通话女声朗读。两种模式各自保存预测与音频缓存。
 
-首次使用纯本地时，先安装并启动 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen2.5:7b-instruct) · [华妍音色](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
+首次使用纯本地或从旧版华妍音色升级时，先启动已安装的 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen2.5:7b-instruct) · [MeloTTS 中文音色](https://huggingface.co/myshell-ai/MeloTTS-Chinese)
 
 ```powershell
 .\scripts\setup-local.ps1

@@ -40,16 +40,19 @@ def install_model(kind, model, release, checksum, files):
         with archive.open("rb") as src:
             if hashlib.file_digest(src, "sha256").hexdigest() != checksum:
                 raise ValueError("Model checksum mismatch")
-        with tarfile.open(archive) as tar:
-            for name in files:
-                entry = tar.getmember(f"{model}/{name}")
-                if not entry.isfile():
-                    raise ValueError("Invalid model file")
-                with tar.extractfile(entry) as src, (Path(temp) / name).open("wb") as out:
-                    shutil.copyfileobj(src, out)
-        target.mkdir(exist_ok=True)
+        # Some models keep their pronunciation dictionaries in nested directories.
+        required = {f"{model}/{name}" for name in files}
+        with tarfile.open(archive, "r|bz2") as tar:
+            for entry in tar:
+                if entry.isfile() and entry.name in required:
+                    tar.extract(entry, path=temp, filter="data")
+        staging = Path(temp) / model
+        if not all((staging / name).is_file() for name in files):
+            raise ValueError("Incomplete model archive")
         for name in files:
-            (Path(temp) / name).replace(target / name)
+            dest = target / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            (staging / name).replace(dest)
 
 
 class FirstPassASR:
