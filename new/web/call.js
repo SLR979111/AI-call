@@ -6,6 +6,15 @@ const view = new LiveConversation($('transcript'), $('viewport'));
 let task, defaultTask, socket, context, player, mic, voice = false, connected = false, epoch = 0;
 let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false, replyActive = false;
 let composing = false, editorTask;
+let mode = localStorage.getItem('g2-call-mode') === 'local' ? 'local' : 'cloud';
+let cloudConfigured = true;
+$('callMode').value = mode;
+$('callMode').onchange = () => {
+  if (connected || inputInFlight) { $('callMode').value = mode; return; }
+  mode = $('callMode').value;
+  localStorage.setItem('g2-call-mode', mode);
+  clearError();
+};
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
 function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
@@ -52,6 +61,9 @@ function showText(value) {
 }
 async function start(useVoice) {
   if (connected || inputInFlight || !task) return;
+  if (mode === 'cloud' && !cloudConfigured) {
+    showError('云端模式需要 API 凭据。可在任务设置中切换到纯本地。'); return;
+  }
   inputInFlight = true; clearError();
   notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
   $('startVoice').disabled = $('startText').disabled = true;
@@ -83,7 +95,7 @@ async function start(useVoice) {
     $('startControls').hidden = true; $('callControls').hidden = false;
     $('mute').hidden = !voice;
     $('mute').setAttribute('aria-label', '暂停麦克风'); $('mute').title = '暂停麦克风'; $('mute').setAttribute('aria-pressed', 'false');
-    $('prediction').disabled = true; $('saveTask').disabled = true; $('restoreTask').disabled = true;
+    $('callMode').disabled = true; $('prediction').disabled = true; $('saveTask').disabled = true; $('restoreTask').disabled = true;
     for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = true;
     $('connection').textContent = '已连接';
     const startedAt = performance.now();
@@ -91,7 +103,7 @@ async function start(useVoice) {
       const seconds = Math.floor((performance.now() - startedAt) / 1000);
       $('duration').textContent = Math.floor(seconds / 60).toString().padStart(2, '0') + ':' + (seconds % 60).toString().padStart(2, '0');
     }, 1000);
-    send({type: 'start', task, voice, audio_protocol: 2, predictions: $('prediction').checked});
+    send({type: 'start', task, voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
     notice();
     showText(!voice);
   } catch (error) {
@@ -156,7 +168,7 @@ async function cleanup(label = '对话已结束，可以重新开始') {
   const oldSocket = socket; socket = null;
   if (oldSocket && oldSocket.readyState < WebSocket.CLOSING) { oldSocket.onclose = null; oldSocket.close(); }
   $('startControls').hidden = false; $('callControls').hidden = true; $('textForm').hidden = true;
-  $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = false;
+  $('callMode').disabled = false; $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = false;
   for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = false;
   $('connection').textContent = '未连接'; $('phase').textContent = label;
   notice(label);
@@ -227,5 +239,5 @@ try {
   if (!task?.checkpoints?.length || !task.goal || !task.opening) task = config.default_task;
   $('prediction').checked = config.predictions; renderTask();
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
-  if (!config.configured) showError('服务尚未配置 API 凭据，请在本地 .env 中填写后重启。');
+  cloudConfigured = config.configured;
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }

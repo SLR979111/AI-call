@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -14,6 +15,8 @@ from typing import AsyncIterator
 
 import httpx
 from dotenv import load_dotenv
+
+from .speech_start import first_sound, spoken_prefix
 
 from .enhanced_cache import EnhancedCacheManager
 
@@ -166,6 +169,7 @@ class Cloud:
             return
         collected = bytearray()
         pending = bytearray()
+        onset_found = False
         async with self.client.stream(
             "POST", self.settings.base_url + "/v1/tools/tts", headers=self.headers,
             json={"text": text, "voice_id": self.settings.voice, "format": "pcm"},
@@ -182,6 +186,7 @@ class Cloud:
                         raise ValueError()
                 except (ValueError, TypeError) as exc:
                     raise ProviderError("语音合成没有返回 PCM 音频") from exc
+                pcm = pcm[first_sound(pcm) or 0:]
                 self.remember(text, pcm)
                 for offset in range(0, len(pcm), 1920):
                     yield pcm[offset:offset + 1920]
@@ -194,6 +199,12 @@ class Cloud:
                     raise ProviderError("语音合成返回了错误数据")
                 if len(collected) + len(pending) > 4_800_000:
                     raise ProviderError("单句音频超出长度限制")
+                if not onset_found:
+                    start = first_sound(pending)
+                    if start is None:
+                        continue
+                    del pending[:start]
+                    onset_found = True
                 while len(pending) >= 1920:
                     chunk = bytes(pending[:1920])
                     del pending[:1920]
@@ -209,9 +220,22 @@ class Cloud:
         self.remember(text, bytes(collected))
 
     async def prefetch(self, text: str) -> bytes:
-        # Return ownership to the forecast even if the shared LRU rejects or
-        # later evicts this sentence. A ready candidate must retain its audio.
-        return b"".join([chunk async for chunk in self.speech(text)])
+        cached = self.cached(text)
+        if cached is not None:
+            return cached
+
+        async def render(part):
+            return b"".join([chunk async for chunk in self.speech(part)])
+
+        prefix = spoken_prefix(text)
+        if not prefix or prefix == text:
+            return await render(text)
+        async with asyncio.TaskGroup() as group:
+            first = group.create_task(render(prefix))
+            rest = group.create_task(render(text[len(prefix):]))
+        pcm = first.result() + rest.result()
+        self.remember(text, pcm)
+        return pcm
 
     async def close(self):
         if self.owns_client:

@@ -47,3 +47,8 @@ dialog .prediction-option { display: flex; gap: 9px; align-items: center; }
 .save-task:hover { background: #fff; color: #111; }
 @media (max-width: 600px) { .controls { width: calc(100% - 40px); padding-top: 4px; } .button-group { gap: 7px; } dialog { padding: 18px 20px; } }
 @media (max-height: 500px) { .controls { padding-bottom: 6px; } }
+
+#callMode {
+  width: 100%; padding: .55rem .7rem; border: 1px solid currentColor;
+  border-radius: .5rem; background: Canvas; color: CanvasText; font: inherit;
+}

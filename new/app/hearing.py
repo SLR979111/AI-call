@@ -24,8 +24,14 @@ class Hearing:
                  on_partial: Callable[[str], Awaitable],
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
-                 detector=None):
+                 detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None):
         self.cloud = cloud
+        self.first_pass, self.on_draft = first_pass, on_draft
+        self.lead_started = False
+        self.on_lead = on_lead
+        self.discard_draft = discard_draft
+        self.draft_job = None
+        self.draft_at = -1
         self.on_start, self.on_text = on_start, on_text
         self.on_partial, self.on_error = on_partial, on_error
         self.is_playing = is_playing
@@ -159,15 +165,41 @@ class Hearing:
             # partial results during continuous speech. Sample ~700 ms apart.
             if (self.voiced_end >= 22400 and self.voiced_end - self.decode_at >= 22400
                     and (not self.decode or self.decode.done())):
+                if self.on_lead and not self.lead_started:
+                    self.request_first_pass(for_lead=True)
                 self.request_decode()
         else:
             self.quiet += 20
             # Overlap recognition of the complete clip with the endpoint wait.
             # A slow partial for an older clip must not hold up the final ASR.
-            if self.quiet >= 160 and self.decode_at != self.voiced_end:
+            if self.quiet >= 40 and self.draft_at != self.voiced_end:
+                self.request_first_pass()
+            if self.quiet >= 80 and self.decode_at != self.voiced_end:
                 self.request_decode()
             if self.quiet >= self.defer_to and (not self.finalizer or self.finalizer.done()):
                 self.finalizer = self.spawn(self.finish(self.voice_tick, self.last_client_ms))
+
+    def request_first_pass(self, *, for_lead=False):
+        if not for_lead:
+            self.draft_at = self.voiced_end
+        if not self.first_pass or not self.on_draft:
+            return
+        audio = bytes(self.buffer[:self.voiced_end])
+        utterance_id = self.utterance_id
+        decoded_at = self.voiced_end
+
+        async def first_pass():
+            text = await self.first_pass.transcribe(audio)
+            if (text and self.active and self.utterance_id == utterance_id
+                    and self.partial_at < decoded_at and not self.closed):
+                if for_lead:
+                    self.lead_started = self.on_lead(text)
+                else:
+                    self.on_draft(text)
+
+        if self.draft_job and not self.draft_job.done():
+            self.draft_job.cancel()
+        self.draft_job = self.spawn(first_pass())
 
     def request_decode(self):
         if self.decode and not self.decode.done():
@@ -190,6 +222,8 @@ class Hearing:
                         self.defer_to = 480
                 if text.strip() and text != self.partial_text:
                     self.partial_text = text
+                    if self.on_draft and decoded_at == self.voiced_end:
+                        self.on_draft(text, origin="cloud")
                     await self.on_partial(text)
             return text
         self.decode = self.spawn(decode())
@@ -204,7 +238,7 @@ class Hearing:
             if text.rstrip("，。！？,.!? ").endswith(("但是", "然后", "因为", "如果", "我想", "那个")) and self.quiet < 1150:
                 self.defer_to = 1150
                 return
-            self.reset()
+            self.reset(discard_draft=not bool(text.strip()))
             if text.strip():
                 await self.on_text(text, client_ms)
             else:
@@ -216,13 +250,16 @@ class Hearing:
                 self.reset()
                 await self.on_error("这次语音识别未完成，请重说或使用文字输入。")
 
-    def reset(self):
+    def reset(self, *, discard_draft=True):
+        if discard_draft and self.discard_draft:
+            self.discard_draft()
         current = asyncio.current_task()
-        for job in (self.decode, self.finalizer):
+        for job in (self.decode, self.finalizer, self.draft_job):
             if job and job is not current and not job.done():
                 job.cancel()
         self.decode = self.finalizer = None
-        self.decode_at = -1
+        self.draft_at = self.decode_at = -1
+        self.lead_started = False
         self.active = False
         self.buffer.clear()
         self.preroll.clear()

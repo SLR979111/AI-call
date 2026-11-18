@@ -113,6 +113,38 @@ class Memory:
     status: str = "active"
     history: list[dict] = field(default_factory=list)
 
+    def delivered_covers(self, line: Say):
+        covers = list(line.covers)
+        if line.question or re.search(r"[？?]", line.text):
+            return covers
+        spoken = line.text.strip().rstrip("。！!.")
+        for point in self.card.checkpoints:
+            statement = re.sub(r"^(?:说明|告知|告诉对方)", "", point.description.strip()).rstrip("。！!.")
+            if len(statement) >= 4 and statement == spoken and point.id not in covers:
+                covers.append(point.id)
+        return covers
+
+    def requested_replay(self):
+        if not self.history or self.history[-1]["role"] != "user":
+            return []
+        request = re.sub(r"[\s，,。.!！?？]", "", self.history[-1]["text"])
+        # Replay only an explicit, standalone request. For a correction, a
+        # follow-up or an interrupted unit the regular response needs context.
+        if not re.fullmatch(r"(?:不好意思|抱歉)?(?:我?(?:刚才|刚刚)?没听清(?:楚)?)?"
+                            r"(?:请|麻烦)?(?:您|你)?(?:再说|再讲|重说|重复)(?:一遍|一下)(?:吧|好吗)?", request):
+            return []
+        lines = []
+        for entry in reversed(self.history[:-1]):
+            if entry["role"] == "user":
+                break
+            if entry.get("filler") or entry.get("bridge"):
+                continue
+            if entry.get("delivery") != "complete" or entry.get("remaining_text"):
+                return []
+            text = entry["text"]
+            lines.append(Say(text=text, question=self.last_question if self.last_question in text else ""))
+        return list(reversed(lines))
+
     def interrupted_position(self) -> tuple[str, str] | None:
         """Answer an explicit cutoff question from playback, preserving any follow-up."""
         if not self.history or self.history[-1]["role"] != "user":
