@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import AsyncIterator
 
+from .forecast import OpeningForecastCache, has_unasked_question, likely_short_answers, stream_candidates
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
@@ -26,13 +28,14 @@ text 里只能放真正要说出口的回复。判断意图、分析原因、选
 已经回答的信息不机械重问。用户问哪里/怎么做而任务卡没有具体信息时如实说明，不虚构网址、入口、查询结果。不要把“某个官方渠道”“办理业务的平台”等猜测说成确定的来源；例如任务卡没给截图获取方式，就明确说“我这里没有截图获取方式的信息”。
 没有外部操作能力：不声称已登记、已安排、正在转人工、已发送或已完成任何现实操作。可以理解意愿、解释信息和结束对话。
 用户说材料已改好或已提交，只能作为对方提供的情况回应，例如“那您先等这次申请的新提示”。没有实际审核证据，不把“不一定是假”说成“这份授权本身没问题”，不把“您说已补好”说成“材料都齐了/已经核实/审核没问题”。
-delivery=partial 的助手内容未完整播出，不能当作已告知；delivery=unplayed 的内容用户没听到。确认完成只依据 state.delivered 和本轮用户明确的理解确认。
+打断后的历史里，text 是按播放时长估计已说出的前半句，remaining_text 是原计划中剩下的部分。对方问说到哪里时，指出刚讲到的意思。让你继续时，从断点附近的完整短语自然接下去。delivery=partial 不计为完整告知，unplayed 表示尚未播放。所有必要内容此前已经说完、对方确认理解且没有新问题时，主动简短道别，无需对方先说再见。
 “嗯”“好的”不等于听懂。用户仍有疑问时不结束任务。用户忙则简短暂停（例如“那我们先暂停，您方便时再继续”），不追问回电时间，不许诺稍后再次联系；明确拒绝则礼貌结束。
 """
 
 POLICY = BEHAVIOR + """
+对方说还有别的问题但没有问出内容时，请对方直接讲，不继续推进原先的事项。
 输出 JSONL，每一行一个完整 JSON，不要代码围栏，不要其他文字。按下列顺序：
-1. 一或两行 say，或一行 reuse。尽快输出第一行，不要先输出分析。
+1. 一或两行 say，或一行 reuse。把能独立播出的具体答复放在第一行，通常8至16字。先说结论，再用下一句解释。
 {"type":"say","text":"需要补上商标状态截图，再在原入口提交。您清楚这个要求吗？","covers":["next_step"],"question":"您清楚这个要求吗？"}
 {"type":"reuse","id":"候选ID"}
 候选回复完整适用于当前整句用户输入、没有遗漏额外问题和限制时，优先 reuse；不要为了同义改写而 say。候选已覆盖的问题不算“额外问题”，例如确认方便并追问缺什么，可以复用直接解释所缺材料的候选。不合适就直接 say，绝不强行选候选。reuse 与 say 不混用。
@@ -50,9 +53,10 @@ FORECAST = BEHAVIOR + """
 为这个目标对话准备2条最可能用上的简短回复。结合任务卡和刚刚计划播出的回复，预测用户下一句。
 只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。
 两条候选是针对不同用户回答的替代方案，每条都能独立使用，不是先说第一条再接第二条的连续台词。
+examples 写一到两种用户可能实际说出口的完整短句，每句必须独立满足 when 的全部条件。纯承接不能代表材料已准备或已提交。把最可能的分支写在数组第一项。
 每个 when 要说明完整适用条件和不能忽略的限制。候选只帮助提速，不要穷举意图。
 when 是内部适用条件，reply.text 是直接对人说的话，两者必须分开。reply.text 遵守上面的口语要求，不得带入“先确认/记下/判断用户”等准备过程；不要为了让候选通用而写空泛的流程旁白。
-只输出一个 JSON：{"candidates":[{"id":"c1","when":"用户...，且没有...","reply":{"text":"...","covers":[],"question":"..."}}]}。
+只输出一个 JSON：{"candidates":[{"id":"c1","when":"用户...，且没有...","examples":["用户原话"],"reply":{"text":"...","covers":[],"question":"..."}}]}。
 covers 只能使用本句实际说明的任务卡 checkpoint id。question 必须逐字摘自text中实际的问句，没有提问就为空。总共最多2条，每条text不超过100字。
 """
 
@@ -86,8 +90,9 @@ async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
 
 
 class Brain:
-    def __init__(self, cloud: Cloud):
+    def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None):
         self.cloud = cloud
+        self.opening_forecasts = opening_forecasts
         self.decision_engine = ContextAwareDecisionEngine()
 
     @staticmethod
@@ -96,6 +101,19 @@ class Brain:
                 "dialogue": memory.history[-24:]}
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
+        if memory.history and has_unasked_question(memory.history[-1]["text"]):
+            candidates = []
+        position = memory.interrupted_position()
+        if position:
+            recap, followup = position
+            # The session appends emitted speech to the live history. Use a
+            # separate prompt for the remaining question without changing it.
+            previous = memory.history[:-1]
+            yield "say", Say(text=recap)
+            if not followup:
+                return
+            memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
+            candidates = []
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
@@ -147,9 +165,10 @@ class Brain:
                 if say.question not in say.text:
                     say.question = ""
                 say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
+                prepared = said == 0 and any(c.reply.text == say.text for c in candidates)
                 said += 1
                 asked = bool(say.question)
-                yield "say", say
+                yield "reuse" if prepared else "say", say
             elif kind == "reuse" and said == 0:
                 match = next((c for c in candidates if c.id == event.get("id")), None)
                 if match is None:
@@ -169,6 +188,15 @@ class Brain:
         return [item async for batch in self.predict_batches(snapshot) for item in batch]
 
     async def predict_batches(self, snapshot: dict) -> AsyncIterator[list[Candidate]]:
+        key = None
+        generated = []
+        if self.opening_forecasts is not None and snapshot.get("opening"):
+            key = json.dumps(snapshot["task"], sort_keys=True, ensure_ascii=False)
+            generated, complete = self.opening_forecasts.get(key)
+            if generated:
+                yield list(generated)
+            if complete:
+                return
         # Separate requests keep common acknowledgements from competing with
         # specific questions for the same two forecast slots.
         branches = (
@@ -178,12 +206,15 @@ class Brain:
             "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）以及结束意愿。",
         )
 
+        queue = asyncio.Queue()
+        valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
+
         async def forecast_branch(index: int, instruction: str):
             branch_snapshot = dict(snapshot)
             if index == 0:
                 # Anchor the generic branch to actual short utterances instead
                 # of letting all requests invent the same specific new facts.
-                branch_snapshot["forecast_user_inputs"] = ["好的。", "是的。"]
+                branch_snapshot["forecast_user_inputs"] = likely_short_answers(snapshot)
                 instruction += (
                     "本分支只为 forecast_user_inputs 各生成一条回复。"
                     "when 必须明确包含对应的用户原话；不要附加用户没有说出的事实。"
@@ -192,37 +223,46 @@ class Brain:
                 )
             messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
                         {"role": "user", "content": json.dumps(branch_snapshot, ensure_ascii=False)}]
-            text = "".join([part async for part in self.cloud.chat(messages, max_tokens=450)])
-            text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            data = json.loads(text)
-            batch = [Candidate.model_validate(item) for item in data["candidates"][:2]]
-            for number, item in enumerate(batch):
-                item.id = f"p{index}_{number}"
-            return batch
-
-        tasks = [asyncio.create_task(forecast_branch(i, instruction))
-                 for i, instruction in enumerate(branches)]
-        emitted = False
-        error = None
-        valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
-        try:
-            for task in asyncio.as_completed(tasks):
-                try:
-                    items = await task
-                except Exception as exc:
-                    error = exc
-                    continue
-                for item in items:
+            try:
+                number = 0
+                async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600), 2):
+                    item.id = f"p{index}_{number}"
+                    number += 1
                     item.reply.covers = [p for p in item.reply.covers if p in valid_points]
                     if item.reply.question not in item.reply.text:
                         item.reply.question = ""
-                if items:
+                    queue.put_nowait(item)
+            except Exception as exc:
+                queue.put_nowait(exc)
+            finally:
+                queue.put_nowait(None)
+
+        tasks = [asyncio.create_task(forecast_branch(i, instruction))
+                 for i, instruction in enumerate(branches)]
+        remaining = len(tasks)
+        emitted = False
+        error = None
+        try:
+            while remaining:
+                item = await queue.get()
+                if item is None:
+                    remaining -= 1
+                elif isinstance(item, Exception):
+                    error = item
+                else:
                     emitted = True
-                    yield items
+                    if any(c.id == item.id for c in generated):
+                        continue
+                    generated.append(item)
+                    if key:
+                        self.opening_forecasts.store(key, generated, complete=False)
+                    yield [item]
             if not emitted:
-                if error is not None:
+                if error:
                     raise error
-                raise ProviderError("所有预测分支均失败")
+                raise ProviderError("所有预测分支均未产生候选")
+            if key and not error:
+                self.opening_forecasts.store(key, generated, complete=True)
         finally:
             for task in tasks:
                 if not task.done():

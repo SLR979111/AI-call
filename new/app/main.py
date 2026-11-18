@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .brain import Brain
+from .forecast import OpeningForecastCache
 from .hearing import Hearing
 from .models import TaskCard
 from .providers import Cloud, Settings
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     app.state.cloud = Cloud(app.state.settings)
     voice_detector_model()
     app.state.sessions = set()
+    app.state.opening_forecasts = OpeningForecastCache()
     app.state.decision_tracker = DecisionTracker()
     app.state.performance_monitor = PerformanceMonitor()
     yield
@@ -45,7 +47,10 @@ app = FastAPI(title="AI Call G2", lifespan=lifespan)
 @app.get("/api/config")
 async def config():
     settings = app.state.settings
+    legacy = [TaskCard.model_validate_json((ROOT / "tasks" / name).read_text(encoding="utf-8")).model_dump()
+              for name in ("home-broadband-support.json", "legacy/jd-qualification-v1.json", "legacy/jd-qualification-v2.json")]
     return {"configured": bool(settings.api_key), "model": settings.model,
+            "legacy_default_tasks": legacy, "legacy_default_task": legacy[0],
             "predictions": settings.predictions, "default_task": app.state.default_card.model_dump()}
 
 
@@ -125,12 +130,13 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
-                    session = Session(card, cloud, Brain(cloud), send,
+                    session = Session(card, cloud, Brain(cloud, app.state.opening_forecasts), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
                                       decision_tracker=app.state.decision_tracker,
-                                      performance_monitor=app.state.performance_monitor)
+                                      performance_monitor=app.state.performance_monitor,
+                                      on_hangup=lambda: ws.close(code=1000, reason="conversation ended"))
                     app.state.sessions.add(session)
                     if session.voice:
                         hearing = Hearing(cloud,
@@ -153,8 +159,8 @@ async def websocket(ws: WebSocket):
                             # cleaned audio + VAD in Hearing, never raw volume.
                             continue
                         epoch = int(event.get("epoch", -1))
-                        for progress in event.get("progress", [])[:2]:
-                            await session.playback_progress(epoch, int(progress["unit"]), int(progress["samples"]))
+                        for progress in event.get("progress", [])[:4]:
+                            await session.playback_progress(epoch, int(progress["unit"]), int(progress["samples"]), done=True)
                         source = event.get("source")
                         reason = {"manual": "manual", "text": "text_input"}[source]
                         raw_evidence = event.get("evidence")
@@ -192,3 +198,5 @@ async def websocket(ws: WebSocket):
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
+app.mount("/web", StaticFiles(directory=ROOT / "web"), name="preview-assets")
+app.mount("/demo", StaticFiles(directory=ROOT / "demo", html=True), name="demo")

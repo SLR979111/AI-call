@@ -11,14 +11,12 @@ export class Player {
     this.blocked = new Set();
     this.units = new Map();
     this.nextAt = 0;
-    this.firstReported = false;
     this.timer = setInterval(() => this.report(), 70);
   }
   begin(epoch) {
     if (epoch < this.epoch || this.blocked.has(epoch)) return;
     this.stop();
     this.epoch = epoch;
-    this.firstReported = false;
   }
   unit(event) {
     if (event.epoch !== this.epoch || this.blocked.has(event.epoch)) return;
@@ -101,11 +99,12 @@ export class Player {
 }
 
 export class Microphone {
-  constructor(context, socket, onError, playbackNode) {
+  constructor(context, socket, onError, playbackNode, onLevel = () => {}) {
     this.context = context;
     this.socket = socket;
     this.onError = onError;
     this.playbackNode = playbackNode;
+    this.onLevel = onLevel;
     this.seq = 0;
     this.muted = false;
   }
@@ -142,6 +141,8 @@ export class Microphone {
     await ready;
   }
   frame(frame) {
+    this.onLevel({active: !this.muted && !!frame.speech && !frame.warming,
+      level: this.muted ? 0 : Math.min(1, Math.sqrt(Math.max(0, frame.clean_rms || 0)) * 3)});
     if (this.socket.readyState !== WebSocket.OPEN) return;
     const pcm = frame.pcm;
     const samples = new Int16Array(pcm);

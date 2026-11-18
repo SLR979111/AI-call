@@ -1,7 +1,7 @@
-"""Audio-only endpointing plus cancellable speculative whole-clip ASR.
+"""Continuous partial transcripts over a clip-based ASR, with separate endpointing.
 
-The connected ASR accepts WAV clips, not streaming frames. A short pause starts
-recognition early; resumed speech invalidates that result and keeps the audio.
+One bounded request runs at a time. Genuine partial results may arrive while
+speech continues; only the final endpoint can commit a user turn.
 """
 
 from __future__ import annotations
@@ -42,6 +42,9 @@ class Hearing:
         self.raw_floor = .003
         self.voiced_end = 0
         self.voice_tick = 0
+        self.utterance_id = 0
+        self.partial_at = -1
+        self.partial_text = ""
         self.last_client_ms = 0.
         self.last_seq: int | None = None
         self.decode: asyncio.Task | None = None
@@ -126,6 +129,7 @@ class Hearing:
             self.quiet = 0
             self.voiced_end = len(self.buffer)
             self.voice_tick += 1
+            self.utterance_id += 1
             self.last_client_ms = client_ms
             self.last_onset = {"rms": round(rms, 5), "threshold": round(threshold, 5),
                                "attack_ms": self.attack, "playback": playback,
@@ -151,13 +155,16 @@ class Hearing:
             # A resumed utterance cancels endpoint commitment, not its earlier audio.
             if self.finalizer and not self.finalizer.done():
                 self.finalizer.cancel()
-            # Long utterances get an early rough transcript. This is speculative
-            # and never becomes an accepted user turn without final endpointing.
-            if self.voiced_end > 64000 and self.voiced_end - self.decode_at > 64000:
+            # Don't cancel every live request as new frames arrive: that starves
+            # partial results during continuous speech. Sample ~700 ms apart.
+            if (self.voiced_end >= 22400 and self.voiced_end - self.decode_at >= 22400
+                    and (not self.decode or self.decode.done())):
                 self.request_decode()
         else:
             self.quiet += 20
-            if self.quiet >= 240 and self.decode_at != self.voiced_end:
+            # Overlap recognition of the complete clip with the endpoint wait.
+            # A slow partial for an older clip must not hold up the final ASR.
+            if self.quiet >= 160 and self.decode_at != self.voiced_end:
                 self.request_decode()
             if self.quiet >= self.defer_to and (not self.finalizer or self.finalizer.done()):
                 self.finalizer = self.spawn(self.finish(self.voice_tick, self.last_client_ms))
@@ -167,17 +174,23 @@ class Hearing:
             self.decode.cancel()
         self.decode_at = self.voiced_end
         audio = bytes(self.buffer[:self.voiced_end])
-        tick = self.voice_tick
+        utterance_id = self.utterance_id
+        decoded_at = self.decode_at
 
         async def decode():
             text = await self.cloud.transcribe(audio)
-            if self.active and tick == self.voice_tick:
-                # Only complete, common short answers get the lower endpoint.
-                # Resumed speech still invalidates this decode and resets it.
-                normalized = re.sub(r"[\s，。！？,.!?]", "", text)
-                if re.fullmatch(r"(?:是的|对的|好的|没错|明白了|知道了|可以|没有了|谢谢|再见)+", normalized):
-                    self.defer_to = 360
-                await self.on_partial(text)
+            if (self.active and not self.closed and utterance_id == self.utterance_id
+                    and decoded_at > self.partial_at):
+                self.partial_at = decoded_at
+                if decoded_at == self.voiced_end:
+                    normalized = re.sub(r"[\s，。！？,.!?]", "", text)
+                    if re.fullmatch(r"(?:是的|对的|好的|没错|明白了|知道了|可以|没有了|谢谢|再见)+", normalized):
+                        self.defer_to = 360
+                    elif text.strip().endswith(("？", "?")):
+                        self.defer_to = 480
+                if text.strip() and text != self.partial_text:
+                    self.partial_text = text
+                    await self.on_partial(text)
             return text
         self.decode = self.spawn(decode())
 
@@ -217,6 +230,9 @@ class Hearing:
         self.attack = self.quiet = self.voiced_end = 0
         self.defer_to = 680
         self.voice_tick += 1
+        self.utterance_id += 1
+        self.partial_at = -1
+        self.partial_text = ""
 
     async def close(self):
         self.closed = True

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from .forecast import compatible_short_answer, match_example, spoken_form
 from .models import Candidate
 
 
@@ -124,7 +125,15 @@ class ContextAwareDecisionEngine:
         if not candidates or not user_input.strip():
             return "llm", None
 
-        utterance = self._normalize(user_input)
+        key = spoken_form(user_input)
+        candidates = [c for c in candidates if compatible_short_answer(key, assistant_last_text, c)]
+        example = match_example(user_input, candidates, assistant_last_text)
+        if example is not None:
+            return "reuse", example
+        # Keep an unpredicted question or correction out of the lexical rules.
+        if EXTRA.search(user_input):
+            return "llm", None
+        utterance = self._normalize(key)
         # Parallel forecasts often repeat the same answer intent. Exact short
         # answers can select among equivalent branches without a model roundtrip.
         explicit = (
