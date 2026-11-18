@@ -90,11 +90,23 @@ class LocalProvider(Cloud):
         if model is Say:
             # Keep task instructions out of the caller's role. A small local
             # model must distinguish actual statements from conditional examples.
-            grounding = {"task": context["task"], "state": context["state"]}
+            task = context["task"]
+            facts = task["facts"]
+            sections = [instruction, "任务：" + task["goal"],
+                        "检查项：" + json.dumps(task["checkpoints"], ensure_ascii=False),
+                        "会话进度：" + json.dumps(context["state"], ensure_ascii=False),
+                        "任务原文：\n" + facts,
+                        "请按已知记录回答。除非用户明确变更情况，否则沿用记录中已经发生的情况。"]
+            # Some cards explicitly label their current facts alongside hypothetical guidance.
+            # Keep that source visible near the caller's turn without assuming a card format.
+            current = [line for line in facts.splitlines()
+                       if line.lstrip().startswith(("【这次", "【已知", "【当前", "【目前", "【现状", "【已有", "【现有", "【本次"))]
+            if current:
+                sections.append("对方尚未报告变更时，采用以下现状作为起点：\n" + "\n".join(current))
             cutoffs = [e for e in context["dialogue"][-8:] if "remaining_text" in e]
             if cutoffs:
-                grounding["打断记录"] = cutoffs
-            messages[0]["content"] += "\n参考资料：" + json.dumps(grounding, ensure_ascii=False)
+                sections.append("打断记录：" + json.dumps(cutoffs, ensure_ascii=False))
+            messages[0]["content"] = "\n".join(sections)
             for entry in context["dialogue"]:
                 if entry.get("delivery") == "unplayed" or entry.get("filler") or entry.get("bridge"):
                     continue
