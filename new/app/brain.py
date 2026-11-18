@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from typing import AsyncIterator
 
+from .voice_preview import first_clause as pending_speech_clause
 from .forecast import OpeningForecastCache, has_unasked_question, likely_short_answers, stream_candidates
 from .models import Candidate, Memory, Say, Update
 from .providers import Cloud, ProviderError
@@ -33,12 +34,13 @@ text 里只能放真正要说出口的回复。判断意图、分析原因、选
 """
 
 POLICY = BEHAVIOR + """
+前缀 live_lead_ 的候选是本轮语音中提前准备的首句，必须结合完整原话核对相关性和事实。适用时先 reuse 该首句，并用一句 say 补答余下内容。不合适就直接 say。
 对方说还有别的问题但没有问出内容时，请对方直接讲，不继续推进原先的事项。
 输出 JSONL，每一行一个完整 JSON，不要代码围栏，不要其他文字。按下列顺序：
 1. 一或两行 say，或一行 reuse。把能独立播出的具体答复放在第一行，通常8至16字。先说结论，再用下一句解释。
-{"type":"say","text":"需要补上商标状态截图，再在原入口提交。您清楚这个要求吗？","covers":["next_step"],"question":"您清楚这个要求吗？"}
+{"type":"say","text":"缺一张商标状态截图。","covers":["reason"]}
 {"type":"reuse","id":"候选ID"}
-候选回复完整适用于当前整句用户输入、没有遗漏额外问题和限制时，优先 reuse；不要为了同义改写而 say。候选已覆盖的问题不算“额外问题”，例如确认方便并追问缺什么，可以复用直接解释所缺材料的候选。不合适就直接 say，绝不强行选候选。reuse 与 say 不混用。
+候选回复完整适用于当前整句用户输入、没有遗漏额外问题和限制时，优先 reuse；不要为了同义改写而 say。候选已覆盖的问题不算“额外问题”，例如确认方便并追问缺什么，可以复用直接解释所缺材料的候选。不合适就直接 say，绝不强行选候选。除 live_lead_ 开头的候选外，完整预测回复与 say 不混用。
 covers 只能使用任务卡中本句实际完整说明的 checkpoint id，不能把提问、承诺以后解释或一句含糊的“材料有问题”标记为覆盖。一项包含多个要求时，必须全部说明才能覆盖，提到其中一部分不算。question 必须是 text 中实际问出口的完整问句原文；没有问句就留空，禁止写下一轮才打算问的问题。
 2. 最后一行 update：
 {"type":"update","facts":[{"name":"沟通意愿","value":"方便","quote":"现在方便"}],"questions":[],"confirmation":"","disposition":"active","disposition_quote":""}
@@ -61,12 +63,19 @@ covers 只能使用本句实际说明的任务卡 checkpoint id。question 必�
 """
 
 
-async def json_lines(chunks: AsyncIterator[str]) -> AsyncIterator[dict]:
+async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncIterator[dict]:
     buffer = ""
     async for chunk in chunks:
         buffer += chunk
         if len(buffer) > 10000:
             raise ProviderError("模型输出过长")
+        if on_first_clause:
+            clause = pending_speech_clause(buffer)
+            if clause:
+                on_first_clause(clause)
+                on_first_clause = None
+            elif "\n" in buffer:
+                on_first_clause = None
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             line = line.strip()
@@ -100,7 +109,12 @@ class Brain:
         return {"task": memory.card.model_dump(), "state": memory.view(),
                 "dialogue": memory.history[-24:]}
 
-    async def respond(self, memory: Memory, candidates: list[Candidate]):
+    async def respond(self, memory: Memory, candidates: list[Candidate], *, on_first_clause=None):
+        replay = memory.requested_replay()
+        if replay:
+            for line in replay:
+                yield "say", line
+            return
         if memory.history and has_unasked_question(memory.history[-1]["text"]):
             candidates = []
         position = memory.interrupted_position()
@@ -114,6 +128,10 @@ class Brain:
                 return
             memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
             candidates = []
+        if getattr(self.cloud, "is_local", False):
+            async for event in self.cloud.respond_local(self.snapshot(memory), candidates, on_first_clause):
+                yield event
+            return
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
@@ -127,7 +145,7 @@ class Brain:
                     break
 
             decision, selected_candidate = self.decision_engine.should_reuse(
-                last_user_input, candidates, assistant_last_text
+                last_user_input, [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))], assistant_last_text
             )
             
             if decision == "reuse":
@@ -149,14 +167,15 @@ class Brain:
         
         # Slow path: LLM-based decision
         snapshot = self.snapshot(memory)
-        snapshot["candidates"] = [item.model_dump() for item in candidates]
+        snapshot["candidates"] = [{"id": item.id, "when": item.when, "reply": {"text": item.reply.text}}
+                                  for item in candidates]
         messages = [{"role": "system", "content": POLICY},
                     {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
         said = 0
         updated = False
         asked = False
         reused = False
-        async for event in json_lines(self.cloud.chat(messages)):
+        async for event in json_lines(self.cloud.chat(messages), on_first_clause):
             kind = event.get("type")
             if updated:
                 raise ProviderError("模型在状态更新后继续输出")
@@ -174,7 +193,8 @@ class Brain:
                 if match is None:
                     raise ProviderError("模型选择了已失效的预测")
                 said = 1
-                reused = True
+                reused = not match.id.startswith("live_lead_")
+                asked = bool(match.reply.question)
                 yield "reuse", match.reply
             elif kind == "update" and said:
                 updated = True
@@ -197,6 +217,14 @@ class Brain:
                 yield list(generated)
             if complete:
                 return
+        elif self.opening_forecasts is not None and not getattr(self.cloud, "is_local", False):
+            # These task-only facts remain eligible on later turns. Fresh history
+            # and the complete new utterance still govern the model's choice.
+            task_key = json.dumps(snapshot["task"], sort_keys=True, ensure_ascii=False)
+            stored, _ = self.opening_forecasts.get(task_key)
+            topics = [item for item in stored if item.id.startswith("topic_")]
+            if topics:
+                yield topics
         # Separate requests keep common acknowledgements from competing with
         # specific questions for the same two forecast slots.
         branches = (
@@ -205,6 +233,17 @@ class Brain:
             "优先覆盖当前话题的具体追问和选择（第一项、怎么补、哪份）。",
             "优先覆盖用户报告的新情况（已准备、已改好、直接授权、已提交）以及结束意愿。",
         )
+
+        if getattr(self.cloud, "is_local", False):
+            branches = branches[:1]
+        elif snapshot.get("opening"):
+            # Prime two independent FAQ answers per request on the first call.
+            # OpeningForecastCache keys every fact and checkpoint in the task.
+            topics = [point["description"] for point in snapshot["task"]["checkpoints"]]
+            for offset in range(0, len(topics), 2):
+                selected = "、".join(topics[offset:offset + 2])
+                branches += (f"每个指定事项各预测一个来电者会直接问的具体问题：{selected}。"
+                             "每条只用一句具体事实或操作直接答全那个问题，尽量25字以内；不加反问。",)
 
         queue = asyncio.Queue()
         valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
@@ -226,7 +265,7 @@ class Brain:
             try:
                 number = 0
                 async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600), 2):
-                    item.id = f"p{index}_{number}"
+                    item.id = f"topic_{index}_{number}" if index >= 3 else f"p{index}_{number}"
                     number += 1
                     item.reply.covers = [p for p in item.reply.covers if p in valid_points]
                     if item.reply.question not in item.reply.text:

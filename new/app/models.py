@@ -76,7 +76,7 @@ class Candidate(BaseModel):
 
 def farewell_only(text: str) -> bool:
     text = re.sub(r"[\s，,。.!！?？；;]", "", text).lower()
-    return bool(re.fullmatch(r"(?:好的?|嗯+|呃|哦|那|就|先这样|再见|拜拜|拜|我?先?挂了|谢谢您?|ok|吧|啊|呀|了)+", text))
+    return bool(re.fullmatch(r"(?:好的?|行|嗯+|呃|哦|那|就|先这样|再见|拜拜|拜|我?先?挂了|谢谢您?|ok|吧|啊|呀|了)+", text))
 
 
 def wants_to_end(text: str) -> bool:
@@ -84,10 +84,14 @@ def wants_to_end(text: str) -> bool:
     if re.search(r"(?:别|不要|不用|先不|不想|不能)挂|(?:别|不要)结束|还有.{0,5}问题|还没说完"
                  r"|什么意思|怎么理解|(?:你|您)(?:刚才?|刚刚)?说(?:的)?", text):
         return False
+    if re.fullmatch(r"(?:好的?|嗯|明白了|知道了|谢谢您?)?[，,。\s]*(?:那就?|就)?先这样[吧了]?[，,。\s]*"
+                    r"(?:再见|拜拜)[。！!\s]*", text.strip()):
+        return True
     return bool(re.search(
         r"(?:别|不要|不用|不必)(?:再|继续)?(?:说|讲|聊)了?"
         r"|(?:不想|不愿意|不方便)(?:再|继续)?(?:说|聊)"
         r"|(?:我先|我得|我要|那我|我就)(?:挂了|挂电话|挂断)"
+        r"|(?:^|[，,。！!])\s*先挂了[，,。\s]*(?:谢谢您?|再见|拜拜)?[。！!\s]*$"
         r"|(?:请|麻烦)(?:您|你)?(?:直接|现在|就)?挂(?:断|掉)?(?:电话|通话)?"
         r"|(?:直接|现在|就)挂(?:断|掉)?(?:电话|通话)"
         r"|怎么(?:还)?不挂(?:断)?(?:电话|通话)"
@@ -112,6 +116,38 @@ class Memory:
     last_question: str = ""
     status: str = "active"
     history: list[dict] = field(default_factory=list)
+
+    def delivered_covers(self, line: Say):
+        covers = list(line.covers)
+        if line.question or re.search(r"[？?]", line.text):
+            return covers
+        spoken = line.text.strip().rstrip("。！!.")
+        for point in self.card.checkpoints:
+            statement = re.sub(r"^(?:说明|告知|告诉对方)", "", point.description.strip()).rstrip("。！!.")
+            if len(statement) >= 4 and statement == spoken and point.id not in covers:
+                covers.append(point.id)
+        return covers
+
+    def requested_replay(self):
+        if not self.history or self.history[-1]["role"] != "user":
+            return []
+        request = re.sub(r"[\s，,。.!！?？]", "", self.history[-1]["text"])
+        # Replay only an explicit, standalone request. For a correction, a
+        # follow-up or an interrupted unit the regular response needs context.
+        if not re.fullmatch(r"(?:不好意思|抱歉)?(?:我?(?:刚才|刚刚)?没听清(?:楚)?)?"
+                            r"(?:请|麻烦)?(?:您|你)?(?:再说|再讲|重说|重复)(?:一遍|一下)(?:吧|好吗)?", request):
+            return []
+        lines = []
+        for entry in reversed(self.history[:-1]):
+            if entry["role"] == "user":
+                break
+            if entry.get("filler") or entry.get("bridge"):
+                continue
+            if entry.get("delivery") != "complete" or entry.get("remaining_text"):
+                return []
+            text = entry["text"]
+            lines.append(Say(text=text, question=self.last_question if self.last_question in text else ""))
+        return list(reversed(lines))
 
     def interrupted_position(self) -> tuple[str, str] | None:
         """Answer an explicit cutoff question from playback, preserving any follow-up."""
@@ -142,25 +178,39 @@ class Memory:
         return recap, user[match.end():].lstrip("，,。.!！?？ ")
 
     def ready_to_say_goodbye(self, user: str, last_reply: Say) -> bool:
-        # Even a valid confirmation can be followed by a new request to keep talking.
-        return (self.status == "complete" and not self.questions
-                and not re.search(r"[？?]|(?:别|不要|先不)挂|还(?:想|要)问|还有(?:个|一个)?问题", user)
-                and not last_reply.question and not last_reply.text.rstrip().endswith(("？", "?")))
+        # A spoken closing and business completion are independent. ASR can
+        # omit punctuation, so also check for a follow-up or a request to stay.
+        if (last_reply.question or re.search(r"[？?]", last_reply.text)
+                or re.search(r"[？?]|(?:别|不要|先不)挂|还没说完|等一下|还(?:想|要)问|还有(?:个|一个)?问题", user)):
+            return False
+        goodbye = ends_with_goodbye(last_reply.text)
+        if goodbye and ends_with_goodbye(user):
+            return True
+        if self.questions or (self.status != "complete" and not goodbye):
+            return False
+        # Without punctuation a question can still look like a statement to ASR.
+        return not re.search(r"(?:^|[，,。]\s*)(?:那|请问|我想问|还要问)?(?:怎么|如何|找谁|多久|哪里|哪份)"
+                             r"|(?:找谁|多久|哪里|哪份|吗|怎么办)[呀啊呢]?[。！!\s]*$", user)
 
     def closing_reason(self, user: str) -> str:
         # Ending a call and completing its business objective are separate.
         # In particular, a second goodbye must not depend on checkpoint credit.
         if wants_to_end(user):
             return "requested"
-        if not farewell_only(user):
+        if not farewell_only(user) or re.search(r"[？?]", user):
             return ""
         index = next((i for i in range(len(self.history) - 1, -1, -1)
                       if self.history[i]["role"] == "user"), len(self.history))
         previous = self.history[:index]
-        assistant = next((entry for entry in reversed(previous)
-                          if entry["role"] == "assistant" and entry.get("delivery") == "complete"), {})
-        if re.search(r"再见|拜拜", assistant.get("text", "")):
-            return "goodbye_acknowledged"
+        assistant = previous[-1] if previous and previous[-1]["role"] == "assistant" else {}
+        if assistant.get("delivery") == "complete" and not assistant.get("bridge") and not assistant.get("filler"):
+            if ends_with_goodbye(assistant["text"]):
+                return "goodbye_acknowledged"
+            if (not self.questions and not self.last_question and not re.search(r"[？?]", assistant["text"])
+                    and all(point.id in self.delivered for point in self.card.checkpoints)
+                    and (ends_with_goodbye(user) or
+                         re.fullmatch(r"[嗯哦啊，,。！!\s]*(?:好(?:的|了)?|谢谢您?|行)[，,。！!\s]*", user))):
+                return "instructions_acknowledged"
         has_goodbye = bool(re.search(r"再见|拜拜|先这样|挂了", user))
         if not has_goodbye:
             return ""

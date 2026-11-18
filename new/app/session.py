@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
 from .brain import Brain
-from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye, farewell_only
+from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
 from .silent_logger import silent_log
 
@@ -74,6 +75,8 @@ class Session:
         self.bridge_text = "嗯。"
         self.bridge_audio: bytes | None = None
         self.bridge_delay = 0.35
+        self.preview = None
+        self.leads = []
         self.prediction_epoch = -1
         self.reply_completed = False
         self.starting = False
@@ -133,25 +136,76 @@ class Session:
             self.starting = False
             if self.voice:
                 self.spawn(self._warm_bridge())
+                self.spawn(self.cloud.prefetch("好，再见。"))
             self.response = self.spawn(self._run(epoch, opening=True))
 
     def is_current(self, epoch: int):
         return not self.closed and not self.ended and epoch == self.epoch
+
+    def prepare_lead(self, partial):
+        key = transcript_key(partial)
+        if self.closed or self.ended or not self.predictions or len(self.leads) >= 2:
+            return True
+        if len(key) >= 5 and (not self.leads or len(key) >= len(self.leads[-1].prefix) + 5):
+            lead = PredictedLead(partial, len(self.leads))
+            self.leads.append(lead)
+            snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
+            lead.task = self.spawn(lead.prepare(self.cloud, snapshot, partial))
+        return len(self.leads) >= 2
+
+    def voice_candidates(self, text):
+        candidates = list(self.candidates) if self.reply_completed and self.prediction_epoch == self.epoch else []
+        candidates.extend(lead.candidate for lead in self.leads if lead.matches(text))
+        return candidates
+
+    def discard_voice(self):
+        self.take_preview()
+        for lead in self.leads:
+            lead.task.cancel()
+        self.leads = []
+
+    def prepare_voice(self, text, origin="local"):
+        if not text or self.closed or self.ended or not self.voice:
+            return
+        state = self.brain.snapshot(self.memory)
+        if self.preview and same_transcript(self.preview.text, text) and self.preview.state == state:
+            return
+        self.take_preview()
+        memory = copy.deepcopy(self.memory)
+        memory.history.append({"role": "user", "text": text})
+        if memory.closing_reason(text):
+            return
+        candidates = self.voice_candidates(text)
+        preview = VoicePreview(text, copy.deepcopy(state), origin=origin)
+        preview.task = self.spawn(preview.prepare(self.brain, self.cloud, memory, candidates, list(self.leads)))
+        self.preview = preview
+
+    def take_preview(self, text=""):
+        preview, self.preview = self.preview, None
+        if preview:
+            if (text and same_transcript(preview.text, text)
+                    and preview.state == self.brain.snapshot(self.memory)):
+                return preview
+            preview.task.cancel()
+        return None
 
     async def user_text(self, text: str, *, source: str = "text", end_ms: float | None = None):
         text = text.strip()
         if not text or self.closed or self.ended:
             return
         text = text[:2000]
+        preview = self.take_preview(text if source == "voice" else "")
         
         # Start performance tracking
         if self.performance_monitor:
             self.performance_monitor.start_turn(f"{self.id}-{self.epoch + 1}")
         
         usable = (self.reply_completed and self.prediction_epoch == self.epoch)
-        candidates = list(self.candidates) if usable else []
+        candidates = self.voice_candidates(text) if source == "voice" else (list(self.candidates) if usable else [])
         audio = dict(self.prediction_audio) if usable else {}
         self.prediction_audio.clear()
+        leads = [lead for lead in self.leads if source == "voice" and lead.matches(text)]
+        self.leads = [lead for lead in self.leads if lead not in leads]
         await self.interrupt("new_input")
         if self.forecast and not self.forecast.done():
             self.forecast.cancel()
@@ -166,12 +220,14 @@ class Session:
         self.memory.history.append({"role": "user", "text": text})
         self.turn_metrics = {"input_source": source, "started": time.perf_counter(),
                              "last_voice_client_ms": end_ms, "candidates_available": len(candidates),
+                             "draft_source": preview.origin if preview else None,
+                             "draft_lead_ms": round((time.monotonic() - preview.started) * 1000) if preview else 0,
                              "reused": False}
         self.log("user", text=text, source=source)
         await self.send({"type": "transcript", "text": text, "final": True, "epoch": self.epoch})
         if self.is_current(epoch):
             self.starting = False
-            self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio))
+            self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio, preview=preview, leads=leads))
 
     async def interrupt(self, reason: str, *, expected_epoch: int | None = None,
                         evidence: dict | None = None):
@@ -179,6 +235,9 @@ class Session:
             return
         if expected_epoch is not None and expected_epoch != self.epoch:
             return
+        self.discard_voice()
+        if reason == "speech" and getattr(self.cloud, "is_local", False) and self.forecast:
+            self.forecast.cancel()  # Reserve the local GPU for this caller's turn.
         if (not self.response or self.response.done()) and not self.starting:
             return
         
@@ -230,6 +289,7 @@ class Session:
         unit.delivered = True
         unit.entry["delivery"] = "complete"
         unit.entry.pop("played_ms", None)
+        unit.say.covers = self.memory.delivered_covers(unit.say)
         self.memory.delivered.update(unit.say.covers)
         self.memory.last_question = unit.say.question
         unit.finished.set()
@@ -258,7 +318,7 @@ class Session:
                          "voice_to_answer_ms": self.turn_metrics.get("voice_to_answer_ms"),
                          "input_source": self.turn_metrics.get("input_source", "opening")})
 
-    async def _synthesize(self, unit: Unit, pcm: bytes | None = None):
+    async def _synthesize(self, unit: Unit, pcm: bytes | None = None, preview=None):
         cached = pcm if pcm is not None else getattr(self.cloud, "cached", lambda _: None)(unit.say.text)
         if cached:
             unit.duration_samples = len(cached) // 2
@@ -268,7 +328,8 @@ class Session:
                 for offset in range(0, len(cached), 1920):
                     yield cached[offset:offset + 1920]
             else:
-                async for chunk in self.cloud.speech(unit.say.text):
+                source = preview.audio(lambda: self.cloud.speech(unit.say.text)) if preview else self.cloud.speech(unit.say.text)
+                async for chunk in source:
                     yield chunk
 
         try:
@@ -336,9 +397,10 @@ class Session:
 
     async def _run(self, epoch: int, *, opening: bool = False, user: str = "",
                    candidates: list[Candidate] | None = None,
-                   audio: dict[str, bytes] | None = None):
+                   audio: dict[str, bytes] | None = None, preview=None, leads=()):
         queue: asyncio.Queue = asyncio.Queue(maxsize=5)
-        children: list[asyncio.Task] = []
+        children: list[asyncio.Task] = [preview.task] if preview else []
+        children.extend(lead.task for lead in leads)
         output = self.spawn(self._output(epoch, queue))
         children.append(output)
         before = set(self.memory.delivered)
@@ -357,7 +419,10 @@ class Session:
                 self.turn_metrics["bridge_used"] = True
                 await say(Say(text=self.bridge_text), bridge_pcm=self.bridge_audio)
 
+        preview_audio_claimed = False
+
         async def say(line: Say, *, bridge_pcm: bytes | None = None, candidate_id: str | None = None):
+            nonlocal preview_audio_claimed
             if not self.is_current(epoch):
                 raise asyncio.CancelledError()
             entry = {"role": "assistant", "text": line.text, "delivery": "unplayed"}
@@ -375,7 +440,10 @@ class Session:
                     self.turn_metrics["prediction_audio_bytes"] = len(pcm) if pcm else 0
                 self.log("audio_source", unit=unit.number, source=source,
                          audio_bytes=len(pcm) if pcm else 0)
-                children.append(self.spawn(self._synthesize(unit, pcm)))
+                prepared = preview if preview and not preview_audio_claimed and preview.first_text == line.text else None
+                if prepared:
+                    preview_audio_claimed = True
+                children.append(self.spawn(self._synthesize(unit, pcm, prepared)))
             await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
                              "text": line.text, "rate": 24000, "candidate_id": candidate_id,
                              "filler": bridge_pcm is not None})
@@ -397,7 +465,10 @@ class Session:
             else:
                 if self.voice and self.bridge_audio:
                     children.append(self.spawn(bridge()))
-                async for kind, value in self.brain.respond(self.memory, candidates or []):
+                def respond():
+                    return self.brain.respond(self.memory, candidates or [])
+                events = preview.events(respond) if preview else respond()
+                async for kind, value in events:
                     if not self.is_current(epoch):
                         return
                     if output.done() and output.exception():
@@ -428,21 +499,19 @@ class Session:
                         candidate_id = next((c.id for c in candidates or [] if c.reply.text == value.text), None) if kind == "reuse" else None
                         await say(value, candidate_id=candidate_id)
                     else:
+                        if preview and preview.text != user:
+                            value = restore_quotes(value, preview.text, user)
                         self.memory.apply(value, user, epoch, before)
                         await self.state()
                 last_reply = current_units[-1].say
                 hangup = (self.memory.ready_to_say_goodbye(user, last_reply)
                           or self.memory.status in {"paused", "declined"})
-                if ends_with_goodbye(user) and not farewell_only(user) and ends_with_goodbye(last_reply.text):
-                    if self.memory.status == "active":
-                        self.memory.status = "paused"
-                    hangup = True
                 if hangup and not ends_with_goodbye(last_reply.text):
                     await say(Say(text="再见。"))
             await queue.put(None)
             # Forecast the next user reply while this response is playing. It
             # only becomes eligible after ALL of these units finish playback.
-            if self.predictions and self.memory.status == "active":
+            if self.predictions and not hangup and self.memory.status == "active":
                 snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
                 snapshot["opening"] = opening
                 snapshot["pending_reply"] = [u.say.model_dump() for u in current_units]
@@ -465,8 +534,13 @@ class Session:
                                  "reused": self.turn_metrics.get("reused", False)})
                 await self.state()
                 if hangup and self.reply_completed and self.is_current(epoch):
+                    if self.memory.status == "active":
+                        self.memory.status = "paused"
                     self.ended = True
                     self.phase = "ended"
+                    self.candidates = []
+                    self.prediction_epoch = -1
+                    await self.state()
                     await self.send({"type": "hangup", "epoch": epoch, "reason": self.memory.status})
                     if self.on_hangup:
                         await self.on_hangup()
@@ -510,6 +584,13 @@ class Session:
         except Exception as exc:
             self.log("bridge_unavailable", error=type(exc).__name__)
 
+    async def prefetch_forecast(self, text):
+        slots = getattr(self.cloud, "forecast_slots", None)
+        if slots is None:
+            return await self.cloud.prefetch(text)
+        async with slots:
+            return await self.cloud.prefetch(text)
+
     async def _predict(self, epoch: int, snapshot: dict):
         started = time.perf_counter()
         try:
@@ -524,7 +605,7 @@ class Session:
                 if self.voice:
                     text = item.reply.text
                     if text not in audio_tasks:
-                        audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
+                        audio_tasks[text] = asyncio.create_task(self.prefetch_forecast(text))
                     pcm = await asyncio.shield(audio_tasks[text])
                 if self.is_current(epoch):
                     if pcm:

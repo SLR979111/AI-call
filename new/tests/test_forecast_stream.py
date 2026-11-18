@@ -122,9 +122,10 @@ async def test_only_identical_openings_share_forecasts_across_sessions():
     second[0].reply.text = "变更"
     assert (await Brain(cloud, cache).predict(snapshot)) == baseline
     await Brain(cloud, cache).predict({**snapshot, "opening": False})
-    assert cloud.calls == first_calls * 2
+    after_followup = cloud.calls
+    assert after_followup == first_calls + 3  # Only the opening primes task topics.
     await Brain(cloud, cache).predict({**snapshot, "task": {**snapshot["task"], "facts": "改用新的提交入口"}})
-    assert cloud.calls == first_calls * 3
+    assert cloud.calls == after_followup + first_calls
 
 
 def test_interrupted_warmup_keeps_validated_items_and_can_be_completed():
