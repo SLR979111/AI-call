@@ -351,6 +351,7 @@ web/rtc/             浏览器通话台
 | [docs/28](docs/28-current-architecture.md) | 当前两套链路、分支与端口 |
 | [docs/29](docs/29-ticket-guidance.md) | 工单到电话指导文件 |
 | [docs/30](docs/30-jd-compliance-and-call-script.md) | 京东商家资质合规与电话话术依据 |
+| [docs/31](docs/31-cache-audit-backfill.md) | 缓存审计日志与回填 |
 | [docs/24](docs/24-formal-mainline-regression.md) | 正式 8081 回归与回滚 |
 | [docs/17](docs/17-competition-selfcheck.md) | 比赛自检与合规基线 |
 | [docs/03](docs/03-interface-contract-v0.1.md) | 接口契约 |

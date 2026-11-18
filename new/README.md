@@ -71,6 +71,8 @@ Copy-Item .env.example .env
 
 没有业务查询、登记、工单、转接、操作系统工具、RAG、数据库、长期记忆或多 Agent 编排。场景事实由任务卡提供。预测、LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。
 
+如需在缓存丢失后重建，可设置 `CACHE_AUDIT_PATH=./runtime/cache-audit.jsonl`，在 provider 边界记录完整的模型请求/回复和原始 PCM；再用 `scripts/backfill_cache.py` 回灌。审计日志含对话内容，不要提交到仓库。详见 `docs/31-cache-audit-backfill.md`。
+
 ## 验证
 
 不调用云接口的回归：
