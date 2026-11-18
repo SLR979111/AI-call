@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Sequence
@@ -54,6 +55,23 @@ class StreamChunk:
 SENTENCE_TERMINATORS = {"。", "！", "？", "；", "\n"}
 SENTENCE_SEPARATORS = {"，", "、"}
 
+# Reasoning-capable cloud models answer with hidden reasoning by default: the
+# whole max_tokens budget is spent before any visible content, so replies come
+# back empty with finish_reason=length and first audio never arrives. Unless the
+# operator opts in via LLM_<PREFIX>_THINKING, disable thinking for these models.
+_DEBUG_STREAM = os.getenv("LLM_DEBUG_STREAM") == "1"
+
+_THINKING_DEFAULT_OFF = (
+    "deepseek-flash", "deepseek-v3", "deepseek-v3.1", "deepseek-v3.2",
+    "qwen3", "kimi-k2", "glm-4.5", "minimax-m2", "gpt-oss",
+)
+
+
+def default_thinking(model: str) -> str | None:
+    """Return the thinking mode to request when the env var is unset."""
+    name = (model or "").lower()
+    return "disabled" if any(tag in name for tag in _THINKING_DEFAULT_OFF) else None
+
 
 class LLMRouter:
     """OpenAI-compatible LLM client with primary/secondary failover.
@@ -93,7 +111,7 @@ class LLMRouter:
             model=model,
             timeout_ms=int(os.getenv("LLM_TIMEOUT_MS", "3000")),
             price_per_1k_cny=float(os.getenv("LLM_PRICE_PER_1K_CNY", "0.002")),
-            thinking=os.getenv(f"LLM_{prefix}_THINKING", "").strip() or None,
+            thinking=os.getenv(f"LLM_{prefix}_THINKING", "").strip() or default_thinking(model),
         )
 
     @property
@@ -360,6 +378,9 @@ class LLMRouter:
                             # 处理 content
                             if "content" in delta and delta["content"]:
                                 text = delta["content"]
+                                if _DEBUG_STREAM:
+                                    print(f"[llm-stream +{(time.perf_counter()-start)*1000:6.0f}ms] {text!r}",
+                                          file=sys.stderr, flush=True)
                                 accumulated_text += text
                                 sentence_buffer += text
                                 

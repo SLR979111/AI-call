@@ -95,7 +95,7 @@ class LLMAgent:
         self.case_context = dict(case_context or {})
         # buffered: parse the complete JSON before speaking (safe default).
         # reply: emit only the natural-language `reply` field from the stream.
-        self.stream_mode = (stream_mode or os.getenv("LLM_STREAM_MODE", "buffered")).strip().lower()
+        self.stream_mode = (stream_mode or os.getenv("LLM_STREAM_MODE", "reply")).strip().lower()
         if self.stream_mode not in {"buffered", "reply"}:
             raise ValueError("LLM_STREAM_MODE must be buffered or reply")
         self.sessions: dict[str, list[dict[str, str]]] = {}  # session_id -> conversation history
@@ -105,7 +105,7 @@ class LLMAgent:
         self.identity_verified: set[str] = set()
         self.predictive = create_pipeline() if os.getenv("PREDICTIVE_DIALOGUE", "0") == "1" else None
         self.max_history_turns = max_history_turns
-        self.max_tokens = max(32, int(os.getenv("LLM_MAX_TOKENS", "160")))
+        self.max_tokens = max(32, int(os.getenv("LLM_MAX_TOKENS", "256")))
         self.stage_wait = os.getenv("LLM_STAGE_WAIT", "亲，请您稍等。").strip()
         self._fillers = {
             "IDENTITY_CONFIRM": os.getenv("LLM_FILLER_IDENTITY", "好的，我明白了。"),

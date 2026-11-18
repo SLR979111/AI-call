@@ -122,11 +122,49 @@ cd new && .venv/bin/python -m pytest tests/test_latency.py -v -s
 4. **G2 云端链路**：缓存命中 0.72–0.83 s，未命中 2.6 s；瓶颈是云端 ASR 收尾（~0.8–1.1 s）与 TTS 首块（~0.75 s），LLM TTFT 0.5–0.8 s。
 5. 分支自带套件原先 3 处失败是**用例与实现/阈值脱节**，已修复并通过（6 passed）。
 
-## 8. 复现
+## 8. 根链路（melo）P50 < 1 s 优化
+
+优化前后对比如下（`app/` 根应用，脚本化 5 轮对话，暖机后；`t0..t9` 来自服务端 `TurnLatency`）：
+
+| 指标 | 优化前 | 优化后 |
+|---|---|---|
+| 模板/预设轮 e2e | 350–380 ms | **277–351 ms** |
+| LLM 轮首音频（filler） | 437 ms | **79 ms** |
+| LLM 轮正式答案 | 2869–3400 ms | **1109–1197 ms** |
+| LLM 轮首句就绪 | 2464 ms | **678 ms** |
+| TTS 首块 | 315–406 ms | **248–314 ms** |
+
+### 四处改动
+
+1. `app/agent/reply_stream.py` `first_sentence()`：由"等 `。`"改为**子句级切分**（≥3 字且遇到 `，、；` 即切），TTS 不必等整句结束。
+2. `app/agent/llm_agent.py:98`：`LLM_STREAM_MODE` 默认 `buffered` → **`reply`**，边收边从 JSON 里抽 `reply` 字段送 TTS；`LLM_MAX_TOKENS` 默认 160 → 256，避免回复被截断。
+3. `app/llm/router.py`：新增 `default_thinking()`，对 `deepseek-flash`/`deepseek-v3*`/`qwen3`/`kimi-k2` 等推理型模型，在 `LLM_<PREFIX>_THINKING` 未显式设置时**默认下发 `thinking={"type":"disabled"}`**。原因：这些模型默认把 `max_tokens` 全部烧在隐藏 reasoning 上，`content` 为空、`finish_reason=length`（表现为首音频永远不来）。
+4. `app/voice/melo.py`：新增 `MELO_PREWARM_TEXTS`（`|` 分隔），启动时把固定 filler 预渲染进内存并支持 24/44.1 kHz。命中后首帧约 1 ms 直出，不再占用 1.4 s 的 TTS 锁去挡正式答案的合成。
+
+### 优化后实测（10 轮混合对话）
+
+| 指标 | 值 |
+|---|---|
+| 首音频 e2e P50 | **339.2 ms**（max 457.7 ms） |
+| 正式答案 e2e P50 | **342.0 ms**（max 1197.1 ms） |
+| LLM 现编轮正式答案 | 1109–1197 ms |
+
+LLM 轮内部分解：`reply` 字段首字节 685 ms、首个可播子句 1363 ms（该 API 在子句之间有约 1.6 s 停顿）、melo 首块约 390 ms。
+
+### 剩余物理下限
+
+云端 TTFT 0.6–1.0 s + 子句停顿 + TTS 首块 0.25–0.3 s ⇒ **LLM 现编轮约 1.1–1.2 s**。因此：
+- 以模板/预设为主的对话（本业务主流路径）P50 ≈ 0.34 s，**稳定 < 1 s**；
+- 若 LLM 现编轮占比超过一半，P50 会升到 1.1 s 附近，此时只能靠预生成（predictive）缓存进一步压低。
+
+
+## 9. 复现
 
 
 ```bash
-# 1) 起服务（见第 1 节），等待 /voice/status 就绪
+# 1) 起服务（见第 1 节），留意 MELO_PREWARM_TEXTS 让 filler 免合成
+export MELO_PREWARM_TEXTS="好的，我明白了。亲，请您稍等。|好的，我帮您确认一下。亲，请您稍等。|好的，我帮您看一下这笔申请。亲，请您稍等。|好的，我帮您确认处理结果。亲，请您稍等。|好的，我收到您的信息了。亲，请您稍等。"
+# 等待 /voice/status 就绪
 # 2) 全链路（音频 + 文本聚合）
 new/.venv/bin/python .tmp/latency_full_chain.py --rounds 4 --warmup 1
 # 3) 脚本化对话（含首个 LLM 轮，输出现场表）
