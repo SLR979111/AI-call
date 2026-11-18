@@ -106,6 +106,10 @@ class Brain:
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
+        # Set before each emitted reply so Session can count the decision path
+        # (rule vs model vs model text) without parsing model output again.
+        self.last_decision: dict | None = None
+        self.candidates_considered = False
 
     @staticmethod
     def snapshot(memory: Memory):
@@ -113,6 +117,7 @@ class Brain:
                 "dialogue": memory.history[-24:]}
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
+        self.last_decision = None
         if memory.history and has_unasked_question(memory.history[-1]["text"]):
             candidates = []
         position = memory.interrupted_position()
@@ -121,11 +126,18 @@ class Brain:
             # The session appends emitted speech to the live history. Use a
             # separate prompt for the remaining question without changing it.
             previous = memory.history[:-1]
+            # A recap is deterministic continuation, not a forecast decision;
+            # it must not inflate regeneration/miss counters.
+            self.last_decision = {"kind": "say", "path": "recap",
+                                  "candidate_id": None}
             yield "say", Say(text=recap)
             if not followup:
                 return
             memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
             candidates = []
+        # A forecast only counts as a prediction opportunity when it survived the
+        # unasked-question/interruption guards and reached the decision point.
+        self.candidates_considered = bool(candidates)
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
@@ -146,6 +158,8 @@ class Brain:
                 # The cached audio is already prepared. Return it before asking
                 # for the state update so playback and the next forecast can
                 # start while the update request is still in flight.
+                self.last_decision = {"kind": "reuse", "path": "rule",
+                                      "candidate_id": selected_candidate.id}
                 yield "reuse", selected_candidate.reply
                 yield "update_async", selected_candidate
                 return
@@ -172,6 +186,15 @@ class Brain:
                     say.question = ""
                 say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
                 prepared = said == 0 and any(c.reply.text == say.text for c in candidates)
+                selected = (next((c for c in candidates if c.reply.text == say.text), None)
+                            if prepared else None)
+                self.last_decision = {
+                    "kind": "reuse" if prepared else "say",
+                    "path": ("model_text" if prepared
+                             else ("regenerated" if self.candidates_considered
+                                   else "direct")),
+                    "candidate_id": selected.id if selected is not None else None,
+                }
                 said += 1
                 asked = bool(say.question)
                 yield "reuse" if prepared else "say", say
@@ -179,6 +202,8 @@ class Brain:
                 match = next((c for c in candidates if c.id == event.get("id")), None)
                 if match is None:
                     raise ProviderError("模型选择了已失效的预测")
+                self.last_decision = {"kind": "reuse", "path": "model",
+                                      "candidate_id": match.id}
                 said = 1
                 reused = True
                 yield "reuse", match.reply

@@ -81,6 +81,7 @@ class Session:
         self.progress = asyncio.Event()
         self.send_lock = asyncio.Lock()
         self.turn_metrics: dict = {}
+        self.turn = None  # LatencyBreakdown for the current turn
         self.log_path = None
         self.decision_tracker = decision_tracker
         self.performance_monitor = performance_monitor
@@ -97,6 +98,46 @@ class Session:
         
         # Also write to silent debug log
         silent_log(event, session_id=self.id, epoch=self.epoch, **fields)
+
+    def _begin_turn(self, source: str):
+        """Reset one-turn state and start the performance turn object."""
+        self.turn_metrics = {"input_source": source, "started": time.perf_counter(),
+                             "candidates_available": 0, "reused": False,
+                             "reuse_path": "opening" if source == "opening" else "direct"}
+        self.turn = None
+        if self.performance_monitor:
+            self.turn = self.performance_monitor.start_turn(f"{self.id}-{self.epoch}")
+
+    def _finish_turn(self, *, completed: bool, error: str | None = None,
+                     turn=None):
+        """Copy session metrics onto the performance turn and close it once."""
+        target = turn if turn is not None else self.turn
+        if target is None:
+            return
+        metrics = self.turn_metrics
+        target.reused = bool(metrics.get("reused", False))
+        target.source = str(metrics.get("input_source", "unknown"))
+        target.path = metrics.get("reuse_path")
+        target.candidates_available = int(metrics.get("candidates_available") or 0)
+        target.prediction_audio_bytes = int(metrics.get("prediction_audio_bytes") or 0)
+        target.prediction_audio_hit = metrics.get("prediction_audio_hit")
+        for name in ("first_text_ms", "first_packet_ms", "answer_first_packet_ms",
+                     "voice_to_playback_ms", "voice_to_answer_ms"):
+            value = metrics.get(name)
+            if isinstance(value, (int, float)):
+                setattr(target, name, float(value))
+        target.completed = (completed and error is None
+                            and not metrics.get("interrupted", False))
+        if self.performance_monitor:
+            self.performance_monitor.end_turn(target)
+        candidate_id = metrics.get("reuse_candidate_id")
+        if (self.decision_tracker and candidate_id
+                and not metrics.get("reuse_outcome_recorded")):
+            metrics["reuse_outcome_recorded"] = True
+            self.decision_tracker.record_reuse_outcome(candidate_id,
+                                                       target.completed)
+        if self.turn is target:
+            self.turn = None
 
     def spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -132,6 +173,7 @@ class Session:
                          "predictions": self.predictions, "task": self.memory.card.model_dump()})
         if self.is_current(epoch):
             self.starting = False
+            self._begin_turn("opening")
             if self.voice:
                 self.spawn(self._warm_bridge())
             self.response = self.spawn(self._run(epoch, opening=True))
@@ -144,11 +186,7 @@ class Session:
         if not text or self.closed or self.ended:
             return
         text = text[:2000]
-        
-        # Start performance tracking
-        if self.performance_monitor:
-            self.performance_monitor.start_turn(f"{self.id}-{self.epoch + 1}")
-        
+
         usable = (self.reply_completed and self.prediction_epoch == self.epoch)
         candidates = list(self.candidates) if usable else []
         audio = dict(self.prediction_audio) if usable else {}
@@ -165,9 +203,9 @@ class Session:
         self.units = {}
         self.reply_completed = False
         self.memory.history.append({"role": "user", "text": text})
-        self.turn_metrics = {"input_source": source, "started": time.perf_counter(),
-                             "last_voice_client_ms": end_ms, "candidates_available": len(candidates),
-                             "reused": False}
+        self._begin_turn(source)
+        self.turn_metrics.update(last_voice_client_ms=end_ms,
+                                 candidates_available=len(candidates))
         self.log("user", text=text, source=source)
         await self.send({"type": "transcript", "text": text, "final": True, "epoch": self.epoch})
         if self.is_current(epoch):
@@ -209,10 +247,12 @@ class Session:
         self.reply_completed = False
         self.progress.set()
         self.phase = "listening"
+        self.turn_metrics["interrupted"] = True
         self.log("interrupted", cancelled_epoch=old_epoch, reason=reason,
                  evidence=evidence, cutoff=[u.entry.copy() for u in self.units.values()
                                             if u.entry.get("delivery") == "partial"],
                  **{k: v for k, v in self.turn_metrics.items() if k != "started"})
+        self._finish_turn(completed=False)
         await self.send({"type": "cancel", "epoch": old_epoch, "reason": reason})
         await self.state()
 
@@ -265,10 +305,19 @@ class Session:
                          "voice_to_answer_ms": self.turn_metrics.get("voice_to_answer_ms"),
                          "input_source": self.turn_metrics.get("input_source", "opening")})
 
-    async def _synthesize(self, unit: Unit, pcm: bytes | None = None):
+    async def _synthesize(self, unit: Unit, pcm: bytes | None = None, *,
+                          turn=None):
+        turn = turn if turn is not None else self.turn
+        started = time.perf_counter()
         cached = pcm if pcm is not None else getattr(self.cloud, "cached", lambda _: None)(unit.say.text)
         if cached:
             unit.duration_samples = len(cached) // 2
+        if cached is not None and pcm is None:
+            # The utterance is served from the TTS cache without a synthesis
+            # request; the speech() path records its own miss/hit otherwise.
+            emit = getattr(self.cloud, "emit_cache_event", None)
+            if emit is not None:
+                emit("tts", True, started)
 
         async def chunks():
             if cached is not None:
@@ -278,8 +327,16 @@ class Session:
                 async for chunk in self.cloud.speech(unit.say.text):
                     yield chunk
 
+        first = True
+        if self.performance_monitor and turn:
+            self.performance_monitor.mark_tts_start(turn)
         try:
             async for chunk in chunks():
+                if first:
+                    first = False
+                    if self.performance_monitor and turn:
+                        self.performance_monitor.mark_tts_first_chunk(
+                            cached is not None, turn)
                 unit.total += len(chunk) // 2
                 await unit.queue.put(chunk)
             unit.source_done = True
@@ -288,6 +345,9 @@ class Session:
             raise
         except Exception as exc:
             await unit.queue.put(exc)
+        finally:
+            if self.performance_monitor and turn:
+                self.performance_monitor.mark_tts_end(turn)
 
     async def _output(self, epoch: int, queue: asyncio.Queue):
         while self.is_current(epoch):
@@ -328,10 +388,15 @@ class Session:
                 await self.send(struct.pack("<III", epoch, unit.number, seq) + packet)
                 seq += 1
                 unit.sent += len(packet) // 2
-                if not unit.entry.get("bridge") and "answer_first_packet_ms" not in self.turn_metrics and "started" in self.turn_metrics:
+                if (not unit.entry.get("bridge")
+                        and "answer_first_packet_ms" not in self.turn_metrics
+                        and "started" in self.turn_metrics
+                        and self.turn_metrics.get("input_source") != "opening"):
                     self.turn_metrics["answer_first_packet_ms"] = round(
                         (time.perf_counter() - self.turn_metrics["started"]) * 1000)
-                if "first_packet_ms" not in self.turn_metrics and "started" in self.turn_metrics:
+                if ("first_packet_ms" not in self.turn_metrics
+                        and "started" in self.turn_metrics
+                        and self.turn_metrics.get("input_source") != "opening"):
                     self.turn_metrics["first_packet_ms"] = round(
                         (time.perf_counter() - self.turn_metrics["started"]) * 1000)
             if not self.is_current(epoch):
@@ -352,6 +417,9 @@ class Session:
         current_units: list[Unit] = []
         pending_update: asyncio.Task | None = None
         hangup = False
+        turn = self.turn
+        llm_started = False
+        llm_first = False
 
         first_answer = asyncio.Event()
 
@@ -381,9 +449,14 @@ class Session:
                 if bridge_pcm is None and "prediction_audio_hit" not in self.turn_metrics:
                     self.turn_metrics["prediction_audio_hit"] = bool(pcm)
                     self.turn_metrics["prediction_audio_bytes"] = len(pcm) if pcm else 0
+                    if pcm and self.decision_tracker:
+                        # Match the single prediction_audio_bytes field logged
+                        # for the turn, so stats and logs share one definition.
+                        self.decision_tracker.record_prediction_audio(
+                            used_bytes=len(pcm))
                 self.log("audio_source", unit=unit.number, source=source,
                          audio_bytes=len(pcm) if pcm else 0)
-                children.append(self.spawn(self._synthesize(unit, pcm)))
+                children.append(self.spawn(self._synthesize(unit, pcm, turn=turn)))
             await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
                              "text": line.text, "rate": 24000, "candidate_id": candidate_id,
                              "filler": bridge_pcm is not None})
@@ -405,46 +478,93 @@ class Session:
             else:
                 if self.voice and self.bridge_audio:
                     children.append(self.spawn(bridge()))
-                async for kind, value in self.brain.respond(self.memory, candidates or []):
-                    if not self.is_current(epoch):
-                        return
-                    if output.done() and output.exception():
-                        raise output.exception()
-                    if kind in {"say", "reuse"}:
-                        first_answer.set()
-                        # Track decision in decision tracker
-                        if self.decision_tracker:
-                            if kind == "reuse":
-                                self.turn_metrics["reused"] = True
-                                candidate_id = next((c.id for c in (candidates or []) if c.reply.text == value.text), "unknown")
-                                self.decision_tracker.record_reuse(
-                                    candidate_id,
-                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000
-                                )
+                if self.performance_monitor and turn:
+                    self.performance_monitor.mark_llm_start(turn)
+                    llm_started = True
+                try:
+                    async for kind, value in self.brain.respond(self.memory, candidates or []):
+                        if not self.is_current(epoch):
+                            return
+                        if output.done() and output.exception():
+                            raise output.exception()
+                        decision = getattr(self.brain, "last_decision", None) or {}
+                        if not llm_first and decision:
+                            if decision.get("path") == "rule":
+                                # Lexical reuse never called the model; clear
+                                # the provisional LLM span instead of logging
+                                # rule-decision time as LLM latency.
+                                if turn is not None:
+                                    turn.llm_start = None
+                                    turn.llm_first_token = None
+                                llm_started = False
                             else:
-                                self.decision_tracker.record_say(
-                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000
-                                )
-                        
-                        if kind == "reuse":
-                            self.turn_metrics["reused"] = True
-                        if "first_text_ms" not in self.turn_metrics:
-                            self.turn_metrics["first_text_ms"] = round(
-                                (time.perf_counter() - self.turn_metrics["started"]) * 1000)
-                            await self.send({"type": "response_source", "epoch": epoch,
-                                             "source": "prediction" if kind == "reuse" else "direct"})
-                        candidate_id = next((c.id for c in candidates or [] if c.reply.text == value.text), None) if kind == "reuse" else None
-                        await say(value, candidate_id=candidate_id)
-                    elif kind == "update_async":
-                        # Do not await the update here: the cached audio is
-                        # already playing and the update must not hold it up.
-                        if pending_update is None:
-                            pending_update = self.spawn(
-                                self.brain.update_for_reuse(self.memory, value))
-                            self.pending_update = pending_update
-                    else:
-                        self.memory.apply(value, user, epoch, before)
-                        await self.state()
+                                if self.performance_monitor and turn:
+                                    self.performance_monitor.mark_llm_first_token(
+                                        bool(getattr(self.cloud, "last_llm_cache_hit", False)),
+                                        turn)
+                                llm_first = True
+                        if kind in {"say", "reuse"}:
+                            first_answer.set()
+                            path = decision.get("path")
+                            if not path:
+                                path = "rule" if kind == "reuse" else (
+                                    "regenerated" if candidates else "direct")
+                            self.turn_metrics["reuse_path"] = path
+                            if "decision_recorded" not in self.turn_metrics:
+                                self.turn_metrics["decision_recorded"] = True
+                                self.turn_metrics["decision_source"] = kind
+                                latency_ms = round(
+                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000, 1)
+                                candidate_id = decision.get("candidate_id")
+                                if candidate_id is None and kind == "reuse":
+                                    match = next((c for c in (candidates or [])
+                                                  if c.reply.text == value.text), None)
+                                    candidate_id = match.id if match is not None else "unknown"
+                                if kind == "reuse":
+                                    self.turn_metrics["reused"] = True
+                                    self.turn_metrics["reuse_candidate_id"] = candidate_id or "unknown"
+                                    if self.decision_tracker:
+                                        self.decision_tracker.record_reuse(
+                                            candidate_id or "unknown", latency_ms, path=path)
+                                        if candidates:
+                                            self.decision_tracker.record_prediction_hit(
+                                                candidate_id or "unknown")
+                                elif self.decision_tracker:
+                                    self.decision_tracker.record_say(latency_ms, path=path)
+                                    # "direct" means no forecast reached the
+                                    # decision point (e.g. an unasked question
+                                    # cleared the candidates), so it is not a
+                                    # prediction miss.  Only "regenerated" is.
+                                    if path == "regenerated":
+                                        self.decision_tracker.record_prediction_miss()
+                            if "first_text_ms" not in self.turn_metrics:
+                                self.turn_metrics["first_text_ms"] = round(
+                                    (time.perf_counter() - self.turn_metrics["started"]) * 1000)
+                                await self.send({"type": "response_source", "epoch": epoch,
+                                                 "source": "prediction" if kind == "reuse" else "direct"})
+                            candidate_id = (decision.get("candidate_id")
+                                            if kind == "reuse" else None)
+                            if candidate_id is None and kind == "reuse":
+                                match = next((c for c in (candidates or [])
+                                              if c.reply.text == value.text), None)
+                                candidate_id = match.id if match is not None else None
+                            await say(value, candidate_id=candidate_id)
+                        elif kind == "update_async":
+                            # Do not await the update here: the cached audio is
+                            # already playing and the update must not hold it up.
+                            if pending_update is None:
+                                pending_update = self.spawn(
+                                    self.brain.update_for_reuse(self.memory, value))
+                                self.pending_update = pending_update
+                        else:
+                            self.memory.apply(value, user, epoch, before)
+                            await self.state()
+                finally:
+                    if self.performance_monitor and turn:
+                        if llm_first:
+                            self.performance_monitor.mark_llm_end(turn)
+                        elif llm_started:
+                            turn.llm_start = None
                 last_reply = current_units[-1].say
                 hangup = (self.memory.ready_to_say_goodbye(user, last_reply)
                           or self.memory.status in {"paused", "declined"})
@@ -464,14 +584,11 @@ class Session:
                 self.forecast = self.spawn(self._predict(epoch, snapshot))
             await output
             if self.is_current(epoch):
-                # End performance tracking
-                if self.performance_monitor:
-                    self.performance_monitor.end_turn()
-                
                 self.reply_completed = all(unit.delivered for unit in current_units)
                 self.phase = "listening"
                 self.log("reply_finished", **{k: v for k, v in self.turn_metrics.items() if k != "started"})
-                
+                self._finish_turn(completed=True, turn=turn)
+
                 # Track task completion
                 if self.memory.status == "complete" and self.performance_monitor:
                     self.performance_monitor.record_task_completion(success=True)
@@ -516,6 +633,7 @@ class Session:
                 self.phase = "listening"
                 message = str(exc) if isinstance(exc, ProviderError) else "本次回复未完成，请重试或换一种说法。"
                 self.log("reply_error", error=type(exc).__name__)
+                self._finish_turn(completed=False, error=type(exc).__name__, turn=turn)
                 await self.send({"type": "cancel", "epoch": epoch, "reason": "reply_error"})
                 await self.send({"type": "error", "message": message, "recoverable": True})
                 await self.state()
@@ -558,7 +676,8 @@ class Session:
                 pcm = None
                 if self.voice:
                     text = item.reply.text
-                    if text not in audio_tasks:
+                    created_audio = text not in audio_tasks
+                    if created_audio:
                         audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
                     pcm = await asyncio.shield(audio_tasks[text])
                     if not pcm:
@@ -567,6 +686,11 @@ class Session:
                         self.log("prediction_audio_miss", candidate_id=item.id,
                                  text_ready_ms=text_ready_ms)
                         return
+                    if created_audio and self.decision_tracker:
+                        # Count each actually prefetched PCM buffer once, even
+                        # when several candidates share the same text.
+                        self.decision_tracker.record_prediction_audio(
+                            prefetched_bytes=len(pcm))
                 if self.is_current(epoch):
                     if pcm:
                         self.prediction_audio[item.reply.text] = pcm
@@ -616,6 +740,7 @@ class Session:
             job.cancel()
         if self.jobs:
             await asyncio.gather(*list(self.jobs), return_exceptions=True)
+        self._finish_turn(completed=False)
         self.candidates.clear()
         self.prediction_audio.clear()
         self.bridge_audio = None
