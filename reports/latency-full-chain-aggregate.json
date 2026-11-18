@@ -1,0 +1,627 @@
+{
+  "session": "s_01M7PFN4VC9KTVFQ027G7YGAMW",
+  "summary": {
+    "audio": {
+      "n": 4,
+      "excluded_warmup": 1,
+      "client": {
+        "transcript_final_ms": {
+          "p50": 5935.9,
+          "max": 5949.6
+        },
+        "tts_started_ms": {
+          "p50": 6313.6,
+          "max": 6345.7
+        },
+        "first_downlink_audio_ms": {
+          "p50": 6322.0,
+          "max": 6353.6
+        },
+        "tts_completed_ms": {
+          "p50": 7755.0,
+          "max": 7871.1
+        },
+        "turn_result_ms": {
+          "p50": 7758.9,
+          "max": 7872.9
+        },
+        "playback_formal_ack_ms": {
+          "p50": 6322.0,
+          "max": 6353.6
+        }
+      },
+      "server_abs": {
+        "t2_asr_final_ms": {
+          "p50": 896029.2,
+          "max": 908294.592544
+        },
+        "t3_agent_start_ms": {
+          "p50": 896030.2,
+          "max": 908299.425089
+        },
+        "t4_first_token_ms": {
+          "p50": 896031.3,
+          "max": 908300.5068420001
+        },
+        "t5_first_sentence_ms": {
+          "p50": 896036.0,
+          "max": 908305.357431
+        },
+        "t6_compliance_ms": {
+          "p50": 896037.6,
+          "max": 908306.7507719999
+        },
+        "t7_tts_first_chunk_ms": {
+          "p50": 896375.0,
+          "max": 908675.46048
+        },
+        "t8_first_downlink_ms": {
+          "p50": 896387.2,
+          "max": 908688.610995
+        },
+        "t9_first_playback_ms": {
+          "p50": 896389.3,
+          "max": 908691.0690019999
+        },
+        "t9_formal_ms": {
+          "p50": 896387.8,
+          "max": 908689.7057480001
+        },
+        "e2e_ms": {
+          "p50": 385.3,
+          "max": 431.75
+        },
+        "e2e_official_proxy_ms": {
+          "p50": 384.3,
+          "max": 430.75
+        },
+        "e2e_formal_ms": {
+          "p50": 383.8,
+          "max": 430.11
+        },
+        "e2e_formal_official_ms": {
+          "p50": 382.8,
+          "max": 429.11
+        }
+      },
+      "server_delta": {
+        "asr_final": {
+          "p50": 3.5,
+          "max": 6.040741999866441
+        },
+        "agent_start": {
+          "p50": 1.0,
+          "max": 4.832545000012033
+        },
+        "ttft": {
+          "p50": 1.0,
+          "max": 1.1728580000344664
+        },
+        "first_sentence": {
+          "p50": 4.0,
+          "max": 6.134650000021793
+        },
+        "compliance": {
+          "p50": 1.4,
+          "max": 1.9134540000231937
+        },
+        "tts_first_chunk": {
+          "p50": 353.8,
+          "max": 409.90938299987465
+        },
+        "downlink": {
+          "p50": 13.0,
+          "max": 14.255475000012666
+        },
+        "playback": {
+          "p50": 2.2,
+          "max": 2.6160959999542683
+        },
+        "formal_playback": {
+          "p50": 0.6,
+          "max": 1.094753000070341
+        }
+      }
+    },
+    "text": {
+      "n": 2,
+      "excluded_warmup": 1,
+      "client": {
+        "transcript_final_ms": {
+          "p50": 12.3,
+          "max": 12.6
+        },
+        "tts_started_ms": {
+          "p50": 340.9,
+          "max": 359.2
+        },
+        "first_downlink_audio_ms": {
+          "p50": 344.1,
+          "max": 362.6
+        },
+        "tts_completed_ms": {
+          "p50": 1798.2,
+          "max": 1829.4
+        },
+        "turn_result_ms": {
+          "p50": 1799.9,
+          "max": 1831.6
+        },
+        "playback_formal_ack_ms": {
+          "p50": 344.1,
+          "max": 362.6
+        }
+      },
+      "server_abs": {
+        "t2_asr_final_ms": {
+          "p50": 914008.5,
+          "max": 915142.629601
+        },
+        "t3_agent_start_ms": {
+          "p50": 914010.0,
+          "max": 915144.4724409999
+        },
+        "t4_first_token_ms": {
+          "p50": 914011.5,
+          "max": 915146.2203810001
+        },
+        "t5_first_sentence_ms": {
+          "p50": 914012.9,
+          "max": 915147.3661799999
+        },
+        "t6_compliance_ms": {
+          "p50": 914015.0,
+          "max": 915149.542853
+        },
+        "t7_tts_first_chunk_ms": {
+          "p50": 914330.9,
+          "max": 915483.875976
+        },
+        "t8_first_downlink_ms": {
+          "p50": 914340.3,
+          "max": 915493.87552
+        },
+        "t9_first_playback_ms": {
+          "p50": 914344.5,
+          "max": 915497.794924
+        },
+        "t9_formal_ms": {
+          "p50": 914341.7,
+          "max": 915494.089556
+        },
+        "e2e_ms": {
+          "p50": 339.8,
+          "max": 359.07
+        },
+        "e2e_official_proxy_ms": {
+          "p50": 338.8,
+          "max": 358.07
+        },
+        "e2e_formal_ms": {
+          "p50": 337.0,
+          "max": 355.36
+        },
+        "e2e_formal_official_ms": {
+          "p50": 336.0,
+          "max": 354.36
+        }
+      },
+      "server_delta": {
+        "asr_final": {
+          "p50": 2.8,
+          "max": 2.904687999980524
+        },
+        "agent_start": {
+          "p50": 1.5,
+          "max": 1.842839999939315
+        },
+        "ttft": {
+          "p50": 1.6,
+          "max": 1.7479400001466274
+        },
+        "first_sentence": {
+          "p50": 1.4,
+          "max": 1.6147969999583438
+        },
+        "compliance": {
+          "p50": 2.1,
+          "max": 2.1766730000963435
+        },
+        "tts_first_chunk": {
+          "p50": 315.8,
+          "max": 334.3331229999894
+        },
+        "downlink": {
+          "p50": 9.4,
+          "max": 9.99954400002025
+        },
+        "playback": {
+          "p50": 4.3,
+          "max": 4.6243829999584705
+        },
+        "formal_playback": {
+          "p50": 1.5,
+          "max": 2.7291239999467507
+        }
+      }
+    }
+  },
+  "turns": [
+    {
+      "kind": "audio",
+      "client": {
+        "transcript_final_ms": 5927.4,
+        "tts_started_ms": 6263.4,
+        "first_downlink_audio_ms": 6268.4,
+        "downlink_audio_bytes": 841722,
+        "playback_ack_ms": 6268.4,
+        "playback_formal_ack_ms": 9616.0,
+        "tts_completed_ms": 11521.2,
+        "tts_total_ms": 9543.33,
+        "turn_result_ms": 11523.0
+      },
+      "uplink_audio_ms": 5611.5,
+      "transcript": "对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢",
+      "sample_rate": 44100,
+      "turn_id": "t_0001",
+      "result_outcome": "transferred",
+      "warmup": true,
+      "server": {
+        "t0_last_voiced_ms": 871491.4482829999,
+        "t1_endpoint_ms": 871492.4482829999,
+        "t2_asr_final_ms": 871495.03596,
+        "t3_agent_start_ms": 871497.269931,
+        "t4_first_token_ms": 871609.1099309999,
+        "t5_first_sentence_ms": 874567.8540180001,
+        "t6_compliance_ms": 871519.0383939999,
+        "t7_tts_first_chunk_ms": 875169.997825,
+        "t7_filler_ms": 871829.69491,
+        "t8_filler_ms": 871838.150154,
+        "t8_first_downlink_ms": 875184.206427,
+        "t9_first_playback_ms": 871838.410961,
+        "t9_formal_ms": 875186.0152860001,
+        "e2e_ms": 346.96,
+        "e2e_formal_ms": 3694.57,
+        "e2e_official_proxy_ms": 345.96,
+        "e2e_formal_official_ms": 3693.57,
+        "vad_to_playback_ms": 345.96,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 871491.4482829999
+      }
+    },
+    {
+      "kind": "audio",
+      "client": {
+        "tts_completed_ms": 7871.1,
+        "tts_total_ms": 4013.83,
+        "transcript_final_ms": 5927.5,
+        "tts_started_ms": 6345.7,
+        "first_downlink_audio_ms": 6353.6,
+        "downlink_audio_bytes": 354020,
+        "playback_formal_ack_ms": 6353.6,
+        "playback_ack_ms": 6353.6,
+        "turn_result_ms": 7872.9
+      },
+      "uplink_audio_ms": 5611.5,
+      "transcript": "对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢",
+      "sample_rate": 44100,
+      "turn_id": "t_0002",
+      "result_outcome": "pending_identity",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 883517.515973,
+        "t1_endpoint_ms": 883518.515973,
+        "t2_asr_final_ms": 883520.308948,
+        "t3_agent_start_ms": 883521.036415,
+        "t4_first_token_ms": 883521.776264,
+        "t5_first_sentence_ms": 883522.402313,
+        "t6_compliance_ms": 883523.161593,
+        "t7_tts_first_chunk_ms": 883933.0709759999,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 883947.326451,
+        "t9_first_playback_ms": 883949.267699,
+        "t9_formal_ms": 883947.623849,
+        "e2e_ms": 431.75,
+        "e2e_formal_ms": 430.11,
+        "e2e_official_proxy_ms": 430.75,
+        "e2e_formal_official_ms": 429.11,
+        "vad_to_playback_ms": 430.75,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 883517.515973
+      }
+    },
+    {
+      "kind": "audio",
+      "client": {
+        "tts_completed_ms": 7758.7,
+        "tts_total_ms": 4012.83,
+        "transcript_final_ms": 5949.6,
+        "tts_started_ms": 6300.8,
+        "first_downlink_audio_ms": 6307.6,
+        "downlink_audio_bytes": 353932,
+        "playback_formal_ack_ms": 6307.6,
+        "playback_ack_ms": 6307.6,
+        "turn_result_ms": 7760.0
+      },
+      "uplink_audio_ms": 5611.5,
+      "transcript": "对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢",
+      "sample_rate": 44100,
+      "turn_id": "t_0003",
+      "result_outcome": "pending_identity",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 891909.0110480001,
+        "t1_endpoint_ms": 891910.0110480001,
+        "t2_asr_final_ms": 891916.0517899999,
+        "t3_agent_start_ms": 891917.300131,
+        "t4_first_token_ms": 891918.210977,
+        "t5_first_sentence_ms": 891924.345627,
+        "t6_compliance_ms": 891925.694182,
+        "t7_tts_first_chunk_ms": 892261.5104080001,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 892274.282182,
+        "t9_first_playback_ms": 892276.898278,
+        "t9_formal_ms": 892275.187515,
+        "e2e_ms": 367.89,
+        "e2e_formal_ms": 366.18,
+        "e2e_official_proxy_ms": 366.89,
+        "e2e_formal_official_ms": 365.18,
+        "vad_to_playback_ms": 366.89,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 891909.0110480001
+      }
+    },
+    {
+      "kind": "audio",
+      "client": {
+        "tts_completed_ms": 7623.2,
+        "tts_total_ms": 4013.99,
+        "transcript_final_ms": 5914.5,
+        "tts_started_ms": 6262.4,
+        "first_downlink_audio_ms": 6269.5,
+        "downlink_audio_bytes": 354034,
+        "playback_formal_ack_ms": 6269.5,
+        "playback_ack_ms": 6269.5,
+        "turn_result_ms": 7624.1
+      },
+      "uplink_audio_ms": 5611.5,
+      "transcript": "对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢",
+      "sample_rate": 44100,
+      "turn_id": "t_0004",
+      "result_outcome": "pending_identity",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 900140.499001,
+        "t1_endpoint_ms": 900141.499001,
+        "t2_asr_final_ms": 900142.340018,
+        "t3_agent_start_ms": 900143.155301,
+        "t4_first_token_ms": 900144.328159,
+        "t5_first_sentence_ms": 900147.576441,
+        "t6_compliance_ms": 900149.489895,
+        "t7_tts_first_chunk_ms": 900488.451623,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 900500.171701,
+        "t9_first_playback_ms": 900501.785685,
+        "t9_formal_ms": 900500.411027,
+        "e2e_ms": 361.29,
+        "e2e_formal_ms": 359.91,
+        "e2e_official_proxy_ms": 360.29,
+        "e2e_formal_official_ms": 358.91,
+        "vad_to_playback_ms": 360.29,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 900140.499001
+      }
+    },
+    {
+      "kind": "audio",
+      "client": {
+        "tts_completed_ms": 7751.3,
+        "tts_total_ms": 4013.61,
+        "transcript_final_ms": 5944.2,
+        "tts_started_ms": 6326.4,
+        "first_downlink_audio_ms": 6336.3,
+        "downlink_audio_bytes": 354000,
+        "playback_formal_ack_ms": 6336.3,
+        "playback_ack_ms": 6336.3,
+        "turn_result_ms": 7757.7
+      },
+      "uplink_audio_ms": 5611.5,
+      "transcript": "对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢",
+      "sample_rate": 44100,
+      "turn_id": "t_0005",
+      "result_outcome": "pending_identity",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 908288.3839060001,
+        "t1_endpoint_ms": 908289.3839060001,
+        "t2_asr_final_ms": 908294.592544,
+        "t3_agent_start_ms": 908299.425089,
+        "t4_first_token_ms": 908300.5068420001,
+        "t5_first_sentence_ms": 908305.357431,
+        "t6_compliance_ms": 908306.7507719999,
+        "t7_tts_first_chunk_ms": 908675.46048,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 908688.610995,
+        "t9_first_playback_ms": 908691.0690019999,
+        "t9_formal_ms": 908689.7057480001,
+        "e2e_ms": 402.69,
+        "e2e_formal_ms": 401.32,
+        "e2e_official_proxy_ms": 401.69,
+        "e2e_formal_official_ms": 400.32,
+        "vad_to_playback_ms": 401.69,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 908288.3839060001
+      }
+    },
+    {
+      "kind": "text",
+      "client": {
+        "tts_completed_ms": 1748.5,
+        "tts_total_ms": 4202.81,
+        "transcript_final_ms": 7.2,
+        "tts_started_ms": 389.0,
+        "first_downlink_audio_ms": 394.6,
+        "downlink_audio_bytes": 370688,
+        "playback_formal_ack_ms": 394.6,
+        "playback_ack_ms": 394.6,
+        "turn_result_ms": 1750.1
+      },
+      "transcript": "你好，我收到了驳回通知，想知道商标为什么不行？",
+      "sample_rate": 44100,
+      "turn_id": "t_0006",
+      "result_outcome": "pending_identity",
+      "text": "你好，我收到了驳回通知，想知道商标为什么不行？",
+      "warmup": true,
+      "server": {
+        "t0_last_voiced_ms": 910615.637888,
+        "t1_endpoint_ms": 910616.637888,
+        "t2_asr_final_ms": 910618.1275310001,
+        "t3_agent_start_ms": 910619.3329080001,
+        "t4_first_token_ms": 910620.455248,
+        "t5_first_sentence_ms": 910621.2903430001,
+        "t6_compliance_ms": 910622.255895,
+        "t7_tts_first_chunk_ms": 910996.639074,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 911003.801069,
+        "t9_first_playback_ms": 911007.817349,
+        "t9_formal_ms": 911006.245278,
+        "e2e_ms": 392.18,
+        "e2e_formal_ms": 390.61,
+        "e2e_official_proxy_ms": 391.18,
+        "e2e_formal_official_ms": 389.61,
+        "vad_to_playback_ms": 391.18,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 910615.637888
+      }
+    },
+    {
+      "kind": "text",
+      "client": {
+        "tts_completed_ms": 1767.0,
+        "tts_total_ms": 4202.81,
+        "transcript_final_ms": 12.6,
+        "tts_started_ms": 322.6,
+        "first_downlink_audio_ms": 325.5,
+        "downlink_audio_bytes": 370688,
+        "playback_formal_ack_ms": 325.5,
+        "playback_ack_ms": 325.5,
+        "turn_result_ms": 1768.2
+      },
+      "transcript": "那我补交材料要多久？",
+      "sample_rate": 44100,
+      "turn_id": "t_0007",
+      "result_outcome": "pending_identity",
+      "text": "那我补交材料要多久？",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 912870.701399,
+        "t1_endpoint_ms": 912871.701399,
+        "t2_asr_final_ms": 912874.3046670001,
+        "t3_agent_start_ms": 912875.450975,
+        "t4_first_token_ms": 912876.869485,
+        "t5_first_sentence_ms": 912878.484282,
+        "t6_compliance_ms": 912880.551795,
+        "t7_tts_first_chunk_ms": 913177.875669,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 913186.672253,
+        "t9_first_playback_ms": 913191.2966359999,
+        "t9_formal_ms": 913189.4013769999,
+        "e2e_ms": 320.6,
+        "e2e_formal_ms": 318.7,
+        "e2e_official_proxy_ms": 319.6,
+        "e2e_formal_official_ms": 317.7,
+        "vad_to_playback_ms": 319.6,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 912870.701399
+      }
+    },
+    {
+      "kind": "text",
+      "client": {
+        "tts_completed_ms": 1829.4,
+        "tts_total_ms": 4015.22,
+        "transcript_final_ms": 12.0,
+        "tts_started_ms": 359.2,
+        "first_downlink_audio_ms": 362.6,
+        "downlink_audio_bytes": 354142,
+        "playback_formal_ack_ms": 362.6,
+        "playback_ack_ms": 362.6,
+        "turn_result_ms": 1831.6
+      },
+      "transcript": "授权书需要重新盖章吗？",
+      "sample_rate": 44100,
+      "turn_id": "t_0008",
+      "result_outcome": "pending_identity",
+      "text": "授权书需要重新盖章吗？",
+      "warmup": false,
+      "server": {
+        "t0_last_voiced_ms": 915138.724913,
+        "t1_endpoint_ms": 915139.724913,
+        "t2_asr_final_ms": 915142.629601,
+        "t3_agent_start_ms": 915144.4724409999,
+        "t4_first_token_ms": 915146.2203810001,
+        "t5_first_sentence_ms": 915147.3661799999,
+        "t6_compliance_ms": 915149.542853,
+        "t7_tts_first_chunk_ms": 915483.875976,
+        "t7_filler_ms": null,
+        "t8_filler_ms": null,
+        "t8_first_downlink_ms": 915493.87552,
+        "t9_first_playback_ms": 915497.794924,
+        "t9_formal_ms": 915494.089556,
+        "e2e_ms": 359.07,
+        "e2e_formal_ms": 355.36,
+        "e2e_official_proxy_ms": 358.07,
+        "e2e_formal_official_ms": 354.36,
+        "vad_to_playback_ms": 358.07,
+        "clock_offset_ms": 0.0,
+        "playback_measured": true,
+        "playback_formal_measured": true,
+        "clock_suspect": false,
+        "barge_in_stop_ms": null,
+        "t0_client_ms": null,
+        "t0_vad_ms": 915138.724913
+      }
+    }
+  ]
+}
