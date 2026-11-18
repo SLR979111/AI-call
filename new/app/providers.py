@@ -29,6 +29,7 @@ class Settings:
     model: str = "deepseek-flash"
     voice: str = "stella"
     predictions: bool = True
+    forecast_branches: int = 5
 
     @classmethod
     def load(cls):
@@ -40,6 +41,7 @@ class Settings:
             model=os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-flash"),
             voice=os.getenv("DEEPSEEK_TTS_VOICE", "stella"),
             predictions=os.getenv("PREDICTION_ENABLED", "1") == "1",
+            forecast_branches=max(1, min(int(os.getenv("PREDICTION_BRANCHES", "5")), 5)),
         )
 
 

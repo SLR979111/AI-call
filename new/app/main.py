@@ -130,7 +130,9 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
-                    session = Session(card, cloud, Brain(cloud, app.state.opening_forecasts), send,
+                    session = Session(card, cloud, Brain(
+                        cloud, app.state.opening_forecasts,
+                        forecast_branches=app.state.settings.forecast_branches), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
