@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
+const base = process.env.CALL_URL || 'http://127.0.0.1:8088';
 const out=path.resolve('runtime/validation');
 await fs.mkdir(out,{recursive:true});
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--autoplay-policy=no-user-gesture-required']});
@@ -15,18 +16,19 @@ try {
       try{frames.push({...JSON.parse(frame.payload),observed:Date.now()});}catch{}
     } else frames.push({type:'pcm',bytes:frame.payload.length,observed:Date.now()});
   }));
-  await page.goto('http://127.0.0.1:8088');
+  await page.goto(base);
   await page.getByText('服务就绪',{exact:true}).waitFor();
   await page.screenshot({path:path.join(out,'desktop.png'),fullPage:true});
   await page.getByRole('button',{name:'文字试聊',exact:true}).click();
   await page.waitForFunction(()=>document.getElementById('phase').textContent.includes('在听'));
   await page.getByRole('textbox',{name:'输入一句话',exact:true}).fill('我现在在开会，不方便沟通。');
   await page.getByRole('button',{name:'发送消息',exact:true}).click();
-  await page.getByText('已尊重对方意愿，暂停沟通',{exact:true}).waitFor({timeout:30000});
+  await page.waitForFunction(()=>document.getElementById('outcomeText').textContent==='已尊重对方意愿，暂停沟通',{},{timeout:30000});
   report.text_paused=true;
   assert.equal(await page.locator('#error').isVisible(),false);
   await page.screenshot({path:path.join(out,'text-dialogue.png'),fullPage:true});
-  await page.getByRole('button',{name:'结束对话',exact:true}).click();
+  await page.getByRole('button',{name:'开始通话',exact:true}).waitFor({state:'visible'});
+  report.busy_hangup=true;
 
   // Use a generated MediaStream as microphone input. This exercises the new
   // AudioWorklet, resampler, PCM transport and ASR without recording the user.
@@ -47,9 +49,9 @@ try {
   });
   await page.reload();
   await page.getByText('服务就绪',{exact:true}).waitFor();
-  await page.locator('#diagnostics').evaluate(element=>element.open=true);
+  await page.getByRole('button',{name:'任务设置',exact:true}).click();
   await page.locator('#prediction').check();
-  await page.locator('#diagnostics').evaluate(element=>element.open=false);
+  await page.getByRole('button',{name:'关闭',exact:true}).click();
   const voiceStart=frames.length;
   await page.getByRole('button',{name:'开始通话',exact:true}).click();
   await page.waitForFunction(()=>document.getElementById('phase').textContent.includes('在听'),{},{timeout:30000});
@@ -77,16 +79,18 @@ try {
   await page.getByRole('button',{name:'结束对话',exact:true}).click();
   const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,deviceScaleFactor:1});
   mobile.on('pageerror',error=>errors.push(error.message));
-  await mobile.goto('http://127.0.0.1:8088');
+  await mobile.goto(base);
   await mobile.getByText('服务就绪',{exact:true}).waitFor();
   assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await mobile.screenshot({path:path.join(out,'mobile.png'),fullPage:true});
-  await mobile.getByRole('button',{name:'编辑任务 ↗',exact:true}).click();
+  await mobile.getByRole('button',{name:'任务设置',exact:true}).click();
   await mobile.locator('#editTitle').fill('下一本读什么');
   await mobile.locator('#editGoal').fill('了解阅读偏好，确认一本想读的书。');
   await mobile.getByRole('button',{name:'保存任务',exact:true}).click();
   await mobile.reload();
-  await mobile.getByRole('heading',{name:'下一本读什么',exact:true}).waitFor();
+  await mobile.getByRole('button',{name:'任务设置',exact:true}).click();
+  assert.equal(await mobile.locator('#editTitle').inputValue(), '下一本读什么');
+  await mobile.getByRole('button',{name:'关闭',exact:true}).click();
   report.task_editor_persists=true;
   assert.deepEqual(errors,[]);
   report.errors=errors;report.passed=true;

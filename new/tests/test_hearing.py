@@ -41,6 +41,32 @@ class Input:
             await asyncio.sleep(0)
 
 
+async def test_pause_replaces_stalled_partial_before_endpoint():
+    cloud, results = ASR(), []
+
+    async def noop(*args):
+        pass
+
+    async def text(value, at):
+        results.append(value)
+
+    hearing = Hearing(cloud, on_start=noop, on_partial=noop, on_text=text, on_error=noop)
+    feed = Input(hearing)
+    try:
+        await feed.feed(52)
+        assert len(cloud.requests) == 1
+        await feed.feed(8, 0)
+        assert len(cloud.requests) == 2 and len(cloud.requests[1]) > len(cloud.requests[0])
+        assert not results
+        cloud.release.set()
+        await feed.feed(30, 0)
+        await asyncio.sleep(0)
+        assert results == ["我想说明两个事情"]
+        assert len(cloud.requests) == 2
+    finally:
+        await hearing.close()
+
+
 async def test_resume_before_asr_finishes_keeps_both_parts_and_commits_once():
     cloud, results, errors = ASR(), [], []
     async def noop(*a): pass
