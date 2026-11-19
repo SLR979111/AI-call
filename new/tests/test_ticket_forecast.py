@@ -12,6 +12,8 @@ from app.forecast import (
     OpeningForecastCache,
     candidate_limit_from_env,
     merge_candidates,
+    model_reserve,
+    ticket_quota,
 )
 from app.models import DEFAULT_CARD, Candidate, Memory, Say, TaskCard
 from app.ticket_forecast import (
@@ -52,6 +54,17 @@ def candidate(cid: str, text: str, *, when: str = "用户询问",
 
 def intents(items: list[Candidate]) -> set[str]:
     return {item.intent for item in items}
+
+
+def single_ticket_card() -> TaskCard:
+    """Only the how_to_submit family applies, so the generator emits one item."""
+    return TaskCard.model_validate({
+        "title": "报修咨询",
+        "goal": "说明怎么报修",
+        "facts": "需要检修时联系运营商官方客服报修。",
+        "checkpoints": [{"id": "next", "description": "说明怎么报修"}],
+        "opening": "您好，需要我说明怎么报修吗？",
+    })
 
 
 # --- generator: families, labels, coverage ---------------------------------
@@ -266,6 +279,50 @@ async def test_switch_off_keeps_the_model_only_stream():
     batches = [batch async for batch in brain.predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))]
     items = [item for batch in batches for item in batch]
     assert [item.id for item in items] == ["p0_0"]
+
+
+def test_model_reserve_and_ticket_quota_stay_inside_the_pool():
+    for limit, reserve, quota in (
+        (1, 1, 0), (2, 1, 1), (3, 1, 2), (6, 2, 4), (10, 3, 7), (30, 4, 26),
+    ):
+        assert model_reserve(limit) == reserve, limit
+        assert ticket_quota(limit) == quota, limit
+        assert ticket_quota(limit) + model_reserve(limit) <= max(1, limit)
+
+
+async def test_nine_ticket_candidates_keep_the_model_reserve():
+    task = card("jd-qualification.json")
+    tickets = generate_ticket_candidates(task)
+    assert len(tickets) == 9
+    brain = Brain(OneCandidateCloud(), forecast_branches=5)
+    batches = [batch async for batch in brain.predict_batches(Brain.snapshot(Memory(task)))]
+    items = [item for batch in batches for item in batch]
+
+    admitted = ticket_quota(DEFAULT_CANDIDATE_LIMIT)
+    reserve = model_reserve(DEFAULT_CANDIDATE_LIMIT)
+    assert admitted == 7 and reserve == 3
+    # Ticket text is still published first, then model candidates stream in.
+    assert batches[0] == [item for item in tickets[:admitted]]
+    assert all(len(batch) == 1 for batch in batches[1:])
+    assert [item.id for item in items[:admitted]] == [
+        item.id for item in tickets[:admitted]]
+    model_items = items[admitted:]
+    assert len(model_items) >= reserve
+    assert all(item.id.startswith("p") for item in model_items)
+    assert len(items) <= DEFAULT_CANDIDATE_LIMIT
+
+
+async def test_single_ticket_leaves_the_remaining_slots_to_the_model():
+    task = single_ticket_card()
+    tickets = generate_ticket_candidates(task)
+    assert len(tickets) == 1
+    items = await Brain(OneCandidateCloud(), forecast_branches=5).predict(
+        Brain.snapshot(Memory(task)))
+    assert [item.id for item in items[:1]] == [tickets[0].id]
+    model_items = items[1:]
+    assert len(model_items) == 5
+    assert len(items) <= DEFAULT_CANDIDATE_LIMIT
+    assert all(item.id.startswith("p") for item in model_items)
 
 
 async def test_merged_cap_is_ten_even_when_tickets_fill_most_slots():

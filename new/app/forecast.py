@@ -12,6 +12,7 @@ from .persistent_cache import PersistentCache
 
 CANDIDATE_LIMIT_ENV = "PREDICTION_CANDIDATE_LIMIT"
 DEFAULT_CANDIDATE_LIMIT = 10
+MODEL_RESERVE_MAX = 4
 
 
 def candidate_limit_from_env() -> int:
@@ -24,6 +25,23 @@ def candidate_limit_from_env() -> int:
     except ValueError:
         return DEFAULT_CANDIDATE_LIMIT
     return value if value > 0 else DEFAULT_CANDIDATE_LIMIT
+
+
+def model_reserve(limit: int) -> int:
+    """Slots kept for cached/model candidates so tickets cannot fill the pool.
+
+    A third of the pool, at least one and at most four slots.  This is what
+    keeps deterministic ticket templates additive instead of replacing the
+    model forecast.
+    """
+    limit = max(1, int(limit))
+    return min(MODEL_RESERVE_MAX, max(1, limit // 3))
+
+
+def ticket_quota(limit: int) -> int:
+    """Maximum number of ticket candidates admitted ahead of model output."""
+    limit = max(1, int(limit))
+    return max(0, limit - model_reserve(limit))
 
 
 def candidate_text_key(text: str) -> str:

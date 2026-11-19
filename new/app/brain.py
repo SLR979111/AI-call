@@ -16,6 +16,7 @@ from .forecast import (
     likely_short_answers,
     merge_candidates,
     stream_candidates,
+    ticket_quota,
 )
 from .models import Candidate, Memory, Say, TaskCard, Update
 from .providers import Cloud, ProviderError
@@ -303,10 +304,11 @@ class Brain:
         ticket_mode = self.ticket_forecasts_enabled()
         merged: list[Candidate] = []
 
-        def take(items) -> list[Candidate]:
+        def take(items, cap: int | None = None) -> list[Candidate]:
             """Append the fresh part of ``items`` to the shared merged pool."""
             before = len(merged)
-            merged[:] = merge_candidates(merged, items, limit)
+            target = limit if cap is None else min(limit, cap)
+            merged[:] = merge_candidates(merged, items, target)
             return merged[before:]
 
         ticket = self.ticket_candidates(snapshot)
@@ -325,9 +327,11 @@ class Brain:
             }, sort_keys=True, ensure_ascii=False)
             cached, complete = self.opening_forecasts.get(key)
         # Deterministic ticket candidates take the first slots, then the cached
-        # model forecasts. Model output still streams in afterwards, so nothing
-        # waits for the whole forecast to finish.
-        ticket_batch = take(ticket)
+        # model forecasts. They may not consume the whole pool: at least
+        # ``model_reserve(limit)`` slots stay available for cached/model output.
+        # Unused ticket quota automatically flows to the model below.
+        quota = ticket_quota(limit)
+        ticket_batch = take(ticket, cap=quota) if quota else []
         cached_batch = take(cached)
         generated = list(cached_batch)
         # Separate requests keep common acknowledgements from competing with
