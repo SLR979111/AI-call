@@ -72,6 +72,12 @@ class Candidate(BaseModel):
     when: str = Field(min_length=1, max_length=300)
     examples: list[Annotated[str, Field(min_length=1, max_length=90)]] = Field(default_factory=list, max_length=2)
     reply: Say
+    # Optional provenance for deterministic, ticket-derived candidates. Model
+    # candidates leave these unset, so existing prompts, caches and records stay
+    # byte-compatible with the old Candidate shape.
+    checkpoint: str | None = Field(default=None, max_length=32)
+    intent: str | None = Field(default=None, max_length=40)
+    polarity: str | None = Field(default=None, max_length=16)
 
 
 def farewell_only(text: str) -> bool:

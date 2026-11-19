@@ -9,6 +9,10 @@ let composing = false, editorTask;
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
 function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
+function warmTask(card) {
+  fetch('/api/warm', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({task: card})}).catch(() => {});
+}
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 function notice(text = '') { $('callNotice').textContent = text; $('callNotice').hidden = !text; }
@@ -204,7 +208,7 @@ $('taskForm').onsubmit = event => {
   task = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
     opening: $('editOpening').value.trim(), checkpoints: samePoints ? editorTask.checkpoints
       : descriptions.map((description, i) => ({id: 'point_' + (i + 1), description}))};
-  localStorage.setItem('g2-task', JSON.stringify(task)); renderTask(); $('taskDialog').close();
+  localStorage.setItem('g2-task', JSON.stringify(task)); renderTask(); warmTask(task); $('taskDialog').close();
 };
 $('editPoints').oninput = () => $('editPoints').setCustomValidity('');
 $('export').onclick = () => {
@@ -225,7 +229,7 @@ try {
     task = config.default_task; localStorage.setItem('g2-task', JSON.stringify(task));
   }
   if (!task?.checkpoints?.length || !task.goal || !task.opening) task = config.default_task;
-  $('prediction').checked = config.predictions; renderTask();
+  $('prediction').checked = config.predictions; renderTask(); warmTask(task);
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
   if (!config.configured) showError('服务尚未配置 API 凭据，请在本地 .env 中填写后重启。');
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }
