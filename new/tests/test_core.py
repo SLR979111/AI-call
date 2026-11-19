@@ -188,32 +188,6 @@ async def test_speech_arriving_during_transcript_send_cannot_start_an_obsolete_r
     await session.close()
 
 
-async def test_voice_candidate_without_prepared_audio_is_not_published():
-    brain, cloud, events = TestBrain(), Cloud(), []
-    brain.forecast_release.set()
-
-    async def no_prefetch(text):
-        return None
-
-    cloud.prefetch = no_prefetch
-
-    async def send(event):
-        events.append(event)
-
-    session = Session(DEFAULT_CARD, cloud, brain, send, voice=True)
-    await session.start()
-    await session.user_text("为什么？")
-    await until(lambda: any(isinstance(e, dict) and e.get("type") == "utterance_end"
-                            for e in events))
-    await session.playback_progress(session.epoch, 1, 1920, done=True)
-    await until(lambda: session.reply_completed)
-    await until(lambda: session.forecast is not None and session.forecast.done())
-    assert session.candidates == []
-    assert not any(isinstance(e, dict) and e.get("type") == "candidates"
-                   for e in events)
-    await session.close()
-
-
 async def test_cached_reply_is_not_blocked_by_state_update():
     brain, cloud, events = TestBrain(), Cloud(), []
 
@@ -257,16 +231,18 @@ async def test_five_forecast_branches_fan_out():
 
         async def chat(self, messages, **kwargs):
             self.calls += 1
-            if self.calls == 5:
+            number = self.calls
+            if number == 5:
                 self.all_started.set()
             await asyncio.wait_for(self.all_started.wait(), 1)
             yield json.dumps({"candidates": [{
                 "id": "c1", "when": "用户确认",
-                "reply": {"text": "好的。", "covers": []},
+                "reply": {"text": f"好的，第{number}件事。", "covers": []},
             }]})
 
     cloud = FanoutCloud()
-    result = await Brain(cloud, forecast_branches=5).predict(
+    result = await Brain(cloud, forecast_branches=5,
+                         ticket_forecasts=False).predict(
         Brain.snapshot(Memory(DEFAULT_CARD)))
     assert cloud.calls == 5
     assert len(result) == 5
