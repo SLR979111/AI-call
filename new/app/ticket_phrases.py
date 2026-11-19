@@ -107,6 +107,10 @@ def rule_candidate(user_input: str, candidates: list[Candidate],
         return None
     if NEGATION.search(text) or text in SHORT_NO:
         return None
+    # These need the full model: they ask for a guarantee, a result, or a
+    # change of person, not a prepared reply.
+    if re.search(r"保证|投诉|换人|不想听|不补|通过了吗|成功了吗|结果出来|能过吗", text):
+        return None
     english_yes = {"ok", "okay", "yes", "yeah", "yep", "sure", "fine", "gotit",
                    "understood", "soundsgood", "alright", "cool", "great", "noproblem"}
     if text in english_yes:
