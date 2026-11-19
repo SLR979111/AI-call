@@ -411,6 +411,29 @@ WebSocket start
 3. adversarial：否认、保证、投诉、换人、拒绝、新问题
 ```
 
+并发和轮回：
+
+```text
+TASK_PREWARM_CONCURRENCY=4   并行会话数
+TASK_PREWARM_LOOP_DELAY=1    每轮间隔秒数
+TASK_PREWARM_MAX_ROUNDS=0    0 = 前台来之前一直轮回
+```
+
+预设情景现在包括：
+
+```text
+card_1 / card_2 / ...
+official
+official_status
+adversarial
+adversarial_2
+short
+english
+```
+
+每轮并行跑多个合成 Session，跑完继续下一轮；
+前台 start 到达时取消整个 group，已写入缓存保留。
+
 日志：
 
 ```text
