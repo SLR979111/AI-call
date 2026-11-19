@@ -120,11 +120,13 @@ def terms(card: TaskCard) -> list[str]:
                     part = token[start:start + size]
                     if part not in _STOP and part not in seen:
                         seen.append(part)
-    short = sorted((word for word in seen if len(word) <= 4),
-                   key=lambda value: (-len(value), value))[:500]
+    two = sorted((word for word in seen if len(word) == 2),
+                 key=lambda value: value)[:120]
+    short = sorted((word for word in seen if 3 <= len(word) <= 4),
+                   key=lambda value: (-len(value), value))[:300]
     long = sorted((word for word in seen if len(word) > 4),
                   key=lambda value: (-len(value), value))[:60]
-    return short + long
+    return two + short + long
 
 
 def short_form(text: str) -> str:

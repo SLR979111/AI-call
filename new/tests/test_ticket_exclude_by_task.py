@@ -22,10 +22,10 @@ def test_exclude_by_task_only_affects_named_card(monkeypatch):
     official_items = generate_ticket_candidates(official)
     assert "how_to_submit" not in {item.intent for item in jd_items}
     assert "how_to_submit" in {item.intent for item in official_items}
-    assert len(jd_items) < 9
+    assert len(jd_items) == 9
 
 
 def test_invalid_exclude_json_is_ignored(monkeypatch):
     monkeypatch.setenv("TICKET_FORECAST_EXCLUDE_BY_TASK", "{not-json")
     items = generate_ticket_candidates(card("jd-qualification.json"))
-    assert len(items) == 9
+    assert len(items) == 10
