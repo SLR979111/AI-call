@@ -22,6 +22,7 @@ from .session import Session
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
+from .task_prewarm import cancel_task_prewarm, start_task_prewarm
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -84,6 +85,18 @@ async def performance_metrics():
     }
 
 
+@app.post("/api/warm")
+async def warm(payload: dict):
+    """Start background synthetic conversations for a loaded task card."""
+    try:
+        card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
+    except (ValidationError, TypeError, ValueError):
+        return {"started": False, "error": "invalid_task"}
+    task = start_task_prewarm(card, app.state.cloud,
+                              app.state.opening_forecasts, ROOT / "runtime")
+    return {"started": task is not None}
+
+
 @app.get("/healthz")
 async def health():
     return {"ok": True, "name": "ai-call-g2", "sessions": len(app.state.sessions)}
@@ -144,6 +157,9 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
+                    # A real call wins immediately; prewarm cache entries already
+                    # written before this point remain valid.
+                    cancel_task_prewarm(card, "foreground")
                     session = Session(card, cloud, Brain(
                         cloud, app.state.opening_forecasts,
                         forecast_branches=app.state.settings.forecast_branches), send,
