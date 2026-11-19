@@ -105,13 +105,17 @@ async def test_unset_limit_still_prepares_audio_for_every_candidate(monkeypatch)
     session, _ = build_session(ScriptedBrain(items), cloud)
     try:
         await session._predict(0, session.brain.snapshot(session.memory))
+        # The text is published immediately; the audio arrives in the background.
         assert [item.id for item in session.candidates] == [f"p{i}" for i in range(5)]
-        assert list(session.prediction_audio) == [item.reply.text for item in items]
-        assert cloud.prefetch_calls == [item.reply.text for item in items]
         ready = session.events_named("prediction_ready")
         assert len(ready) == 5
-        assert {event["audio_status"] for event in ready} == {"prefetched"}
+        assert {event["audio_status"] for event in ready} == {"warming"}
         assert not session.events_named("prediction_audio_skipped")
+
+        await session.settle_audio()
+        assert list(session.prediction_audio) == [item.reply.text for item in items]
+        assert cloud.prefetch_calls == [item.reply.text for item in items]
+        assert len(session.events_named("prediction_audio_ready")) == 5
     finally:
         await session.close()
 
@@ -123,6 +127,7 @@ async def test_limit_prepares_only_the_leading_candidates_but_publishes_all_text
     session, _ = build_session(ScriptedBrain(items), cloud)
     try:
         await session._predict(0, session.brain.snapshot(session.memory))
+        await session.settle_audio()
         assert [item.id for item in session.candidates] == [f"p{i}" for i in range(5)]
         assert list(session.prediction_audio) == [item.reply.text for item in items[:2]]
         assert cloud.prefetch_calls == [item.reply.text for item in items[:2]]
@@ -130,7 +135,7 @@ async def test_limit_prepares_only_the_leading_candidates_but_publishes_all_text
         ready = session.events_named("prediction_ready")
         status = {event["candidate_id"]: event["audio_status"] for event in ready}
         assert [status[f"p{i}"] for i in range(5)] == [
-            "prefetched", "prefetched", "limit_skipped", "limit_skipped", "limit_skipped"]
+            "warming", "warming", "limit_skipped", "limit_skipped", "limit_skipped"]
         skipped = session.events_named("prediction_audio_skipped")
         assert [event["candidate_id"] for event in skipped] == ["p2", "p3", "p4"]
         assert all(event["limit"] == 2 for event in skipped)
@@ -139,16 +144,17 @@ async def test_limit_prepares_only_the_leading_candidates_but_publishes_all_text
         await session.close()
 
 
-async def test_budgeted_candidate_without_audio_is_still_not_published(monkeypatch):
+async def test_budgeted_candidate_without_audio_is_still_published(monkeypatch):
     monkeypatch.setenv(PREDICTION_AUDIO_LIMIT_ENV, "2")
     items = [candidate(i) for i in range(5)]
     cloud = FakeCloud(fail_texts=(items[0].reply.text,))
     session, _ = build_session(ScriptedBrain(items), cloud)
     try:
         await session._predict(0, session.brain.snapshot(session.memory))
-        # p0 was inside the audio budget but never got PCM, so it keeps the
-        # production rule and is dropped. The rest are still text candidates.
-        assert [item.id for item in session.candidates] == ["p1", "p2", "p3", "p4"]
+        await session.settle_audio()
+        # p0 was inside the audio budget but never got PCM. Its text still
+        # counts as a prediction: the turn reuses it and pays one TTS request.
+        assert [item.id for item in session.candidates] == ["p0", "p1", "p2", "p3", "p4"]
         assert list(session.prediction_audio) == [items[1].reply.text]
         assert session.events_named("prediction_audio_miss")[0]["candidate_id"] == "p0"
     finally:

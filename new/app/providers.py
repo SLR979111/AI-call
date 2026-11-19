@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -58,6 +59,15 @@ def wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
     return output.getvalue()
 
 
+# TTS budget. Predicted replies are synthesised before anyone asks for them,
+# so the cache holds several turns' worth of candidates: at 24 kHz mono an
+# average sentence is ~350 KB and a forecast batch can reach 4 MB.
+TTS_MEMORY_ENTRIES = 96
+TTS_MEMORY_BYTES = 24_000_000
+TTS_DISK_ENTRIES = 192
+TTS_DISK_BYTES = 48_000_000
+
+
 class Cloud:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None,
                  cache_path: str | Path | None = None,
@@ -73,6 +83,8 @@ class Cloud:
         self.audit = CacheAudit(cache_audit_path or os.getenv("CACHE_AUDIT_PATH", "").strip())
         self.persistent = PersistentCache(cache_path) if cache_path else None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
+        # One synthesis per text: a forecast batch often repeats a sentence.
+        self.warm_tasks: dict[str, asyncio.Task] = {}
         self.cache_bytes = 0
         self.cache_manager = EnhancedCacheManager(self.persistent)
         # Last lookup result, useful to label a turn's LLM/ASR/TTS source.
@@ -81,7 +93,7 @@ class Cloud:
         self.last_tts_cache_hit: bool | None = None
         if self.persistent is not None:
             for record in reversed(self.persistent.load(
-                "tts", max_entries=48, max_bytes=12_000_000,
+                "tts", max_entries=TTS_DISK_ENTRIES, max_bytes=TTS_DISK_BYTES,
             )):
                 self.cache[record.key] = record.value
                 self.cache_bytes += len(record.value)
@@ -224,7 +236,8 @@ class Cloud:
         return f"{self.settings.voice}\0{text}"
 
     def _trim_tts(self):
-        while len(self.cache) > 48 or self.cache_bytes > 12_000_000:
+        while (len(self.cache) > TTS_MEMORY_ENTRIES
+               or self.cache_bytes > TTS_MEMORY_BYTES):
             key, removed = self.cache.popitem(last=False)
             self.cache_bytes -= len(removed)
             if self.persistent is not None:
@@ -256,7 +269,8 @@ class Cloud:
         self.cache[key] = pcm
         if self.persistent is not None:
             self.persistent.put(
-                "tts", key, pcm, max_entries=48, max_bytes=12_000_000,
+                "tts", key, pcm,
+                max_entries=TTS_DISK_ENTRIES, max_bytes=TTS_DISK_BYTES,
             )
         self._trim_tts()
 
@@ -343,7 +357,45 @@ class Cloud:
         # later evicts this sentence. A ready candidate must retain its audio.
         return b"".join([chunk async for chunk in self.speech(text)])
 
+    async def warm(self, text: str) -> bytes | None:
+        """Synthesise ``text`` once so its PCM lives in the caches.
+
+        Forecasts call this for every predicted reply, including the candidates
+        the conversation never uses: a later turn that reuses the text then
+        starts from cached audio instead of a 700 ms synthesis. Failures are
+        swallowed — a warm-up must never break a turn.
+        """
+        existing = self.warm_tasks.get(text)
+        if existing is None or existing.done():
+            existing = asyncio.create_task(self._warm_now(text))
+            self.warm_tasks[text] = existing
+            existing.add_done_callback(
+                lambda task, key=text: self.warm_tasks.pop(key, None)
+                if self.warm_tasks.get(key) is task else None)
+        try:
+            return await asyncio.shield(existing)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a warm-up is best effort
+            return None
+
+    async def _warm_now(self, text: str) -> bytes | None:
+        cached = self.cached(text)
+        if cached is not None:
+            return cached
+        try:
+            return await self.prefetch(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - provider errors are not fatal here
+            return None
+
     async def close(self):
+        if self.warm_tasks:
+            for task in list(self.warm_tasks.values()):
+                task.cancel()
+            await asyncio.gather(*self.warm_tasks.values(), return_exceptions=True)
+            self.warm_tasks.clear()
         if self.owns_client:
             await self.client.aclose()
         if self.persistent is not None:

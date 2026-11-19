@@ -278,6 +278,9 @@ async def run_arm(limit: int | None) -> dict:
         started = time.perf_counter()
         await session._predict(0, brain.snapshot(session.memory))
         forecast_total_ms = round((time.perf_counter() - started) * 1000, 1)
+        # Audio is warmed off the publish path, so the arm is measured once the
+        # forecast's syntheses have settled.
+        await session.settle_audio()
 
         ready_events = {event["candidate_id"]: event for event in session.events
                         if event["event"] == "prediction_ready"}
