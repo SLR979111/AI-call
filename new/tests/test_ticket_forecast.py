@@ -94,11 +94,11 @@ def intents(items: list[Candidate]) -> set[str]:
 def single_ticket_card() -> TaskCard:
     """Only the how_to_submit family applies, so the generator emits one item."""
     return TaskCard.model_validate({
-        "title": "报修咨询",
-        "goal": "说明怎么报修",
-        "facts": "需要检修时联系运营商官方客服报修。",
-        "checkpoints": [{"id": "next", "description": "说明怎么报修"}],
-        "opening": "您好，需要我说明怎么报修吗？",
+        "title": "办理咨询",
+        "goal": "说明下一步怎么做",
+        "facts": "请按页面提示继续办理。",
+        "checkpoints": [{"id": "next", "description": "说明下一步怎么做"}],
+        "opening": "您好，需要我说明下一步吗？",
     })
 
 
@@ -108,12 +108,14 @@ def test_jd_card_generates_every_required_family_with_labels():
     items = generate_ticket_candidates(card("jd-qualification.json"))
     by_intent = {item.intent: item for item in items}
     assert {
-        "missing_material", "how_to_submit", "authorization", "name_mismatch",
-        "screenshot", "saved", "submitted", "in_review", "timing",
+        "missing_material", "how_to_submit", "upload_issue", "authorization",
+        "name_mismatch", "screenshot", "saved", "submitted", "in_review",
+        "timing",
     } <= set(by_intent)
     assert by_intent["authorization"].checkpoint == "authorization"
     assert by_intent["name_mismatch"].checkpoint == "company_name"
     assert by_intent["screenshot"].checkpoint == "trademark"
+    assert by_intent["upload_issue"].checkpoint == "submission"
     assert by_intent["saved"].polarity == "statement"
     assert by_intent["submitted"].polarity == "statement"
     assert by_intent["timing"].polarity == "question"
@@ -127,70 +129,60 @@ def test_jd_card_generates_every_required_family_with_labels():
         assert item.reply.question == ""
 
 
-def test_question_families_cover_all_scenarios_without_borrowing_facts():
-    logistics = cargo_card()
-    invoice = invoice_card()
-    expectations = {
+ALL_INTENTS = {
+    "missing_material", "how_to_submit", "upload_issue", "authorization",
+    "name_mismatch", "screenshot", "saved", "submitted", "in_review",
+    "handoff", "connectivity", "slow", "router", "device_check",
+    "optical_light", "repair", "price", "recommend", "install", "contract",
+    "coverage", "promotion", "logistics_status", "logistics_contact",
+    "logistics_address", "lost_or_damaged", "invoice_type", "invoice_header",
+    "invoice_status", "timing",
+}
+
+
+def scenario_families() -> dict[str, tuple[TaskCard, set[str]]]:
+    return {
         "jd": (
             card("jd-qualification.json"),
-            {"missing_material", "how_to_submit", "authorization",
-             "name_mismatch", "screenshot", "saved", "submitted",
-             "in_review", "timing"},
-            {"handoff", "connectivity", "slow", "router", "price", "recommend",
-             "install", "logistics_status", "logistics_contact",
-             "logistics_address", "invoice_type", "invoice_header",
-             "invoice_status"},
+            {"missing_material", "how_to_submit", "upload_issue",
+             "authorization", "name_mismatch", "screenshot", "saved",
+             "submitted", "in_review", "timing"},
         ),
         "official": (
             official_card(),
             {"missing_material", "how_to_submit", "in_review", "handoff",
              "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "connectivity", "slow", "router", "price",
-             "recommend", "install", "logistics_status", "logistics_contact",
-             "logistics_address", "invoice_type", "invoice_header",
-             "invoice_status"},
         ),
         "broadband": (
             card("home-broadband-support.json"),
-            {"how_to_submit", "connectivity", "slow", "router", "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review", "handoff", "price", "recommend",
-             "install", "logistics_status", "logistics_contact",
-             "logistics_address", "invoice_type", "invoice_header",
-             "invoice_status"},
+            {"how_to_submit", "connectivity", "slow", "router",
+             "device_check", "optical_light", "repair", "timing"},
         ),
         "network": (
             card("network-consultation.json"),
-            {"how_to_submit", "price", "recommend", "install", "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review", "handoff", "connectivity", "slow",
-             "router", "logistics_status", "logistics_contact",
-             "logistics_address", "invoice_type", "invoice_header",
-             "invoice_status"},
+            {"how_to_submit", "price", "recommend", "install", "contract",
+             "coverage", "promotion", "timing"},
         ),
         "logistics": (
-            logistics,
+            cargo_card(),
             {"logistics_status", "logistics_contact", "logistics_address",
-             "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review", "handoff", "connectivity", "slow",
-             "router", "price", "recommend", "install", "invoice_type",
-             "invoice_header", "invoice_status"},
+             "lost_or_damaged", "timing"},
         ),
         "invoice": (
-            invoice,
+            invoice_card(),
             {"invoice_type", "invoice_header", "invoice_status", "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review", "handoff", "connectivity", "slow",
-             "router", "price", "recommend", "install", "logistics_status",
-             "logistics_contact", "logistics_address"},
         ),
     }
-    for name, (task, required, forbidden) in expectations.items():
+
+
+def test_question_families_cover_all_scenarios_without_borrowing_facts():
+    families = scenario_families()
+    assert set().union(*(expected for _, expected in families.values())) <= ALL_INTENTS
+    for name, (task, expected) in families.items():
         items = generate_ticket_candidates(task)
-        assert required <= intents(items), (name, intents(items))
-        assert not (forbidden & intents(items)), (name, intents(items))
+        # Exact set equality is the cross-scenario guard: a family borrowed
+        # from another card would show up here.
+        assert intents(items) == expected, (name, intents(items))
         assert 1 <= len(items) <= DEFAULT_MAX
         assert len({item.id for item in items}) == len(items)
         assert len({item.reply.text for item in items}) == len(items)
@@ -200,6 +192,58 @@ def test_question_families_cover_all_scenarios_without_borrowing_facts():
             assert item.checkpoint is None or item.checkpoint in {
                 point.id for point in task.checkpoints}
             assert item.intent and item.polarity
+
+
+# Integration audit recommendations, and the baseline pool each card must keep
+# even after those intents are excluded.
+RECOMMENDED_EXCLUSIONS = {
+    "jd": (["how_to_submit"], 9),
+    "official": ([], 5),
+    "broadband": (["how_to_submit", "timing"], 5),
+    "network": (["how_to_submit", "timing"], 5),
+    "logistics": (["timing"], 4),
+    "invoice": ([], 4),
+}
+REPLACEMENT_INTENTS = {
+    "jd": {"upload_issue"},
+    "broadband": {"device_check", "optical_light", "repair"},
+    "network": {"contract", "coverage", "promotion"},
+    "logistics": {"lost_or_damaged"},
+}
+
+
+def test_excluding_recommended_intents_does_not_shrink_the_pool():
+    families = scenario_families()
+    for name, (excluded, baseline) in RECOMMENDED_EXCLUSIONS.items():
+        task = families[name][0]
+        default = generate_ticket_candidates(task)
+        filtered = generate_ticket_candidates(task, exclude=excluded)
+        assert len(default) >= baseline, (name, len(default))
+        assert len(filtered) >= baseline, (name, len(filtered))
+        assert not (set(excluded) & intents(filtered)), name
+        assert REPLACEMENT_INTENTS.get(name, set()) <= intents(filtered), name
+        if not excluded:
+            assert filtered == default, name
+
+
+def test_replacement_families_are_selectable_and_grounded():
+    scenarios = [
+        (card("jd-qualification.json"), "上传失败了怎么办？", "upload_issue"),
+        (card("home-broadband-support.json"),
+         "怎么判断是一台还是多台设备？", "device_check"),
+        (card("home-broadband-support.json"), "光猫亮红灯怎么办？", "optical_light"),
+        (card("home-broadband-support.json"), "报修找谁？", "repair"),
+        (card("network-consultation.json"), "有合约吗？", "contract"),
+        (card("network-consultation.json"), "能覆盖全屋吗？", "coverage"),
+        (card("network-consultation.json"), "有优惠吗？", "promotion"),
+        (cargo_card(), "快递一直没收到。", "lost_or_damaged"),
+    ]
+    engine = ContextAwareDecisionEngine()
+    for task, utterance, expected in scenarios:
+        items = generate_ticket_candidates(task)
+        decision, selected = engine.should_reuse(utterance, items, "", task)
+        assert decision == "reuse", (utterance, decision)
+        assert selected is not None and selected.intent == expected, utterance
 
 
 def test_new_scenario_families_are_selectable_and_grounded():
@@ -317,12 +361,13 @@ def test_merge_deduplicates_id_text_and_labels():
 
 
 def test_merge_enforces_the_ten_candidate_cap():
-    tickets = generate_ticket_candidates(card("jd-qualification.json"))
+    tickets = generate_ticket_candidates(card("network-consultation.json"))
+    assert len(tickets) == 8
     model = [candidate(f"p{i}", f"模型候选{i}。") for i in range(6)]
     merged = merge_candidates(tickets, model, DEFAULT_CANDIDATE_LIMIT)
     assert len(merged) == 10
     assert [item.id for item in merged[:len(tickets)]] == [item.id for item in tickets]
-    assert [item.id for item in merged[len(tickets):]] == ["p0"]
+    assert [item.id for item in merged[len(tickets):]] == ["p0", "p1"]
 
 
 def test_feature_switch_and_limits_follow_the_environment(monkeypatch):
@@ -397,10 +442,10 @@ def test_model_reserve_and_ticket_quota_stay_inside_the_pool():
         assert ticket_quota(limit) + model_reserve(limit) <= max(1, limit)
 
 
-async def test_nine_ticket_candidates_keep_the_model_reserve():
+async def test_ten_ticket_candidates_keep_the_model_reserve():
     task = card("jd-qualification.json")
     tickets = generate_ticket_candidates(task)
-    assert len(tickets) == 9
+    assert len(tickets) == 10
     brain = Brain(OneCandidateCloud(), forecast_branches=5)
     batches = [batch async for batch in brain.predict_batches(Brain.snapshot(Memory(task)))]
     items = [item for batch in batches for item in batch]
@@ -432,8 +477,8 @@ async def test_single_ticket_leaves_the_remaining_slots_to_the_model():
     assert all(item.id.startswith("p") for item in model_items)
 
 
-async def test_five_scenario_tickets_still_leave_five_model_slots():
-    task = card("home-broadband-support.json")
+async def test_five_ticket_candidates_leave_five_model_slots():
+    task = official_card()
     tickets = generate_ticket_candidates(task)
     assert len(tickets) == 5
     items = await Brain(OneCandidateCloud(), forecast_branches=5).predict(
@@ -442,6 +487,19 @@ async def test_five_scenario_tickets_still_leave_five_model_slots():
     assert sum(item.id.startswith("t_") for item in items) == 5
     assert sum(item.id.startswith("p") for item in items) == 5
     assert [item.id for item in items[:5]] == [item.id for item in tickets]
+
+
+async def test_eight_ticket_candidates_still_keep_the_model_reserve():
+    task = card("home-broadband-support.json")
+    tickets = generate_ticket_candidates(task)
+    assert len(tickets) == 8
+    items = await Brain(OneCandidateCloud(), forecast_branches=5).predict(
+        Brain.snapshot(Memory(task)))
+    assert len(items) == 10
+    admitted = ticket_quota(DEFAULT_CANDIDATE_LIMIT)
+    assert sum(item.id.startswith("t_") for item in items) == admitted
+    assert sum(item.id.startswith("p") for item in items) == 10 - admitted
+    assert 10 - admitted >= model_reserve(DEFAULT_CANDIDATE_LIMIT)
 
 
 async def test_merged_cap_is_ten_even_when_tickets_fill_most_slots():

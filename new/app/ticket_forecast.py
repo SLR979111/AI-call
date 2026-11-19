@@ -109,7 +109,9 @@ def _how_reply(card: TaskCard) -> str:
     if "提交入口" in text or "京麦" in text or "重新提交" in text:
         return "补齐材料后，回到原提交入口按提示重新提交就行。"
     if "页面提示" in text:
-        return "按页面提示补充材料或等待就行。"
+        if "材料" in text:
+            return "按页面提示补充材料或等待就行。"
+        return "按页面提示继续办理就行。"
     if "报修" in text:
         return "需要检修的话，从自己的运营商官方客服入口报修就行。"
     if "安装" in text or "预约" in text:
@@ -247,6 +249,76 @@ def _router_reply(card: TaskCard) -> str:
     return "路由器可以先按电源重启，重启会让其他设备短暂断网。"
 
 
+def _device_check_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    if "一台" in text and "多台" in text:
+        return ("先确认是一台设备还是多台设备都不行；只有一台的话，"
+                "先看它连的是不是家里正确的无线网络。")
+    return "先确认是一台设备还是多台设备都不行，再决定下一步。"
+
+
+def _optical_light_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    if "光信号" in text and "红灯" in text:
+        return ("如果确认是光信号或 LOS 灯亮红灯，可能是光信号异常，"
+                "得找自家运营商核查；别的红灯不能直接当成光纤故障。")
+    return "如果光信号灯亮红灯，可能是光信号异常，需要找自家运营商核查。"
+
+
+def _repair_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    if "派单" in text:
+        return ("需要线路、账号或设备检修时，从自己的运营商官方客服入口报修；"
+                "我这里不能派单，也不猜号码或承诺维修时间。")
+    return "需要检修时，从自己的运营商官方客服入口报修；具体号码和时间我这里没法确认。"
+
+
+def _upload_issue_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    if "京麦" in text and "驳回意见页" in text:
+        return ("回到京麦本次品牌申请的驳回意见页，按提示重新上传后提交；"
+                "更细的菜单层级我这里没有，也不能代传文件。")
+    if "上传" in text and "提交入口" in text:
+        return "回到原提交入口重新上传后提交；更细的菜单层级我这里没有，也不能代传文件。"
+    return "先按页面提示重新上传，再回到原入口提交；更细的菜单层级和代传我这里都做不到。"
+
+
+def _contract_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    months = re.search(r"(\d+)\s*个月合约", text)
+    fee = re.search(r"剩[余下]?合约月数乘\s*(\d+)\s*元", text)
+    cap = re.search(r"上限\s*(\d+)\s*元", text)
+    if not months or not fee:
+        return ""
+    tail = f"，最多{cap.group(1)}元" if cap else ""
+    return (f"{months.group(1)}个月合约；提前结束按剩余合约月数乘"
+            f"{fee.group(1)}元{tail}。")
+
+
+def _coverage_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    area = re.search(r"超过\s*(\d+)\s*平方米", text)
+    walls = re.search(r"穿过\s*([一二两三四五六七八九十\d]+)\s*堵", text)
+    node = re.search(r"(\d+)\s*元的覆盖节点", text)
+    if not area or not node:
+        return ""
+    wall_text = walls.group(1) if walls else "两"
+    return (f"超过{area.group(1)}平方米或穿过{wall_text}堵以上墙，"
+            f"需要额外{node.group(1)}元覆盖节点；不满足条件不能保证全屋覆盖。")
+
+
+def _promotion_reply(card: TaskCard) -> str:
+    return "本次资料没有优惠、折扣或赠送，也不能申请特殊审批或隐藏套餐。"
+
+
+def _lost_reply(card: TaskCard) -> str:
+    text = card_text(card)
+    if "运单状态" in text and "物流记录" in text:
+        return ("一直没收到或显示签收异常的话，先看运单状态和最近物流记录，"
+                "再联系承运快递员或官方客服核实。")
+    return "一直没收到的话，先查运单状态和最近的物流记录，再联系承运方核实。"
+
+
 def _logistics_status_reply(card: TaskCard) -> str:
     text = card_text(card)
     if "运单状态" in text and "物流记录" in text:
@@ -329,6 +401,15 @@ _FAMILIES: tuple[_Family, ...] = (
         checkpoint_pattern=r"(?:提交|补交|入口|补充材料|页面提示|报修|安装|预约|办理|下一步)",
     ),
     _Family(
+        "upload_issue", "question",
+        "用户说上传失败、材料传不上去，或问材料怎么重新上传",
+        ("上传失败了怎么办？", "材料怎么重新传？"),
+        lambda card, _point: _upload_issue_reply(card),
+        checkpoint_pattern=r"(?:提交|上传|入口|驳回|补交)",
+        require=r"(?:上传|京麦|驳回意见页)",
+        require_all=(r"(?:提交|上传)",),
+    ),
+    _Family(
         "authorization", "question",
         "用户问经销商授权、品牌方直接授权或授权链路该怎么补",
         ("还要补经销商授权吗？", "品牌方直接授权行不行？"),
@@ -409,6 +490,32 @@ _FAMILIES: tuple[_Family, ...] = (
         require=r"(?:Reset|恢复出厂|指示灯|光猫)",
     ),
     _Family(
+        "device_check", "question",
+        "用户问怎么判断是一台设备还是多台设备有问题",
+        ("怎么判断是一台还是多台设备？", "只有一台手机上不了网。"),
+        lambda card, _point: _device_check_reply(card),
+        checkpoint_pattern=r"(?:判断|核查|评估|排查|设备)",
+        require=r"(?:一台|多台)",
+    ),
+    _Family(
+        "optical_light", "question",
+        "用户问光猫亮红灯、光信号或 LOS 灯亮红灯怎么办",
+        ("光猫亮红灯怎么办？", "光信号灯是红的。"),
+        lambda card, _point: _optical_light_reply(card),
+        checkpoint_pattern=r"(?:光信号|指示灯|光猫|信号|判断)",
+        require=r"(?:光信号|LOS)",
+        require_all=(r"(?:红灯|指示灯)",),
+    ),
+    _Family(
+        "repair", "question",
+        "用户问怎么报修、能不能派人上门或派单",
+        ("报修找谁？", "你们能派人上门吗？"),
+        lambda card, _point: _repair_reply(card),
+        checkpoint_pattern=r"(?:报修|下一步|检修|派单|办理)",
+        require=r"(?:报修|派单|上门)",
+        require_all=(r"(?:运营商|报修|派单)",),
+    ),
+    _Family(
         "price", "question",
         "用户问套餐价格、月费或怎么收费",
         _price_examples,
@@ -431,6 +538,33 @@ _FAMILIES: tuple[_Family, ...] = (
         lambda card, _point: _install_reply(card),
         checkpoint_pattern=r"(?:安装|预约|覆盖|上门)",
         require=r"安装",
+    ),
+    _Family(
+        "contract", "question",
+        "用户问有没有合约、合约多久、提前取消要赔多少",
+        ("有合约吗？", "提前取消要赔多少？"),
+        lambda card, _point: _contract_reply(card),
+        checkpoint_pattern=r"(?:合约|退出|条件|费用)",
+        require=r"(?:合约|违约|提前结束)",
+        require_all=(r"(?:合约|退出成本)",),
+    ),
+    _Family(
+        "coverage", "question",
+        "用户问能不能覆盖全屋、面积大要不要加钱",
+        ("能覆盖全屋吗？", "面积大要加钱吗？"),
+        lambda card, _point: _coverage_reply(card),
+        checkpoint_pattern=r"(?:覆盖|安装|条件)",
+        require=r"(?:覆盖|面积|墙体|平方米)",
+        require_all=(r"(?:平方米|覆盖)",),
+    ),
+    _Family(
+        "promotion", "question",
+        "用户问有没有优惠、折扣、赠送或特殊审批",
+        ("有优惠吗？", "能打折吗？"),
+        lambda card, _point: _promotion_reply(card),
+        checkpoint_pattern=r"(?:优惠|折扣|费用|条件)",
+        require=r"(?:优惠|折扣|赠送)",
+        require_all=(r"(?:优惠|折扣|赠送)",),
     ),
     _Family(
         "logistics_status", "question",
@@ -457,6 +591,15 @@ _FAMILIES: tuple[_Family, ...] = (
         checkpoint_pattern=r"(?:地址|签收|修改)",
         require=r"(?:改地址|承运方|地址)",
         require_all=(r"(?:运单|物流|快递|承运)",),
+    ),
+    _Family(
+        "lost_or_damaged", "question",
+        "用户说快递一直没收到、怀疑丢件或显示签收异常",
+        ("快递一直没收到。", "是不是丢件了？"),
+        lambda card, _point: _lost_reply(card),
+        checkpoint_pattern=r"(?:签收|运单|物流|状态)",
+        require=r"(?:未收到|没收到|丢件|签收异常)",
+        require_all=(r"(?:运单|物流|快递)",),
     ),
     _Family(
         "invoice_type", "question",
