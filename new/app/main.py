@@ -22,6 +22,7 @@ from .session import Session
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
+from .prediction_stats import build_prediction_stats
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -35,7 +36,14 @@ async def lifespan(app: FastAPI):
     cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
     if not cache_path.is_absolute():
         cache_path = ROOT / cache_path
-    app.state.cloud = Cloud(app.state.settings, cache_path=cache_path)
+    # Trackers are created first so provider cache events can be recorded at
+    # the single point where each cache/network request actually happens.
+    app.state.decision_tracker = DecisionTracker()
+    app.state.performance_monitor = PerformanceMonitor()
+    app.state.cloud = Cloud(
+        app.state.settings, cache_path=cache_path,
+        on_cache_event=app.state.decision_tracker.record_cache_event,
+    )
     app.state.local_asr = load_from_env()
     app.state.transcriber = make_transcriber(app.state.local_asr, app.state.cloud)
     if app.state.local_asr is not None:
@@ -47,8 +55,6 @@ async def lifespan(app: FastAPI):
     voice_detector_model()
     app.state.sessions = set()
     app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
-    app.state.decision_tracker = DecisionTracker()
-    app.state.performance_monitor = PerformanceMonitor()
     yield
     for session in list(app.state.sessions):
         await session.close()
@@ -82,6 +88,18 @@ async def performance_metrics():
         "decisions": app.state.decision_tracker.report(),
         "performance": app.state.performance_monitor.report(),
     }
+
+
+@app.get("/api/prediction/stats")
+async def prediction_stats():
+    """Read-only prediction reuse, latency and cache counters.
+
+    Counts and percentiles are derived from the same turn records that write
+    ``runtime/sessions/*.jsonl``; unmeasured fields are ``null`` and carry a
+    ``count`` of 0 instead of an invented 0 ms / 0% reading.
+    """
+    return build_prediction_stats(app.state.decision_tracker,
+                                  app.state.performance_monitor)
 
 
 @app.get("/healthz")
@@ -161,7 +179,8 @@ async def websocket(ws: WebSocket):
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
                             on_error=error,
                             is_playing=lambda: session.phase == "speaking",
-                            transcriber=app.state.transcriber)
+                            transcriber=app.state.transcriber,
+                            performance_monitor=app.state.performance_monitor)
                     await session.start()
                 elif session:
                     if kind == "text":

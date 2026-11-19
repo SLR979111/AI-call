@@ -41,6 +41,9 @@
 | [`14-cx-w1-frontend-spec-v0.2.1.md`](14-cx-w1-frontend-spec-v0.2.1.md) | cx W1 前端实现规格（逐消息处理） | 已合入 |
 | [`15-cx-w1-frontend-handoff.md`](15-cx-w1-frontend-handoff.md) | cx W1 前端交付说明与验证命令 | 已合入 |
 | [`16-pop-audit-scenario.md`](16-pop-audit-scenario.md) | POP 资质审核驳回外呼：数据、Flow、知识库、评测映射 | **当前赛题场景** |
+| [`29-ticket-guidance.md`](29-ticket-guidance.md) | 工单到电话指导文件：生成、校验、审批与 API | 后端已实现 |
+| [`30-jd-compliance-and-call-script.md`](30-jd-compliance-and-call-script.md) | 京东 POP 资质合规、官方资料与电话话术边界 | 新增 |
+| [`31-cache-audit-backfill.md`](31-cache-audit-backfill.md) | 缓存审计日志、回灌与限制 | 新增 |
 | [`guides/development.md`](guides/development.md) | 开发、配置、接口、Docker 与排障 | 新增 |
 | [`guides/testing.md`](guides/testing.md) | 测试分层、比赛指标点、分段执行 | 新增 |
 | [`guides/repository-map.md`](guides/repository-map.md) | 仓库结构 Mermaid 图与目录职责 | 新增 |

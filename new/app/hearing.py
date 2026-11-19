@@ -25,8 +25,9 @@ class Hearing:
                  on_partial: Callable[[str], Awaitable],
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
-                 detector=None, transcriber=None):
+                 detector=None, transcriber=None, performance_monitor=None):
         self.cloud = cloud
+        self.performance_monitor = performance_monitor
         self.on_start, self.on_text = on_start, on_text
         self.on_partial, self.on_error = on_partial, on_error
         self.is_playing = is_playing
@@ -183,7 +184,15 @@ class Hearing:
         decoded_at = self.decode_at
 
         async def decode():
-            text = await self.transcriber(audio)
+            asr_started = (self.performance_monitor.mark_asr_start()
+                           if self.performance_monitor else None)
+            try:
+                text = await self.transcriber(audio)
+            finally:
+                if self.performance_monitor:
+                    self.performance_monitor.mark_asr_end(
+                        bool(getattr(self.cloud, "last_asr_cache_hit", False)),
+                        started_at=asr_started)
             if (self.active and not self.closed and utterance_id == self.utterance_id
                     and decoded_at > self.partial_at):
                 self.partial_at = decoded_at
