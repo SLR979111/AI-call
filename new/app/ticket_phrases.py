@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .models import TaskCard
+from .models import Candidate, TaskCard
 
 _TOKEN = re.compile(r"[A-Za-z]{2,}|[\u4e00-\u9fff]{2,}")
 _STOP = {
@@ -59,3 +59,40 @@ def ticket_phrases(card: TaskCard) -> list[str]:
         phrases.extend([word, f"{word}怎么", f"{word}要什么", f"{word}是什么"])
     phrases.extend(sorted(SHORT_YES | SHORT_NO))
     return list(dict.fromkeys(phrases))
+
+
+def _source(candidate: Candidate) -> str:
+    return (candidate.when + " " + candidate.reply.text + " " +
+            " ".join(candidate.examples))
+
+
+# Common question forms derived from a work order. These are intentionally
+# coarse; a rule fires only when exactly one candidate matches.
+_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"^(?:嗯+|呃+|啊+|哦+)?(?:方便|有空|现在可以|可以的|方便的)$", ("方便", "有空", "可以")),
+    (r"提交.{0,6}(?:审核中|审核)|审核中|已经提交", ("提交", "审核")),
+    (r"(?:品牌方|厂家|品牌).{0,8}直接.{0,4}授权|直接授权|直接给我们.{0,4}授权", ("直接授权", "品牌方")),
+    (r"(?:授权书|授权).{0,8}(?:公司名|名称).{0,6}(?:错|不对|不一致|写错)", ("公司名", "名称")),
+    (r"(?:商标|状态).{0,8}截图.{0,10}(?:包含|什么|怎么|要什么|哪)", ("截图", "商标")),
+    (r"(?:还要|需要|用不用|是否).{0,8}经销商.{0,8}授权", ("经销商", "授权")),
+    (r"(?:保存|只是保存|还没提交)", ("保存", "提交")),
+)
+
+
+def rule_candidate(user_input: str, candidates: list[Candidate],
+                   card: TaskCard | None) -> Candidate | None:
+    """Return one candidate when a ticket-derived question pattern is unambiguous."""
+    if card is None or not candidates:
+        return None
+    text = re.sub(r"[\s，。；：？！,.!?、‘’“”'\"（）()【】]", "", user_input).lower()
+    for pattern, keywords in _RULES:
+        if not re.search(pattern, text):
+            continue
+        matched = []
+        for candidate in candidates:
+            source = _source(candidate).lower()
+            if any(keyword in source for keyword in keywords):
+                matched.append(candidate)
+        if len(matched) == 1:
+            return matched[0]
+    return None

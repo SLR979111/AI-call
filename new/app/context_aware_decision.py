@@ -7,7 +7,7 @@ from typing import Literal
 
 from .forecast import compatible_short_answer, match_example, spoken_form
 from .models import Candidate, TaskCard
-from .ticket_phrases import SHORT_NO, SHORT_YES, terms
+from .ticket_phrases import SHORT_NO, SHORT_YES, rule_candidate, terms
 
 
 # Each intent has separate surface forms in speech and in forecast conditions.
@@ -138,10 +138,25 @@ class ContextAwareDecisionEngine:
         broad_terms = set(terms(card))
         broad_terms.update({"方便", "提交", "保存", "授权", "截图", "商标", "公司",
                             "更名", "经销商", "负责人", "材料", "补", "审核"})
+        # Also score substrings of the actual caller sentence. This picks up
+        # "已经提交显示审核中" against a candidate that names both facts,
+        # without requiring an exact business-word list.
+        stop = {"用户", "商家", "对方", "什么", "怎么", "这个", "那个", "已经",
+                "没有", "不是", "可以", "需要", "一个", "我们", "你们"}
+        user_grams = {
+            normalized[i:i + n]
+            for n in (2, 3, 4, 5)
+            for i in range(max(0, len(normalized) - n + 1))
+        }
+        user_grams = {gram for gram in user_grams if gram not in stop}
         scored: list[tuple[int, Candidate]] = []
         for candidate in candidates:
             source = candidate.when + " " + candidate.reply.text + " " + " ".join(candidate.examples)
-            score = sum(1 for term in broad_terms if term in normalized and term in source)
+            source = self._normalize(source)
+            phrase_score = sum(len(term) for term in broad_terms
+                               if term in normalized and term in source)
+            ngram_score = sum(len(term) for term in user_grams if term in source)
+            score = phrase_score + ngram_score
             if score:
                 scored.append((score, candidate))
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -162,6 +177,9 @@ class ContextAwareDecisionEngine:
         if example is not None:
             return "reuse", example
         # Keep an unpredicted question or correction out of the lexical rules.
+        ticket_match = rule_candidate(user_input, candidates, card)
+        if ticket_match is not None:
+            return "reuse", ticket_match
         if EXTRA.search(user_input):
             return "llm", None
         utterance = self._normalize(key)
@@ -211,6 +229,10 @@ class ContextAwareDecisionEngine:
         # dialogue context. Keep forecasts available to the LLM for evaluation.
         if EXTRA.search(user_input) or len(utterance) > 24:
             return "llm", None
+
+        broad = self._broad_match(user_input, candidates, card)
+        if broad is not None:
+            return "reuse", broad
 
         affirmation = bool(re.fullmatch(r"(?:是的?|对的?|没错|嗯+)+", utterance))
         acknowledgement = bool(re.fullmatch(r"(?:明白了?|懂了|了解了?|清楚了?)+", utterance))
@@ -267,7 +289,4 @@ class ContextAwareDecisionEngine:
         # Overlapping or underspecified forecasts are ambiguous; don't guess by id/order.
         if len(matches) == 1:
             return "reuse", matches[0]
-        broad = self._broad_match(user_input, candidates, card)
-        if broad is not None:
-            return "reuse", broad
         return "llm", None
