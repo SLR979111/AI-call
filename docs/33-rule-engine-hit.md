@@ -11,6 +11,7 @@
 支持否定/改口
 用固定场景回归规则命中
 支持离线多轮拟合同一工单的不同问法
+用未参与拟合的留出集验证泛化
 ```
 
 ## 已实现
@@ -29,8 +30,9 @@
 精确规则先判
 工单短语匹配
 用户 2–5 字片段和候选 when/examples/reply 对齐
+候选 when/examples 权重高于回复正文
 唯一候选才复用
-多个候选按分数和差距判断
+多候选按分数和差距判断
 ```
 
 ### 3. 短答
@@ -38,6 +40,7 @@
 - 中文：好的 / 行 / 可以 / 明白 / 收到 / 没问题等
 - 短英文：ok / okay / yes / sure / fine / got it / no / nope / not now
 - 修正“是不是/行不行”被当成否定的问题
+- 增加“连不上/联不上 → 上不了”的基础归一
 
 ### 4. 否定和对抗
 
@@ -46,11 +49,10 @@
 
 ### 5. 多场景回归
 
-新增：
-
 ```text
-new/tests/test_rule_engine_scenarios.py
-new/tests/test_rule_engine_variants.py
+new/tests/test_rule_engine_scenarios.py   拟合场景
+new/tests/test_rule_engine_variants.py    同一工单多轮变体
+new/tests/test_rule_engine_heldout.py     未参与调试的留出输入
 new/tasks/official-work-order.json
 ```
 
@@ -63,16 +65,28 @@ new/tasks/official-work-order.json
 官方工单
 强对抗
 短英文
+同一工单多轮不同问法
 ```
 
 ## 验证
 
 ```text
-35 passed（规则场景 + 变体 + 原匹配测试）
-113 passed（new 全量离线测试）
+规则场景 + 变体 + 留出：全部通过
+new 全量离线测试：114 passed
 ```
 
-测试检查的是规则命中/不误命中，不跑模型、不跑 ASR。
+留出集：
+
+```text
+京东 8 条
+宽带 4 条
+网络 3 条
+官方工单 3 条
+对抗 4 条
+共 22 条
+```
+
+这些输入没有参与规则调试；现在全部命中正确候选或正确拒绝。
 
 ## 关于“多跑几轮模拟同一工单多次出现”
 
@@ -91,7 +105,7 @@ new/tasks/official-work-order.json
 正确做法：
 
 ```text
-训练/拟合集：同一工单的多种问法
+拟合集：同一工单的多种问法
 留出集：没参与调试的新问法
 只在留出集也命中，才算泛化
 ```

@@ -65,7 +65,8 @@ def terms(card: TaskCard) -> list[str]:
 def short_form(text: str) -> str:
     text = re.sub(r"[\s，。；：？！,.!?、‘’“”'\"（）()【】]", "", text).lower()
     # Degree words are filler for lexical matching: "网速很慢" == "网速慢".
-    return re.sub(r"(?:很|非常|特别|有点|太|比较|挺)+", "", text)
+    text = re.sub(r"(?:很|非常|特别|有点|太|比较|挺)+", "", text)
+    return text.replace("连不上", "上不了").replace("联不上", "上不了")
 
 
 def ticket_phrases(card: TaskCard) -> list[str]:
@@ -142,8 +143,11 @@ def rule_candidate(user_input: str, candidates: list[Candidate],
     scored: list[tuple[int, Candidate]] = []
     for candidate in candidates:
         source = short_form(_source(candidate))
+        when_source = short_form(candidate.when + " " + " ".join(candidate.examples))
         word_score = sum(len(word) for word in words if word in text and word in source)
-        gram_score = sum(len(gram) for gram in grams if gram in source)
+        # The condition/examples are stronger evidence than prose in the reply.
+        gram_score = sum(len(gram) for gram in grams if gram in when_source) * 2
+        gram_score += sum(len(gram) for gram in grams if gram in source)
         score = word_score + gram_score
         if score:
             scored.append((score, candidate))
