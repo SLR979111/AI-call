@@ -48,7 +48,7 @@ async def test_first_prediction_audio_is_ready_before_the_forecast_finishes():
             return bytes(1920)
 
     cloud = Cloud()
-    session = Session(DEFAULT_CARD, cloud, Brain(cloud), send, voice=True)
+    session = Session(DEFAULT_CARD, cloud, Brain(cloud, ticket_forecasts=False), send, voice=True)
     try:
         task = session.spawn(session._predict(0, Brain.snapshot(session.memory)))
         await until(lambda: bool(session.candidates))

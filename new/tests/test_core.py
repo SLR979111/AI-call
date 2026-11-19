@@ -260,16 +260,18 @@ async def test_five_forecast_branches_fan_out():
 
         async def chat(self, messages, **kwargs):
             self.calls += 1
-            if self.calls == 5:
+            number = self.calls
+            if number == 5:
                 self.all_started.set()
             await asyncio.wait_for(self.all_started.wait(), 1)
             yield json.dumps({"candidates": [{
                 "id": "c1", "when": "用户确认",
-                "reply": {"text": "好的。", "covers": []},
+                "reply": {"text": f"好的，第{number}件事。", "covers": []},
             }]})
 
     cloud = FanoutCloud()
-    result = await Brain(cloud, forecast_branches=5).predict(
+    result = await Brain(cloud, forecast_branches=5,
+                         ticket_forecasts=False).predict(
         Brain.snapshot(Memory(DEFAULT_CARD)))
     assert cloud.calls == 5
     assert len(result) == 5

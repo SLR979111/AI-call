@@ -7,11 +7,22 @@ import json
 from dataclasses import replace
 from typing import AsyncIterator
 
-from .forecast import OpeningForecastCache, has_unasked_question, likely_short_answers, stream_candidates
-from .models import Candidate, Memory, Say, Update
+from pydantic import ValidationError
+
+from .forecast import (
+    OpeningForecastCache,
+    candidate_limit_from_env,
+    has_unasked_question,
+    likely_short_answers,
+    merge_candidates,
+    stream_candidates,
+)
+from .models import Candidate, Memory, Say, TaskCard, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
 from .decision_model import DecisionModel
+from .ticket_forecast import enabled as ticket_forecast_enabled
+from .ticket_forecast import generate_ticket_candidates
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -103,16 +114,36 @@ FORECAST_BRANCHES = (
 
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
-                 *, forecast_branches: int = 5, decision_model: DecisionModel | None = None):
+                 *, forecast_branches: int = 5, decision_model: DecisionModel | None = None,
+                 ticket_forecasts: bool | None = None,
+                 candidate_limit: int | None = None):
         self.cloud = cloud
         self.decision_model = decision_model
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
+        # None follows TICKET_FORECAST_ENABLED; an explicit bool keeps tests and
+        # benchmark arms deterministic without touching process environment.
+        self.ticket_forecasts = ticket_forecasts
+        self.candidate_limit = candidate_limit
         # Set before each emitted reply so Session can count the decision path
         # (rule vs model vs model text) without parsing model output again.
         self.last_decision: dict | None = None
         self.candidates_considered = False
+
+    def ticket_forecasts_enabled(self) -> bool:
+        return (self.ticket_forecasts if self.ticket_forecasts is not None
+                else ticket_forecast_enabled())
+
+    def ticket_candidates(self, snapshot: dict) -> list[Candidate]:
+        """Ticket templates are deterministic, so they are never cached on disk."""
+        if not self.ticket_forecasts_enabled():
+            return []
+        try:
+            card = TaskCard.model_validate(snapshot.get("task"))
+        except (ValidationError, TypeError):
+            return []
+        return generate_ticket_candidates(card)
 
     @staticmethod
     def snapshot(memory: Memory):
@@ -267,19 +298,38 @@ class Brain:
         return [item async for batch in self.predict_batches(snapshot) for item in batch]
 
     async def predict_batches(self, snapshot: dict) -> AsyncIterator[list[Candidate]]:
+        limit = (self.candidate_limit if self.candidate_limit is not None
+                 else candidate_limit_from_env())
+        ticket_mode = self.ticket_forecasts_enabled()
+        merged: list[Candidate] = []
+
+        def take(items) -> list[Candidate]:
+            """Append the fresh part of ``items`` to the shared merged pool."""
+            before = len(merged)
+            merged[:] = merge_candidates(merged, items, limit)
+            return merged[before:]
+
+        ticket = self.ticket_candidates(snapshot)
         key = None
-        generated = []
+        cached: list[Candidate] = []
+        complete = False
         if self.opening_forecasts is not None and snapshot.get("opening"):
             # Task-only reuse could cross model versions, so include the model.
             # Voice does not change text; audio is always prepared per session.
             model = getattr(getattr(self.cloud, "settings", None), "model", "")
-            key = json.dumps({"task": snapshot["task"], "model": model},
-                             sort_keys=True, ensure_ascii=False)
-            generated, complete = self.opening_forecasts.get(key)
-            if generated:
-                yield list(generated)
-            if complete:
-                return
+            key = json.dumps({
+                "task": snapshot["task"], "model": model,
+                # Switching ticket templates or the cap changes which model
+                # candidates were cached, so A/B arms must not share records.
+                "ticket_forecast": ticket_mode, "candidate_limit": limit,
+            }, sort_keys=True, ensure_ascii=False)
+            cached, complete = self.opening_forecasts.get(key)
+        # Deterministic ticket candidates take the first slots, then the cached
+        # model forecasts. Model output still streams in afterwards, so nothing
+        # waits for the whole forecast to finish.
+        ticket_batch = take(ticket)
+        cached_batch = take(cached)
+        generated = list(cached_batch)
         # Separate requests keep common acknowledgements from competing with
         # specific questions for the same two forecast slots. More branches are
         # launched together in production to widen cache coverage.
@@ -316,12 +366,20 @@ class Brain:
             finally:
                 queue.put_nowait(None)
 
-        tasks = [asyncio.create_task(forecast_branch(i, instruction))
-                 for i, instruction in enumerate(branches)]
+        tasks = [] if complete else [
+            asyncio.create_task(forecast_branch(i, instruction))
+            for i, instruction in enumerate(branches)
+        ]
         remaining = len(tasks)
         emitted = False
         error = None
         try:
+            if ticket_batch:
+                yield ticket_batch
+            if cached_batch:
+                yield cached_batch
+            if complete:
+                return
             while remaining:
                 item = await queue.get()
                 if item is None:
@@ -329,18 +387,23 @@ class Brain:
                 elif isinstance(item, Exception):
                     error = item
                 else:
-                    emitted = True
-                    if any(c.id == item.id for c in generated):
+                    fresh = take([item])
+                    if not fresh:
                         continue
+                    emitted = True
                     generated.append(item)
                     if key:
                         self.opening_forecasts.store(key, generated, complete=False)
-                    yield [item]
+                    yield fresh
             if not emitted:
+                # Preserve the old failure contract for model output: a branch
+                # exception is a real forecast failure even though deterministic
+                # ticket text may already have been published to the caller.
                 if error:
                     raise error
-                raise ProviderError("所有预测分支均未产生候选")
-            if key and not error:
+                if not merged:
+                    raise ProviderError("所有预测分支均未产生候选")
+            if key and not error and emitted:
                 self.opening_forecasts.store(key, generated, complete=True)
         finally:
             for task in tasks:
