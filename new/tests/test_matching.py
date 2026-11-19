@@ -325,6 +325,29 @@ async def test_long_bridge_is_not_used_to_delay_answer():
     await session.close()
 
 
+async def test_real_filler_length_is_usable_as_a_bridge():
+    """A synthesized "嗯。" is ~0.76 s; the bridge ceiling must allow it.
+
+    The previous 0.5 s ceiling rejected every real clip, which silently
+    disabled the bridge in production.
+    """
+    from app.models import DEFAULT_CARD
+    from app.session import BRIDGE_MAX_BYTES, Session
+
+    class Cloud:
+        async def prefetch(self, text):
+            return b'\x00\x00' * 18240  # 0.76 s, measured from the live TTS
+
+    async def send(event):
+        pass
+
+    session = Session(DEFAULT_CARD, Cloud(), None, send, voice=True)
+    await session._warm_bridge()
+    assert session.bridge_audio is not None
+    assert len(session.bridge_audio) <= BRIDGE_MAX_BYTES
+    await session.close()
+
+
 async def test_playback_metrics_separate_bridge_from_answer():
     from app.models import DEFAULT_CARD
     from app.session import Session, Unit
@@ -423,3 +446,44 @@ def test_replay_never_uses_future_predictions(tmp_path):
     rows = replay(tmp_path)['rows']
     assert [r['available'] for r in rows] == [0, 1, 0]
     assert [r['hit'] for r in rows] == [False, True, False]
+
+
+@pytest.mark.parametrize("answer", ["是的", "好的", "是我", "对的", "是的，我就是负责人"])
+def test_ticket_forecast_reuses_the_answer_to_the_opening(answer):
+    """The opening asks a yes/no question, so a yes must be reusable.
+
+    Every deterministic family used to be a *question* the caller might ask,
+    while ``opening`` asks whether the caller handles the case. No candidate
+    could match "是的", so ``should_reuse`` declined on every greeting reply
+    and the turn waited for a full LLM round trip plus TTS before any audio.
+    """
+    from pathlib import Path
+
+    from app.forecast import ticket_quota
+    from app.models import TaskCard
+    from app.ticket_forecast import generate_ticket_candidates
+
+    card = TaskCard.model_validate_json(
+        (Path(__file__).resolve().parents[1] / "tasks" / "jd-qualification.json").read_text())
+    pool = generate_ticket_candidates(card)[:ticket_quota(10)]
+    decision, selected = ContextAwareDecisionEngine().should_reuse(
+        answer, pool, card.opening, card)
+    assert decision == "reuse"
+    assert selected is not None and selected.intent == "owner_confirmed"
+
+
+@pytest.mark.parametrize("answer", ["不是", "不是我", "我不是负责人"])
+def test_ticket_forecast_does_not_reuse_a_denial(answer):
+    """Declining the opening question is not the statement branch."""
+    from pathlib import Path
+
+    from app.forecast import ticket_quota
+    from app.models import TaskCard
+    from app.ticket_forecast import generate_ticket_candidates
+
+    card = TaskCard.model_validate_json(
+        (Path(__file__).resolve().parents[1] / "tasks" / "jd-qualification.json").read_text())
+    pool = generate_ticket_candidates(card)[:ticket_quota(10)]
+    decision, selected = ContextAwareDecisionEngine().should_reuse(
+        answer, pool, card.opening, card)
+    assert decision == "llm" and selected is None

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,7 +78,28 @@ class KnowledgeBase:
         self._vector_store = None
         self._embedder_available = False
         if vector_enabled:
-            self._init_vector_search()
+            self._start_vector_search()
+
+    def _start_vector_search(self) -> None:
+        """Start vector search in the background; TF-IDF serves until it is up.
+
+        Building the vector index is slow: the first run downloads a
+        `SentenceTransformer` model from the HuggingFace Hub (~24 MB) and then
+        embeds every document. Doing that inline stalls application startup,
+        and a cold Hub makes it take minutes — long enough that the health
+        check in `scripts/ci_e2e.sh` gives up after 30 s and CI fails. The
+        TF-IDF index is already built above, so serving it while the vector
+        index warms up costs nothing but recall for the first few seconds.
+        """
+        if os.getenv("KNOWLEDGE_VECTOR", "1").strip().lower() in {"0", "false", "no", "off"}:
+            logger.info("Vector search disabled by KNOWLEDGE_VECTOR")
+            return
+        thread = threading.Thread(
+            target=self._init_vector_search,
+            name="knowledge-vector-init",
+            daemon=True,
+        )
+        thread.start()
 
     def _init_vector_search(self) -> None:
         """Initialize vector search if dependencies are available."""
@@ -100,9 +123,12 @@ class KnowledgeBase:
                 logger.info(f"Indexing {len(self.docs)} documents for vector search...")
                 self._index_documents(store, embed_documents)
             
+            # Publish only once every field is in place: this runs on a
+            # background thread now, and `search` treats the flag as the signal
+            # that `_embed_query` and `_vector_store` are both usable.
+            self._embed_query = embed_query
             self._vector_store = store
             self._embedder_available = True
-            self._embed_query = embed_query
             logger.info("Vector search enabled (BGE + Chroma)")
         
         except ImportError as e:

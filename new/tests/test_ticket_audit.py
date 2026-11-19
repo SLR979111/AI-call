@@ -21,7 +21,7 @@ def test_audit_counts_ticket_intent_selections_over_multiple_turns():
         "今天天气不错。",
     ])
     assert report.turns == 4
-    assert report.tickets == 10
+    assert report.tickets == 11
     assert report.hits["missing_material"] == 1
     assert report.hits["submitted"] == 1
     assert report.hits["name_mismatch"] == 1

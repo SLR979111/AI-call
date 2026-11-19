@@ -18,10 +18,24 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_MODEL = ROOT / "models" / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
 
 
+def default_threads() -> int:
+    """SenseVoice concurrency that actually helps on this machine.
+
+    A short utterance is single-digit tokens, so the decoder cannot scale to
+    every core: measured P50 on a 4-core box was 347 ms at one thread, 205 ms
+    at two, 345 ms at four and 811 ms at eight.  Half the cores (capped at 2,
+    at least 1) keeps the endpoint thread and the TTS/LLM streams responsive
+    while still beating the naive "use every core" default.
+    """
+    cores = os.cpu_count() or 1
+    return max(1, min(2, max(1, cores // 2)))
+
+
 class LocalAsr:
     def __init__(self, model_dir: str | Path | None = None, threads: int | None = None):
         self.model_dir = Path(model_dir or os.getenv("LOCAL_ASR_DIR") or DEFAULT_MODEL)
-        self.threads = threads or int(os.getenv("LOCAL_ASR_THREADS", "4"))
+        self.threads = threads or int(
+            os.getenv("LOCAL_ASR_THREADS") or default_threads())
         self._recognizer = None
 
     @property

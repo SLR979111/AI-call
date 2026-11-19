@@ -108,9 +108,9 @@ def test_jd_card_generates_every_required_family_with_labels():
     items = generate_ticket_candidates(card("jd-qualification.json"))
     by_intent = {item.intent: item for item in items}
     assert {
-        "missing_material", "how_to_submit", "upload_issue", "authorization",
-        "name_mismatch", "screenshot", "saved", "submitted", "in_review",
-        "timing",
+        "owner_confirmed", "missing_material", "how_to_submit", "upload_issue",
+        "authorization", "name_mismatch", "screenshot", "saved", "submitted",
+        "in_review", "timing",
     } <= set(by_intent)
     assert by_intent["authorization"].checkpoint == "authorization"
     assert by_intent["name_mismatch"].checkpoint == "company_name"
@@ -119,6 +119,9 @@ def test_jd_card_generates_every_required_family_with_labels():
     assert by_intent["saved"].polarity == "statement"
     assert by_intent["submitted"].polarity == "statement"
     assert by_intent["timing"].polarity == "question"
+    # The opening asks whether the caller handles this case, so the answer to
+    # it needs a statement branch or the forecast can never be reused.
+    assert by_intent["owner_confirmed"].polarity == "statement"
     for item in items:
         assert item.id.startswith("t_")
         assert item.intent and item.polarity
@@ -130,6 +133,7 @@ def test_jd_card_generates_every_required_family_with_labels():
 
 
 ALL_INTENTS = {
+    "owner_confirmed",
     "missing_material", "how_to_submit", "upload_issue", "authorization",
     "name_mismatch", "screenshot", "saved", "submitted", "in_review",
     "handoff", "connectivity", "slow", "router", "device_check",
@@ -144,9 +148,9 @@ def scenario_families() -> dict[str, tuple[TaskCard, set[str]]]:
     return {
         "jd": (
             card("jd-qualification.json"),
-            {"missing_material", "how_to_submit", "upload_issue",
-             "authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review", "timing"},
+            {"owner_confirmed", "missing_material", "how_to_submit",
+             "upload_issue", "authorization", "name_mismatch", "screenshot",
+             "saved", "submitted", "in_review", "timing"},
         ),
         "official": (
             official_card(),
@@ -434,7 +438,7 @@ def test_model_reserve_and_ticket_quota_stay_inside_the_pool():
 async def test_ten_ticket_candidates_keep_the_model_reserve():
     task = card("jd-qualification.json")
     tickets = generate_ticket_candidates(task)
-    assert len(tickets) == 10
+    assert len(tickets) == 11
     brain = Brain(OneCandidateCloud(), forecast_branches=5)
     batches = [batch async for batch in brain.predict_batches(Brain.snapshot(Memory(task)))]
     items = [item for batch in batches for item in batch]

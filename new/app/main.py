@@ -56,9 +56,16 @@ async def lifespan(app: FastAPI):
     voice_detector_model()
     app.state.sessions = set()
     app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
+    # Warm the provider connection pool in the background so the first turn
+    # does not pay TLS setup on top of its own latency.
+    app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
     yield
     for session in list(app.state.sessions):
         await session.close()
+    prewarm = getattr(app.state, "prewarm", None)
+    if prewarm is not None and not prewarm.done():
+        prewarm.cancel()
+        await asyncio.gather(prewarm, return_exceptions=True)
     await app.state.cloud.close()
 
 

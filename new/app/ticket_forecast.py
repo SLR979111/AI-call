@@ -33,7 +33,7 @@ ENABLED_ENV = "TICKET_FORECAST_ENABLED"
 MAX_ENV = "TICKET_FORECAST_MAX"
 EXCLUDE_ENV = "TICKET_FORECAST_EXCLUDE"
 EXCLUDE_BY_TASK_ENV = "TICKET_FORECAST_EXCLUDE_BY_TASK"
-DEFAULT_MAX = 10
+DEFAULT_MAX = 12
 
 _LEAD = re.compile(r"^(?:说明|讲清|解释|介绍|告知|确认|核对|按)")
 _MATERIAL = re.compile(
@@ -170,6 +170,21 @@ def _missing_reply(card: TaskCard, point: Checkpoint | None) -> str:
     if point is None:
         return ""
     return f"这次主要要补的是{material_topic(point)}。"
+
+
+def _owner_reply(card: TaskCard, point: Checkpoint | None) -> str:
+    """Reply to a caller who confirms they handle this case.
+
+    Confirming responsibility answers the opening question but supplies no
+    business fact, so the only safe move is to name the one thing the card
+    says is missing and leave the rest for the next turn.
+    """
+    if point is None:
+        return ""
+    topic = material_topic(point)
+    if not topic:
+        return ""
+    return f"好的，那先说最要紧的一项：{topic}这部分还得补。"
 
 
 # --- scenario-specific conservative families -------------------------------
@@ -402,6 +417,15 @@ class _Family:
 # Order is priority: when the merged pool hits its cap, the families that
 # resolve a rejection or a submission question survive first.
 _FAMILIES: tuple[_Family, ...] = (
+    _Family(
+        "owner_confirmed", "statement",
+        "用户确认自己是这次资料的负责人，没有提出其他问题",
+        ("是的。", "是我。"),
+        _owner_reply,
+        checkpoint_pattern=r"(?:授权|经销商|品牌方|材料|资料|文件|证明|截图)",
+        checkpoint_exclude=_NAME_ONLY.pattern,
+        require=r"(?:负责.*[吗么]|是不是负责|您是负责)",
+    ),
     _Family(
         "missing_material", "question",
         "用户问这次缺什么材料或还要补什么，且没有提出新的其他问题",
