@@ -326,7 +326,7 @@ class Brain:
                 # which model candidates were cached, so A/B arms must not
                 # share records.
                 "ticket_forecast": ticket_mode,
-                "ticket_exclude": sorted(excluded_intents_from_env()),
+                "ticket_exclude": sorted(excluded_intents_from_env(TaskCard.model_validate(snapshot.get("task")))),
                 "candidate_limit": limit,
             }, sort_keys=True, ensure_ascii=False)
             cached, complete = self.opening_forecasts.get(key)

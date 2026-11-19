@@ -21,6 +21,7 @@ itself says, never promise an outcome, and never invent a URL, hotline or menu.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from .models import Candidate, Checkpoint, Say, TaskCard
 ENABLED_ENV = "TICKET_FORECAST_ENABLED"
 MAX_ENV = "TICKET_FORECAST_MAX"
 EXCLUDE_ENV = "TICKET_FORECAST_EXCLUDE"
+EXCLUDE_BY_TASK_ENV = "TICKET_FORECAST_EXCLUDE_BY_TASK"
 DEFAULT_MAX = 10
 
 _LEAD = re.compile(r"^(?:说明|讲清|解释|介绍|告知|确认|核对|按)")
@@ -60,15 +62,30 @@ def max_candidates_from_env() -> int:
     return value if value > 0 else DEFAULT_MAX
 
 
-def excluded_intents_from_env() -> frozenset[str]:
-    """Comma-separated intent names to skip; empty by default.
+def excluded_intents_from_env(card: TaskCard | None = None) -> frozenset[str]:
+    """Manually audited exclusions, global or keyed by card title.
 
-    Exclusions are a manual audit decision, not an automatic one.  The audit
-    helper in ``ticket_audit`` is the evidence used to decide whether an intent
-    really never matches.
+    ``TICKET_FORECAST_EXCLUDE`` is comma-separated.  An optional JSON object in
+    ``TICKET_FORECAST_EXCLUDE_BY_TASK`` can exclude different intents per card
+    title, so a family that is dead on broadband does not disappear on JD.
     """
     raw = os.getenv(EXCLUDE_ENV, "")
-    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+    result = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if card is not None:
+        mapping_raw = os.getenv(EXCLUDE_BY_TASK_ENV, "").strip()
+        if mapping_raw:
+            try:
+                mapping = json.loads(mapping_raw)
+            except (TypeError, ValueError):
+                mapping = {}
+            if isinstance(mapping, dict):
+                values = mapping.get(card.title, [])
+                if isinstance(values, str):
+                    values = values.split(",")
+                if isinstance(values, list):
+                    result.update(str(part).strip().lower()
+                                  for part in values if str(part).strip())
+    return frozenset(result)
 
 
 def card_text(card: TaskCard) -> str:
@@ -503,7 +520,7 @@ def generate_ticket_candidates(card: TaskCard, *, limit: int | None = None,
     """
     cap = max(1, limit if limit is not None else max_candidates_from_env())
     excluded = (frozenset(part.strip().lower() for part in exclude if part.strip())
-                if exclude is not None else excluded_intents_from_env())
+                if exclude is not None else excluded_intents_from_env(card))
     text = card_text(card)
     candidates: list[Candidate] = []
     for family in _FAMILIES:
