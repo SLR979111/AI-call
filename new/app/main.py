@@ -19,6 +19,7 @@ from .local_asr import load_from_env, make_transcriber
 from .models import TaskCard
 from .providers import Cloud, Settings
 from .session import Session
+from .decision_model import DecisionModel
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
@@ -164,7 +165,8 @@ async def websocket(ws: WebSocket):
                     cloud = app.state.cloud
                     session = Session(card, cloud, Brain(
                         cloud, app.state.opening_forecasts,
-                        forecast_branches=app.state.settings.forecast_branches), send,
+                        forecast_branches=app.state.settings.forecast_branches,
+                        decision_model=DecisionModel(cloud)), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",

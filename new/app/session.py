@@ -73,6 +73,19 @@ class Unit:
                           delivery="partial" if self.played else "unplayed")
 
 
+PREDICTION_FORBIDDEN = (
+    "保证通过", "包过", "百分百", "一定通过", "必过",
+    "今天一定", "明天一定", "加急一定", "加急保证",
+    "已帮您提交", "已转人工", "已为您登记",
+    "京东商家资质审核客服", "京东官方审核人员",
+)
+
+
+def prediction_text_allowed(text: str) -> bool:
+    """Fail closed for promises or an official identity in forecast speech."""
+    return not any(term in text for term in PREDICTION_FORBIDDEN)
+
+
 class Session:
     def __init__(self, card: TaskCard, cloud: Cloud, brain: Brain,
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
@@ -223,21 +236,20 @@ class Session:
         """
         if self.prediction_epoch != epoch or not self.candidates:
             return False
-        if self.voice:
-            candidates = [c for c in self.candidates
-                          if c.reply.text in self.prediction_audio]
-            audio = {c.reply.text: self.prediction_audio[c.reply.text]
-                     for c in candidates}
-        else:
-            candidates = list(self.candidates)
-            audio = {}
+        # Text candidates are useful even when their audio is still being
+        # prepared. Keep them staged; playback falls back to ordinary TTS if
+        # the selected candidate has no PCM yet.
+        candidates = list(self.candidates)
+        audio = {c.reply.text: self.prediction_audio[c.reply.text]
+                 for c in candidates if c.reply.text in self.prediction_audio}
         if not candidates:
             return False
         self.staged_candidates = candidates
         self.staged_audio = audio
         self.staged_epoch = epoch
         self.log("predictions_staged", interrupted_epoch=epoch, candidates=len(candidates),
-                 audio_bytes=sum(len(pcm) for pcm in audio.values()))
+                 audio_bytes=sum(len(pcm) for pcm in audio.values()),
+                 audio_ready=len(audio))
         return True
 
     def _take_staged(self):
@@ -294,16 +306,14 @@ class Session:
         staged_reuse = False
         if not usable and staged is not None:
             staged_candidates, staged_audio = staged
-            if self.voice:
-                staged_candidates = [c for c in staged_candidates
-                                     if c.reply.text in staged_audio]
             confirmed = self._confirmed_staged(staged_candidates)
             if confirmed is not None:
                 candidates = [confirmed]
                 audio = ({confirmed.reply.text: staged_audio[confirmed.reply.text]}
-                         if self.voice else {})
+                         if self.voice and confirmed.reply.text in staged_audio else {})
                 staged_reuse = True
-                self.log("predictions_reused_after_interrupt", candidate_id=confirmed.id)
+                self.log("predictions_reused_after_interrupt", candidate_id=confirmed.id,
+                         audio_ready=confirmed.reply.text in staged_audio)
             else:
                 candidates, audio = [], {}
                 self.log("predictions_dropped_after_interrupt",
@@ -747,6 +757,8 @@ class Session:
                 
                 self.reply_completed = False
                 self.candidates = []
+                self.prediction_audio.clear()
+                self.prediction_epoch = -1
                 if self.forecast and not self.forecast.done():
                     self.forecast.cancel()
                 self.phase = "listening"
@@ -821,62 +833,74 @@ class Session:
         if limit is not None:
             self.log("prediction_audio_limit", limit=limit)
         try:
-            ready: list[tuple[int, Candidate]] = []
-            tasks = []
             audio_tasks: dict[str, asyncio.Task] = {}
             received = 0
 
-            async def prepare(item, *, audio_allowed: bool, index: int):
-                text_ready_ms = round((time.perf_counter() - started) * 1000)
+            async def prepare_audio(item: Candidate, *, index: int, text_ready_ms: int):
+                """Prepare audio after text is already visible to the caller."""
                 audio_started = time.perf_counter()
-                pcm = None
-                audio_status = "not_requested"
-                if self.voice:
-                    if not audio_allowed:
-                        # Beyond the experimental budget the text candidate is
-                        # still useful, but selecting it will use ordinary TTS.
-                        audio_status = "limit_skipped"
-                        self.log("prediction_audio_skipped", candidate_id=item.id,
-                                 limit=limit, text_ready_ms=text_ready_ms)
-                    else:
-                        text = item.reply.text
-                        created_audio = text not in audio_tasks
-                        if created_audio:
-                            audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
-                        pcm = await asyncio.shield(audio_tasks[text])
-                        if not pcm:
-                            # Without prepared audio this is not a cache hit: the
-                            # reply would fall back to a blocking TTS request.
-                            self.log("prediction_audio_miss", candidate_id=item.id,
-                                     text_ready_ms=text_ready_ms)
-                            return
-                        audio_status = "prefetched"
-                        if created_audio and self.decision_tracker:
-                            # Count each actually prefetched PCM buffer once, even
-                            # when several candidates share the same text.
-                            self.decision_tracker.record_prediction_audio(
-                                prefetched_bytes=len(pcm))
-                if self.is_current(epoch):
-                    if pcm:
-                        self.prediction_audio[item.reply.text] = pcm
-                    ready.append((index, item))
-                    # With no budget this keeps the historical publish order
-                    # (audio completion). The experimental arms sort by the
-                    # order candidates arrived so a text-only candidate cannot
-                    # jump ahead of an earlier one that is still synthesizing.
-                    ordered = ready if limit is None else sorted(ready, key=lambda entry: entry[0])
-                    self.candidates = [candidate for _, candidate in ordered]
-                    self.prediction_epoch = epoch
-                    await self.send({"type": "candidates", "epoch": epoch, "items": [
-                        {"id": candidate.id, "text": candidate.reply.text}
-                        for _, candidate in ordered]})
-                    self.log("prediction_ready", count=len(ready), candidate_id=item.id,
+                text = item.reply.text
+                try:
+                    pcm = await self.cloud.prefetch(text)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self.log("prediction_audio_miss", candidate_id=item.id,
                              text_ready_ms=text_ready_ms,
-                             audio_prepare_ms=round((time.perf_counter() - audio_started) * 1000),
-                             ready_ms=round((time.perf_counter() - started) * 1000),
-                             audio_bytes=len(pcm) if pcm else 0,
-                             audio_status=audio_status,
-                             candidates=[candidate.model_dump() for _, candidate in ordered])
+                             error=type(exc).__name__)
+                    return
+                if not pcm:
+                    self.log("prediction_audio_miss", candidate_id=item.id,
+                             text_ready_ms=text_ready_ms)
+                    return
+                if not self.is_current(epoch):
+                    self.log("prediction_audio_discarded", candidate_id=item.id,
+                             text_ready_ms=text_ready_ms)
+                    return
+                self.prediction_audio[text] = pcm
+                if self.decision_tracker:
+                    # Count each actually prefetched PCM buffer once, even when
+                    # several candidates share the same text.
+                    self.decision_tracker.record_prediction_audio(
+                        prefetched_bytes=len(pcm))
+                self.log("prediction_audio_ready", candidate_id=item.id,
+                         text_ready_ms=text_ready_ms,
+                         audio_prepare_ms=round((time.perf_counter() - audio_started) * 1000),
+                         ready_ms=round((time.perf_counter() - started) * 1000),
+                         audio_bytes=len(pcm))
+
+            async def publish(item: Candidate, *, index: int, audio_allowed: bool):
+                """Publish text immediately; audio is attached by a background task."""
+                if not self.is_current(epoch):
+                    return
+                if not prediction_text_allowed(item.reply.text):
+                    self.log("prediction_compliance_drop", candidate_id=item.id)
+                    return
+                text_ready_ms = round((time.perf_counter() - started) * 1000)
+                self.candidates.append(item)
+                self.prediction_epoch = epoch
+                await self.send({"type": "candidates", "epoch": epoch, "items": [
+                    {"id": candidate.id, "text": candidate.reply.text}
+                    for candidate in self.candidates]})
+                if not self.is_current(epoch):
+                    return
+                if not self.voice:
+                    status = "not_requested"
+                elif not audio_allowed:
+                    status = "limit_skipped"
+                    self.log("prediction_audio_skipped", candidate_id=item.id,
+                             limit=limit, text_ready_ms=text_ready_ms)
+                else:
+                    status = "preparing"
+                    text = item.reply.text
+                    if text not in audio_tasks:
+                        audio_tasks[text] = asyncio.create_task(
+                            prepare_audio(item, index=index, text_ready_ms=text_ready_ms))
+                self.log("prediction_ready", count=len(self.candidates),
+                         candidate_id=item.id, text_ready_ms=text_ready_ms,
+                         ready_ms=round((time.perf_counter() - started) * 1000),
+                         audio_bytes=0, audio_status=status,
+                         candidates=[candidate.model_dump() for candidate in self.candidates])
 
             try:
                 if hasattr(self.brain, "predict_batches"):
@@ -885,27 +909,29 @@ class Session:
                             return
                         for item in batch:
                             received += 1
-                            tasks.append(asyncio.create_task(prepare(
-                                item, audio_allowed=limit is None or received <= limit,
-                                index=received)))
+                            await publish(item, index=received,
+                                         audio_allowed=limit is None or received <= limit)
                 else:
                     batch = await self.brain.predict(snapshot)
                     for item in batch:
                         received += 1
-                        tasks.append(asyncio.create_task(prepare(
-                            item, audio_allowed=limit is None or received <= limit,
-                            index=received)))
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, Exception):
-                        self.log("prediction_miss", error=type(result).__name__)
+                        await publish(item, index=received,
+                                     audio_allowed=limit is None or received <= limit)
+                if audio_tasks:
+                    await asyncio.gather(*audio_tasks.values(), return_exceptions=True)
             finally:
-                pending = tasks + list(audio_tasks.values())
+                pending = list(audio_tasks.values())
                 for task in pending:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
         except asyncio.CancelledError:
+            # A cancelled forecast must not leave text candidates visible for
+            # the next turn. The caller already copied any usable live values.
+            if self.is_current(epoch):
+                self.candidates = []
+                self.prediction_audio.clear()
             raise
         except Exception as exc:
             # Forecasts are expendable; a failure never blocks a response.

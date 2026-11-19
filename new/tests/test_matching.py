@@ -350,19 +350,23 @@ async def test_forecast_branches_run_concurrently():
 
         async def chat(self, messages, **kwargs):
             self.calls += 1
+            number = self.calls
             payload = json.loads(messages[-1]['content'])
-            if self.calls == 1:
+            if number == 1:
                 assert payload['forecast_user_inputs'] == ['好的。', '是的。']
                 assert '不能推断填错字' in messages[0]['content']
             else:
                 assert 'forecast_user_inputs' not in payload
-            if self.calls == 3:
+            if number == 3:
                 self.all_started.set()
             await asyncio.wait_for(self.all_started.wait(), 1)
-            yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
+            yield json.dumps({'candidates': [{
+                'id': 'c1', 'when': '用户确认',
+                'reply': {'text': f'请按页面提示操作第{number}步。', 'covers': []}}]})
 
     cloud = Cloud()
-    result = await Brain(cloud).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
+    result = await Brain(cloud, forecast_branches=3,
+                         ticket_forecasts=False).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
     assert cloud.calls == 3
     assert len(result) == 3
     assert len({c.id for c in result}) == 3
@@ -387,7 +391,8 @@ async def test_fast_forecast_is_available_before_slow_branches():
             yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
 
     cloud = Cloud()
-    batches = Brain(cloud).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
+    batches = Brain(cloud, forecast_branches=3,
+                    ticket_forecasts=False).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
     first = await asyncio.wait_for(anext(batches), 1)
     assert len(first) == 1
     await batches.aclose()

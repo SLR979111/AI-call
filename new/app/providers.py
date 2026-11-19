@@ -16,6 +16,7 @@ from typing import AsyncIterator, Callable
 import httpx
 from dotenv import load_dotenv
 
+from .cache_audit import CacheAudit
 from .enhanced_cache import EnhancedCacheManager
 from .persistent_cache import PersistentCache
 
@@ -60,7 +61,8 @@ def wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 class Cloud:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None,
                  cache_path: str | Path | None = None,
-                 on_cache_event: Callable[[str, bool, float, bool], None] | None = None):
+                 on_cache_event: Callable[[str, bool, float, bool], None] | None = None,
+                 cache_audit_path: str | Path | None = None):
         self.settings = settings
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(25, connect=8), trust_env=False,
@@ -68,6 +70,7 @@ class Cloud:
         )
         self.owns_client = client is None
         self.on_cache_event = on_cache_event
+        self.audit = CacheAudit(cache_audit_path or os.getenv("CACHE_AUDIT_PATH", "").strip())
         self.persistent = PersistentCache(cache_path) if cache_path else None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.cache_bytes = 0
@@ -171,6 +174,9 @@ class Cloud:
                     messages, self.settings.model, temperature, full_response,
                     max_tokens=max_tokens,
                 )
+                self.audit.llm(messages=messages, model=self.settings.model,
+                               temperature=temperature, max_tokens=max_tokens,
+                               response=full_response)
             self.emit_cache_event("llm", False, started)
             emitted = True
         finally:
@@ -203,6 +209,7 @@ class Cloud:
 
                 # Cache the result
                 self.cache_manager.asr.put(pcm, text)
+                self.audit.asr(pcm=pcm, text=text)
                 self.emit_cache_event("asr", False, started)
                 emitted = True
                 return text
@@ -297,6 +304,7 @@ class Cloud:
                     except (ValueError, TypeError) as exc:
                         raise ProviderError("语音合成没有返回 PCM 音频") from exc
                     self.remember(text, pcm)
+                    self.audit.tts(text=text, voice=self.settings.voice, pcm=pcm)
                     for offset in range(0, len(pcm), 1920):
                         yield pcm[offset:offset + 1920]
                     self.emit_cache_event("tts", False, started)
@@ -323,6 +331,7 @@ class Cloud:
             if not collected:
                 raise ProviderError("语音合成返回了空音频")
             self.remember(text, bytes(collected))
+            self.audit.tts(text=text, voice=self.settings.voice, pcm=bytes(collected))
             self.emit_cache_event("tts", False, started)
             emitted = True
         finally:

@@ -7,10 +7,23 @@ import json
 from dataclasses import replace
 from typing import AsyncIterator
 
-from .forecast import OpeningForecastCache, has_unasked_question, likely_short_answers, stream_candidates
-from .models import Candidate, Memory, Say, Update
+from pydantic import ValidationError
+
+from .forecast import (
+    OpeningForecastCache,
+    candidate_limit_from_env,
+    has_unasked_question,
+    likely_short_answers,
+    merge_candidates,
+    stream_candidates,
+    ticket_quota,
+)
+from .models import Candidate, Memory, Say, TaskCard, Update
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
+from .decision_model import DecisionModel
+from .ticket_forecast import enabled as ticket_forecast_enabled
+from .ticket_forecast import generate_ticket_candidates
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -28,6 +41,7 @@ text 里只能放真正要说出口的回复。判断意图、分析原因、选
 已经回答的信息不机械重问。用户问哪里/怎么做而任务卡没有具体信息时如实说明，不虚构网址、入口、查询结果。不要把“某个官方渠道”“办理业务的平台”等猜测说成确定的来源；例如任务卡没给截图获取方式，就明确说“我这里没有截图获取方式的信息”。
 没有外部操作能力：不声称已登记、已安排、正在转人工、已发送或已完成任何现实操作。可以理解意愿、解释信息和结束对话。
 用户说材料已改好或已提交，只能作为对方提供的情况回应，例如“那您先等这次申请的新提示”。没有实际审核证据，不把“不一定是假”说成“这份授权本身没问题”，不把“您说已补好”说成“材料都齐了/已经核实/审核没问题”。
+不得承诺审核通过、加急一定处理、今天或明天一定出结果，也不说“保证通过/包过/百分百/必过”。官方页面写“预计一个工作日”时，只能说这是页面参考、具体以实际审核为准。不能把本次案例的授权链假设说成京东对所有商家的统一规定；先陈述本次驳回意见和本次申请页要求。
 打断后的历史里，text 是按播放时长估计已说出的前半句，remaining_text 是原计划中剩下的部分。对方问说到哪里时，指出刚讲到的意思。让你继续时，从断点附近的完整短语自然接下去。delivery=partial 不计为完整告知，unplayed 表示尚未播放。所有必要内容此前已经说完、对方确认理解且没有新问题时，主动简短道别，无需对方先说再见。
 “嗯”“好的”不等于听懂。用户仍有疑问时不结束任务。用户忙则简短暂停（例如“那我们先暂停，您方便时再继续”），不追问回电时间，不许诺稍后再次联系；明确拒绝则礼貌结束。
 """
@@ -51,7 +65,7 @@ disposition 取 active/complete/paused/declined。complete 必须所有要点此
 
 FORECAST = BEHAVIOR + """
 为这个目标对话准备2条最可能用上的简短回复。结合任务卡和刚刚计划播出的回复，预测用户下一句。
-只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。
+只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。不得预测审核通过、加急成功或具体出结果时间；不得把用户自述“已提交/已补交”写成系统已核验；不得把本次案例假设说成京东统一规则。
 两条候选是针对不同用户回答的替代方案，每条都能独立使用，不是先说第一条再接第二条的连续台词。
 examples 写一到两种用户可能实际说出口的完整短句，每句必须独立满足 when 的全部条件。纯承接不能代表材料已准备或已提交。把最可能的分支写在数组第一项。
 每个 when 要说明完整适用条件和不能忽略的限制。候选只帮助提速，不要穷举意图。
@@ -101,15 +115,36 @@ FORECAST_BRANCHES = (
 
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
-                 *, forecast_branches: int = 3):
+                 *, forecast_branches: int = 5, decision_model: DecisionModel | None = None,
+                 ticket_forecasts: bool | None = None,
+                 candidate_limit: int | None = None):
         self.cloud = cloud
+        self.decision_model = decision_model
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
+        # None follows TICKET_FORECAST_ENABLED; an explicit bool keeps tests and
+        # benchmark arms deterministic without touching process environment.
+        self.ticket_forecasts = ticket_forecasts
+        self.candidate_limit = candidate_limit
         # Set before each emitted reply so Session can count the decision path
         # (rule vs model vs model text) without parsing model output again.
         self.last_decision: dict | None = None
         self.candidates_considered = False
+
+    def ticket_forecasts_enabled(self) -> bool:
+        return (self.ticket_forecasts if self.ticket_forecasts is not None
+                else ticket_forecast_enabled())
+
+    def ticket_candidates(self, snapshot: dict) -> list[Candidate]:
+        """Ticket templates are deterministic, so they are never cached on disk."""
+        if not self.ticket_forecasts_enabled():
+            return []
+        try:
+            card = TaskCard.model_validate(snapshot.get("task"))
+        except (ValidationError, TypeError):
+            return []
+        return generate_ticket_candidates(card)
 
     @staticmethod
     def snapshot(memory: Memory):
@@ -141,7 +176,7 @@ class Brain:
             return None
         decision, selected = self.decision_engine.should_reuse(
             memory.history[-1].get("text", ""), candidates,
-            self._last_completed_assistant(memory))
+            self._last_completed_assistant(memory), memory.card)
         return selected if decision == "reuse" else None
 
     async def respond(self, memory: Memory, candidates: list[Candidate]):
@@ -172,9 +207,9 @@ class Brain:
             assistant_last_text = self._last_completed_assistant(memory)
 
             decision, selected_candidate = self.decision_engine.should_reuse(
-                last_user_input, candidates, assistant_last_text
+                last_user_input, candidates, assistant_last_text, memory.card
             )
-            
+
             if decision == "reuse":
                 # The cached audio is already prepared. Return it before asking
                 # for the state update so playback and the next forecast can
@@ -187,7 +222,18 @@ class Brain:
             elif decision == "say":
                 # Context-aware rejection (generate new, ignore candidates)
                 candidates = []
-        
+            elif decision == "llm" and self.decision_model is not None:
+                # A short, separate request selects an existing candidate. It
+                # never writes a reply, so text and prepared audio stay paired.
+                selected = await self.decision_model.decide(
+                    last_user_input, assistant_last_text, candidates)
+                if selected is not None:
+                    self.last_decision = {"kind": "reuse", "path": "decision_model",
+                                          "candidate_id": selected.id}
+                    yield "reuse", selected.reply
+                    yield "update_async", selected
+                    return
+
         # Slow path: LLM-based decision
         snapshot = self.snapshot(memory)
         snapshot["candidates"] = [item.model_dump() for item in candidates]
@@ -253,19 +299,41 @@ class Brain:
         return [item async for batch in self.predict_batches(snapshot) for item in batch]
 
     async def predict_batches(self, snapshot: dict) -> AsyncIterator[list[Candidate]]:
+        limit = (self.candidate_limit if self.candidate_limit is not None
+                 else candidate_limit_from_env())
+        ticket_mode = self.ticket_forecasts_enabled()
+        merged: list[Candidate] = []
+
+        def take(items, cap: int | None = None) -> list[Candidate]:
+            """Append the fresh part of ``items`` to the shared merged pool."""
+            before = len(merged)
+            target = limit if cap is None else min(limit, cap)
+            merged[:] = merge_candidates(merged, items, target)
+            return merged[before:]
+
+        ticket = self.ticket_candidates(snapshot)
         key = None
-        generated = []
+        cached: list[Candidate] = []
+        complete = False
         if self.opening_forecasts is not None and snapshot.get("opening"):
             # Task-only reuse could cross model versions, so include the model.
             # Voice does not change text; audio is always prepared per session.
             model = getattr(getattr(self.cloud, "settings", None), "model", "")
-            key = json.dumps({"task": snapshot["task"], "model": model},
-                             sort_keys=True, ensure_ascii=False)
-            generated, complete = self.opening_forecasts.get(key)
-            if generated:
-                yield list(generated)
-            if complete:
-                return
+            key = json.dumps({
+                "task": snapshot["task"], "model": model,
+                # Switching ticket templates or the cap changes which model
+                # candidates were cached, so A/B arms must not share records.
+                "ticket_forecast": ticket_mode, "candidate_limit": limit,
+            }, sort_keys=True, ensure_ascii=False)
+            cached, complete = self.opening_forecasts.get(key)
+        # Deterministic ticket candidates take the first slots, then the cached
+        # model forecasts. They may not consume the whole pool: at least
+        # ``model_reserve(limit)`` slots stay available for cached/model output.
+        # Unused ticket quota automatically flows to the model below.
+        quota = ticket_quota(limit)
+        ticket_batch = take(ticket, cap=quota) if quota else []
+        cached_batch = take(cached)
+        generated = list(cached_batch)
         # Separate requests keep common acknowledgements from competing with
         # specific questions for the same two forecast slots. More branches are
         # launched together in production to widen cache coverage.
@@ -302,12 +370,20 @@ class Brain:
             finally:
                 queue.put_nowait(None)
 
-        tasks = [asyncio.create_task(forecast_branch(i, instruction))
-                 for i, instruction in enumerate(branches)]
+        tasks = [] if complete else [
+            asyncio.create_task(forecast_branch(i, instruction))
+            for i, instruction in enumerate(branches)
+        ]
         remaining = len(tasks)
         emitted = False
         error = None
         try:
+            if ticket_batch:
+                yield ticket_batch
+            if cached_batch:
+                yield cached_batch
+            if complete:
+                return
             while remaining:
                 item = await queue.get()
                 if item is None:
@@ -315,18 +391,23 @@ class Brain:
                 elif isinstance(item, Exception):
                     error = item
                 else:
-                    emitted = True
-                    if any(c.id == item.id for c in generated):
+                    fresh = take([item])
+                    if not fresh:
                         continue
+                    emitted = True
                     generated.append(item)
                     if key:
                         self.opening_forecasts.store(key, generated, complete=False)
-                    yield [item]
+                    yield fresh
             if not emitted:
+                # Preserve the old failure contract for model output: a branch
+                # exception is a real forecast failure even though deterministic
+                # ticket text may already have been published to the caller.
                 if error:
                     raise error
-                raise ProviderError("所有预测分支均未产生候选")
-            if key and not error:
+                if not merged:
+                    raise ProviderError("所有预测分支均未产生候选")
+            if key and not error and emitted:
                 self.opening_forecasts.store(key, generated, complete=True)
         finally:
             for task in tasks:
