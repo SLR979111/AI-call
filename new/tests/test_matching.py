@@ -114,14 +114,18 @@ async def test_duplicate_forecasts_share_audio_preparation():
     session = Session(DEFAULT_CARD, Cloud(), Forecast(), send, voice=True)
     try:
         await session._predict(0, {})
-        assert len(calls) == 1
+        # Both candidates are published as text immediately; the warm-up is
+        # shared because it is keyed by sentence.
         assert len(session.candidates) == 2
+        await session.settle_audio()
+        assert len(calls) == 1
+        # Both candidates share the same reply sentence, so they share one PCM.
         assert len(session.prediction_audio) == 1
     finally:
         await session.close()
 
 
-async def test_cancel_forecast_cancels_shared_audio_preparation():
+async def test_cancel_forecast_lets_shared_audio_preparation_finish():
     from app.models import DEFAULT_CARD
     from app.session import Session
 
@@ -148,16 +152,19 @@ async def test_cancel_forecast_cancels_shared_audio_preparation():
         await asyncio.wait_for(started.wait(), 1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        assert cancelled.is_set()
-        assert not session.candidates
+        # The forecast is gone, but its synthesis keeps running: the PCM still
+        # lands in the persistent cache for whichever turn reuses the sentence.
+        assert not cancelled.is_set()
+        assert session.audio_warm
         assert not session.prediction_audio
     finally:
         await session.close()
+    assert cancelled.is_set()
 
 
 async def test_provider_prefetch_survives_shared_cache_eviction():
     import httpx
-    from app.providers import Cloud, Settings
+    from app.providers import TTS_MEMORY_ENTRIES, Cloud, Settings
     from app.models import DEFAULT_CARD
     from app.session import Session, Unit
 
@@ -181,9 +188,10 @@ async def test_provider_prefetch_survives_shared_cache_eviction():
         session = Session(DEFAULT_CARD, cloud, Forecast(), send, voice=True)
         try:
             await session._predict(0, {})
+            await session.settle_audio()
             reply = session.candidates[0].reply
             assert cloud.cached(reply.text) == pcm
-            for index in range(49):
+            for index in range(TTS_MEMORY_ENTRIES + 1):
                 cloud.remember(f'other-{index}', pcm)
             assert cloud.cached(reply.text) is None
             unit = Unit(1, reply, {})

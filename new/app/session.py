@@ -94,6 +94,12 @@ class Session:
         self.pending_update: asyncio.Task | None = None
         self.candidates: list[Candidate] = []
         self.prediction_audio: dict[str, bytes] = {}
+        # Syntheses started for predicted texts. They outlive the forecast that
+        # asked for them: the PCM also lands in the persistent cache, so a later
+        # turn that reuses the same text starts from audio instead of TTS.
+        self.audio_warm: set[asyncio.Task] = set()
+        # One warm-up per sentence: a forecast batch often repeats a reply.
+        self.audio_warm_texts: dict[str, asyncio.Task] = {}
         # Forecasts prepared for the turn a speech onset interrupted. They are
         # only candidates: the next user turn still has to pass the content
         # rules, and they expire as soon as another turn starts.
@@ -823,13 +829,49 @@ class Session:
         try:
             ready: list[tuple[int, Candidate]] = []
             tasks = []
-            audio_tasks: dict[str, asyncio.Task] = {}
+            warmed: set[str] = set()
             received = 0
+
+            def ensure_warm(text: str, candidate_id: str) -> asyncio.Task:
+                existing = self.audio_warm_texts.get(text)
+                if existing is not None and not existing.done():
+                    return existing
+                task = asyncio.create_task(settle(text, candidate_id))
+                self.audio_warm_texts[text] = task
+                self.audio_warm.add(task)
+
+                def done(finished: asyncio.Task) -> None:
+                    self.audio_warm.discard(finished)
+                    if self.audio_warm_texts.get(text) is finished:
+                        self.audio_warm_texts.pop(text, None)
+
+                task.add_done_callback(done)
+                return task
+
+            async def settle(text: str, candidate_id: str):
+                """Attach the warm PCM to the forecast once synthesis finishes."""
+                warm_started = time.perf_counter()
+                warm = getattr(self.cloud, "warm", None)
+                pcm = await (warm(text) if warm is not None else self.cloud.prefetch(text))
+                warm_ms = round((time.perf_counter() - warm_started) * 1000)
+                if not pcm:
+                    self.log("prediction_audio_miss", candidate_id=candidate_id,
+                             warm_ms=warm_ms)
+                    return
+                if self.decision_tracker and text not in warmed:
+                    # Count each PCM buffer once, even when candidates share a
+                    # sentence; the bytes are reused by every one of them.
+                    warmed.add(text)
+                    self.decision_tracker.record_prediction_audio(
+                        prefetched_bytes=len(pcm))
+                if self.is_current(epoch):
+                    self.prediction_audio[text] = pcm
+                self.log("prediction_audio_ready", candidate_id=candidate_id,
+                         audio_bytes=len(pcm), warm_ms=warm_ms, in_turn=self.is_current(epoch))
 
             async def prepare(item, *, audio_allowed: bool, index: int):
                 text_ready_ms = round((time.perf_counter() - started) * 1000)
-                audio_started = time.perf_counter()
-                pcm = None
+                text = item.reply.text
                 audio_status = "not_requested"
                 if self.voice:
                     if not audio_allowed:
@@ -839,32 +881,19 @@ class Session:
                         self.log("prediction_audio_skipped", candidate_id=item.id,
                                  limit=limit, text_ready_ms=text_ready_ms)
                     else:
-                        text = item.reply.text
-                        created_audio = text not in audio_tasks
-                        if created_audio:
-                            audio_tasks[text] = asyncio.create_task(self.cloud.prefetch(text))
-                        pcm = await asyncio.shield(audio_tasks[text])
-                        if not pcm:
-                            # Without prepared audio this is not a cache hit: the
-                            # reply would fall back to a blocking TTS request.
-                            self.log("prediction_audio_miss", candidate_id=item.id,
-                                     text_ready_ms=text_ready_ms)
-                            return
-                        audio_status = "prefetched"
-                        if created_audio and self.decision_tracker:
-                            # Count each actually prefetched PCM buffer once, even
-                            # when several candidates share the same text.
-                            self.decision_tracker.record_prediction_audio(
-                                prefetched_bytes=len(pcm))
+                        # The text is the part worth publishing: it is what makes
+                        # the next turn instant. Its audio is a second, separately
+                        # useful asset, warmed without holding the candidate back.
+                        audio_status = "warming"
+                        # Deduplicated, and owned by the session rather than by
+                        # this forecast: the PCM is worth keeping even if the
+                        # candidate it belongs to is never used.
+                        ensure_warm(text, item.id)
                 if self.is_current(epoch):
-                    if pcm:
-                        self.prediction_audio[item.reply.text] = pcm
                     ready.append((index, item))
-                    # With no budget this keeps the historical publish order
-                    # (audio completion). The experimental arms sort by the
-                    # order candidates arrived so a text-only candidate cannot
-                    # jump ahead of an earlier one that is still synthesizing.
-                    ordered = ready if limit is None else sorted(ready, key=lambda entry: entry[0])
+                    # Publish in arrival order so one candidate's slow synthesis
+                    # cannot delay a later text-only one.
+                    ordered = sorted(ready, key=lambda entry: entry[0])
                     self.candidates = [candidate for _, candidate in ordered]
                     self.prediction_epoch = epoch
                     await self.send({"type": "candidates", "epoch": epoch, "items": [
@@ -872,9 +901,7 @@ class Session:
                         for _, candidate in ordered]})
                     self.log("prediction_ready", count=len(ready), candidate_id=item.id,
                              text_ready_ms=text_ready_ms,
-                             audio_prepare_ms=round((time.perf_counter() - audio_started) * 1000),
                              ready_ms=round((time.perf_counter() - started) * 1000),
-                             audio_bytes=len(pcm) if pcm else 0,
                              audio_status=audio_status,
                              candidates=[candidate.model_dump() for _, candidate in ordered])
 
@@ -900,16 +927,24 @@ class Session:
                     if isinstance(result, Exception):
                         self.log("prediction_miss", error=type(result).__name__)
             finally:
-                pending = tasks + list(audio_tasks.values())
-                for task in pending:
+                # Only the candidate publishers are cancelled here. The warm-up
+                # tasks stay alive: they still fill the persistent cache for the
+                # turns that arrive after this forecast was replaced.
+                for task in tasks:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(*tasks, return_exceptions=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             # Forecasts are expendable; a failure never blocks a response.
             self.log("prediction_miss", error=type(exc).__name__)
+
+    async def settle_audio(self) -> None:
+        """Wait for the forecast syntheses still in flight (tests, shutdown)."""
+        pending = list(self.audio_warm)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def close(self):
         if self.closed:
@@ -923,6 +958,11 @@ class Session:
         self._finish_turn(completed=False)
         self.candidates.clear()
         self.prediction_audio.clear()
+        if self.audio_warm:
+            for task in list(self.audio_warm):
+                task.cancel()
+            await asyncio.gather(*list(self.audio_warm), return_exceptions=True)
+            self.audio_warm.clear()
         self._clear_staged()
         self.bridge_audio = None
         self.log("closed")
