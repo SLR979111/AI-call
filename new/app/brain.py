@@ -36,6 +36,7 @@ text 里只能放真正要说出口的回复。判断意图、分析原因、选
 已经回答的信息不机械重问。用户问哪里/怎么做而任务卡没有具体信息时如实说明，不虚构网址、入口、查询结果。不要把“某个官方渠道”“办理业务的平台”等猜测说成确定的来源；例如任务卡没给截图获取方式，就明确说“我这里没有截图获取方式的信息”。
 没有外部操作能力：不声称已登记、已安排、正在转人工、已发送或已完成任何现实操作。可以理解意愿、解释信息和结束对话。
 用户说材料已改好或已提交，只能作为对方提供的情况回应，例如“那您先等这次申请的新提示”。没有实际审核证据，不把“不一定是假”说成“这份授权本身没问题”，不把“您说已补好”说成“材料都齐了/已经核实/审核没问题”。
+不得承诺审核通过、加急一定处理、今天或明天一定出结果，也不说“保证通过/包过/百分百/必过”。官方页面写“预计一个工作日”时，只能说这是页面参考、具体以实际审核为准。不能把本次案例的授权链假设说成京东对所有商家的统一规定；先陈述本次驳回意见和本次申请页要求。
 打断后的历史里，text 是按播放时长估计已说出的前半句，remaining_text 是原计划中剩下的部分。对方问说到哪里时，指出刚讲到的意思。让你继续时，从断点附近的完整短语自然接下去。delivery=partial 不计为完整告知，unplayed 表示尚未播放。所有必要内容此前已经说完、对方确认理解且没有新问题时，主动简短道别，无需对方先说再见。
 “嗯”“好的”不等于听懂。用户仍有疑问时不结束任务。用户忙则简短暂停（例如“那我们先暂停，您方便时再继续”），不追问回电时间，不许诺稍后再次联系；明确拒绝则礼貌结束。
 """
@@ -59,7 +60,7 @@ disposition 取 active/complete/paused/declined。complete 必须所有要点此
 
 FORECAST = BEHAVIOR + """
 为这个目标对话准备2条最可能用上的简短回复。结合任务卡和刚刚计划播出的回复，预测用户下一句。
-只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。
+只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。不得预测审核通过、加急成功或具体出结果时间；不得把用户自述“已提交/已补交”写成系统已核验；不得把本次案例假设说成京东统一规则。
 两条候选是针对不同用户回答的替代方案，每条都能独立使用，不是先说第一条再接第二条的连续台词。
 examples 写一到两种用户可能实际说出口的完整短句，每句必须独立满足 when 的全部条件。纯承接不能代表材料已准备或已提交。把最可能的分支写在数组第一项。
 每个 when 要说明完整适用条件和不能忽略的限制。候选只帮助提速，不要穷举意图。
@@ -117,6 +118,10 @@ class Brain:
         self.decision_engine = ContextAwareDecisionEngine()
         self.ticket_forecasts = ticket_forecasts
         self.candidate_limit = candidate_limit
+        # Set before each emitted reply so Session can count the decision path
+        # (rule vs model vs model text) without parsing model output again.
+        self.last_decision: dict | None = None
+        self.candidates_considered = False
 
     def ticket_forecasts_enabled(self) -> bool:
         return (self.ticket_forecasts if self.ticket_forecasts is not None
@@ -137,7 +142,36 @@ class Brain:
         return {"task": memory.card.model_dump(), "state": memory.view(),
                 "dialogue": memory.history[-24:]}
 
+    @staticmethod
+    def _last_completed_assistant(memory: Memory) -> str:
+        """Only an utterance heard in full can anchor a short answer."""
+        for entry in reversed(memory.history[:-1]):
+            if entry.get("role") == "assistant":
+                return entry.get("text", "") if entry.get("delivery") == "complete" else ""
+        return ""
+
+    def match_reuse(self, memory: Memory, candidates: list[Candidate]) -> Candidate | None:
+        """Return the forecast the deterministic content rules confirm, if any.
+
+        This is the same gate ``respond`` uses for its fast path. Interrupted
+        turns may offer staged forecasts to the next user turn, but a model
+        decision must never resurrect them.
+        """
+        if not candidates or not memory.history:
+            return None
+        if has_unasked_question(memory.history[-1].get("text", "")):
+            return None
+        if memory.interrupted_position():
+            return None
+        if memory.history[-1].get("role") != "user":
+            return None
+        decision, selected = self.decision_engine.should_reuse(
+            memory.history[-1].get("text", ""), candidates,
+            self._last_completed_assistant(memory))
+        return selected if decision == "reuse" else None
+
     async def respond(self, memory: Memory, candidates: list[Candidate]):
+        self.last_decision = None
         if memory.history and has_unasked_question(memory.history[-1]["text"]):
             candidates = []
         position = memory.interrupted_position()
@@ -146,22 +180,22 @@ class Brain:
             # The session appends emitted speech to the live history. Use a
             # separate prompt for the remaining question without changing it.
             previous = memory.history[:-1]
+            # A recap is deterministic continuation, not a forecast decision;
+            # it must not inflate regeneration/miss counters.
+            self.last_decision = {"kind": "say", "path": "recap",
+                                  "candidate_id": None}
             yield "say", Say(text=recap)
             if not followup:
                 return
             memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
             candidates = []
+        # A forecast only counts as a prediction opportunity when it survived the
+        # unasked-question/interruption guards and reached the decision point.
+        self.candidates_considered = bool(candidates)
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
             last_user_input = memory.history[-1].get("text", "")
-
-            # Only an utterance heard in full can anchor a short answer.
-            assistant_last_text = ""
-            for entry in reversed(memory.history[:-1]):
-                if entry.get("role") == "assistant":
-                    if entry.get("delivery") == "complete":
-                        assistant_last_text = entry.get("text", "")
-                    break
+            assistant_last_text = self._last_completed_assistant(memory)
 
             decision, selected_candidate = self.decision_engine.should_reuse(
                 last_user_input, candidates, assistant_last_text, memory.card
@@ -171,6 +205,8 @@ class Brain:
                 # The cached audio is already prepared. Return it before asking
                 # for the state update so playback and the next forecast can
                 # start while the update request is still in flight.
+                self.last_decision = {"kind": "reuse", "path": "rule",
+                                      "candidate_id": selected_candidate.id}
                 yield "reuse", selected_candidate.reply
                 yield "update_async", selected_candidate
                 return
@@ -197,6 +233,15 @@ class Brain:
                     say.question = ""
                 say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
                 prepared = said == 0 and any(c.reply.text == say.text for c in candidates)
+                selected = (next((c for c in candidates if c.reply.text == say.text), None)
+                            if prepared else None)
+                self.last_decision = {
+                    "kind": "reuse" if prepared else "say",
+                    "path": ("model_text" if prepared
+                             else ("regenerated" if self.candidates_considered
+                                   else "direct")),
+                    "candidate_id": selected.id if selected is not None else None,
+                }
                 said += 1
                 asked = bool(say.question)
                 yield "reuse" if prepared else "say", say
@@ -204,6 +249,8 @@ class Brain:
                 match = next((c for c in candidates if c.id == event.get("id")), None)
                 if match is None:
                     raise ProviderError("模型选择了已失效的预测")
+                self.last_decision = {"kind": "reuse", "path": "model",
+                                      "candidate_id": match.id}
                 said = 1
                 reused = True
                 yield "reuse", match.reply

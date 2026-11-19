@@ -6,15 +6,17 @@ import base64
 import io
 import json
 import os
+import time
 import wave
 from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import httpx
 from dotenv import load_dotenv
 
+from .cache_audit import CacheAudit
 from .enhanced_cache import EnhancedCacheManager
 from .persistent_cache import PersistentCache
 
@@ -58,17 +60,25 @@ def wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 
 class Cloud:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None,
-                 cache_path: str | Path | None = None):
+                 cache_path: str | Path | None = None,
+                 on_cache_event: Callable[[str, bool, float, bool], None] | None = None,
+                 cache_audit_path: str | Path | None = None):
         self.settings = settings
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(25, connect=8), trust_env=False,
             limits=httpx.Limits(max_connections=12, max_keepalive_connections=8),
         )
         self.owns_client = client is None
+        self.on_cache_event = on_cache_event
+        self.audit = CacheAudit(cache_audit_path or os.getenv("CACHE_AUDIT_PATH", "").strip())
         self.persistent = PersistentCache(cache_path) if cache_path else None
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.cache_bytes = 0
         self.cache_manager = EnhancedCacheManager(self.persistent)
+        # Last lookup result, useful to label a turn's LLM/ASR/TTS source.
+        self.last_llm_cache_hit: bool | None = None
+        self.last_asr_cache_hit: bool | None = None
+        self.last_tts_cache_hit: bool | None = None
         if self.persistent is not None:
             for record in reversed(self.persistent.load(
                 "tts", max_entries=48, max_bytes=12_000_000,
@@ -82,81 +92,132 @@ class Cloud:
             raise ProviderError("尚未配置 DEEPSEEK_API_KEY")
         return {"Authorization": f"Bearer {self.settings.api_key}"}
 
+    def emit_cache_event(self, cache_type: str, hit: bool, started: float,
+                         interrupted: bool = False):
+        """Record exactly one cache/network operation for a provider request.
+
+        Metrics must never take down the call path, so a broken listener is
+        swallowed after the provider has already produced or failed its result.
+        """
+        if cache_type == "llm":
+            self.last_llm_cache_hit = hit
+        elif cache_type == "tts":
+            self.last_tts_cache_hit = hit
+        elif cache_type == "asr":
+            self.last_asr_cache_hit = hit
+        if self.on_cache_event is None:
+            return
+        try:
+            self.on_cache_event(cache_type, hit, (time.perf_counter() - started) * 1000,
+                                interrupted)
+        except Exception:  # noqa: BLE001 - observability must not break a call
+            pass
+
     def check(self, response: httpx.Response, service: str):
         if response.status_code >= 400:
             # Error bodies can contain user data or credentials. Do not echo them.
             raise ProviderError(f"{service} 请求失败（HTTP {response.status_code}）")
 
     async def chat(self, messages: list[dict], *, max_tokens: int = 650) -> AsyncIterator[str]:
-        # Check LLM cache first
-        temperature = 0.2
-        cached_response = self.cache_manager.llm.get(
-            messages, self.settings.model, temperature, max_tokens=max_tokens,
-        )
-        if cached_response is not None:
-            # Cache hit - simulate streaming from cache
-            for i in range(0, len(cached_response), 50):
-                yield cached_response[i:i + 50]
-            return
-        
-        # Cache miss - call API and collect response
-        collected = []
-        async with self.client.stream(
-            "POST", self.settings.base_url + "/chat/completions", headers=self.headers,
-            json={"model": self.settings.model, "messages": messages, "stream": True,
-                  "temperature": temperature, "max_tokens": max_tokens, "reasoning_effort": "none"},
-        ) as response:
-            self.check(response, "对话模型")
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    payload = json.loads(data)
-                    choices = payload.get("choices") or []
-                    if choices:
-                        if choices[0].get("finish_reason") == "length":
-                            raise ProviderError("模型输出达到长度限制")
-                        content = choices[0].get("delta", {}).get("content")
-                        if content:
-                            collected.append(content)
-                            yield content
-                except (KeyError, TypeError, json.JSONDecodeError) as exc:
-                    raise ProviderError("模型返回了无法解析的数据") from exc
-        
-        # Cache the full response
-        if collected:
-            full_response = "".join(collected)
-            self.cache_manager.llm.put(
-                messages, self.settings.model, temperature, full_response,
-                max_tokens=max_tokens,
+        started = time.perf_counter()
+        emitted = False
+        hit = False
+        try:
+            # Check LLM cache first
+            temperature = 0.2
+            cached_response = self.cache_manager.llm.get(
+                messages, self.settings.model, temperature, max_tokens=max_tokens,
             )
+            hit = cached_response is not None
+            # Expose the result before the first yielded chunk so the caller's
+            # TTFT mark can label this turn's LLM source correctly.
+            self.last_llm_cache_hit = hit
+            if cached_response is not None:
+                # Cache hit - simulate streaming from cache
+                for i in range(0, len(cached_response), 50):
+                    yield cached_response[i:i + 50]
+                self.emit_cache_event("llm", True, started)
+                emitted = True
+                return
+
+            # Cache miss - call API and collect response
+            collected = []
+            async with self.client.stream(
+                "POST", self.settings.base_url + "/chat/completions", headers=self.headers,
+                json={"model": self.settings.model, "messages": messages, "stream": True,
+                      "temperature": temperature, "max_tokens": max_tokens, "reasoning_effort": "none"},
+            ) as response:
+                self.check(response, "对话模型")
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(data)
+                        choices = payload.get("choices") or []
+                        if choices:
+                            if choices[0].get("finish_reason") == "length":
+                                raise ProviderError("模型输出达到长度限制")
+                            content = choices[0].get("delta", {}).get("content")
+                            if content:
+                                collected.append(content)
+                                yield content
+                    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                        raise ProviderError("模型返回了无法解析的数据") from exc
+
+            # Cache the full response
+            if collected:
+                full_response = "".join(collected)
+                self.cache_manager.llm.put(
+                    messages, self.settings.model, temperature, full_response,
+                    max_tokens=max_tokens,
+                )
+                self.audit.llm(messages=messages, model=self.settings.model,
+                               temperature=temperature, max_tokens=max_tokens,
+                               response=full_response)
+            self.emit_cache_event("llm", False, started)
+            emitted = True
+        finally:
+            if not emitted:
+                self.emit_cache_event("llm", hit, started, interrupted=True)
 
     async def transcribe(self, pcm: bytes) -> str:
-        # Check ASR cache first
-        cached_text = self.cache_manager.asr.get(pcm)
-        if cached_text is not None:
-            return cached_text
-        
-        # Cache miss - call API
-        response = await self.client.post(
-            self.settings.base_url + "/v1/tools/asr", headers=self.headers,
-            files={"file": ("speech.wav", wav_bytes(pcm), "audio/wav")},
-        )
-        self.check(response, "语音识别")
+        started = time.perf_counter()
+        emitted = False
         try:
-            text = response.json()["text"]
-            if not isinstance(text, str):
-                raise TypeError()
-            text = text.strip()
-            
-            # Cache the result
-            self.cache_manager.asr.put(pcm, text)
-            return text
-        except (ValueError, KeyError, TypeError) as exc:
-            raise ProviderError("语音识别没有返回有效文本") from exc
+            # Check ASR cache first
+            cached_text = self.cache_manager.asr.get(pcm)
+            self.last_asr_cache_hit = cached_text is not None
+            if cached_text is not None:
+                self.emit_cache_event("asr", True, started)
+                emitted = True
+                return cached_text
+
+            # Cache miss - call API
+            response = await self.client.post(
+                self.settings.base_url + "/v1/tools/asr", headers=self.headers,
+                files={"file": ("speech.wav", wav_bytes(pcm), "audio/wav")},
+            )
+            self.check(response, "语音识别")
+            try:
+                text = response.json()["text"]
+                if not isinstance(text, str):
+                    raise TypeError()
+                text = text.strip()
+
+                # Cache the result
+                self.cache_manager.asr.put(pcm, text)
+                self.audit.asr(pcm=pcm, text=text)
+                self.emit_cache_event("asr", False, started)
+                emitted = True
+                return text
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ProviderError("语音识别没有返回有效文本") from exc
+        finally:
+            if not emitted:
+                self.emit_cache_event("asr", False, started, interrupted=True)
 
     def _tts_key(self, text: str) -> str:
         # Voice is part of the identity: a cached PCM must match its speaker.
@@ -183,6 +244,7 @@ class Cloud:
             self.cache.move_to_end(key)
             if self.persistent is not None:
                 self.persistent.touch("tts", key)
+        self.last_tts_cache_hit = pcm is not None
         return pcm
 
     def remember(self, text: str, pcm: bytes):
@@ -211,54 +273,70 @@ class Cloud:
         return report
 
     async def speech(self, text: str) -> AsyncIterator[bytes]:
-        cached = self.cached(text)
-        if cached is not None:
-            for offset in range(0, len(cached), 1920):
-                yield cached[offset:offset + 1920]
-            return
-        collected = bytearray()
-        pending = bytearray()
-        async with self.client.stream(
-            "POST", self.settings.base_url + "/v1/tools/tts", headers=self.headers,
-            json={"text": text, "voice_id": self.settings.voice, "format": "pcm"},
-        ) as response:
-            self.check(response, "语音合成")
-            kind = response.headers.get("content-type", "").lower()
-            if "json" in kind:
-                body = await response.aread()
-                try:
-                    payload = json.loads(body)
-                    value = payload.get("audio") or payload.get("audio_base64") or payload.get("data")
-                    pcm = base64.b64decode(value, validate=True)
-                    if not pcm or len(pcm) % 2:
-                        raise ValueError()
-                except (ValueError, TypeError) as exc:
-                    raise ProviderError("语音合成没有返回 PCM 音频") from exc
-                self.remember(text, pcm)
-                for offset in range(0, len(pcm), 1920):
-                    yield pcm[offset:offset + 1920]
+        started = time.perf_counter()
+        emitted = False
+        hit = False
+        try:
+            cached = self.cached(text)
+            hit = cached is not None
+            if cached is not None:
+                for offset in range(0, len(cached), 1920):
+                    yield cached[offset:offset + 1920]
+                self.emit_cache_event("tts", True, started)
+                emitted = True
                 return
-            if not ("audio/pcm" in kind or "application/octet-stream" in kind):
-                raise ProviderError("语音合成返回了不支持的音频格式")
-            async for packet in response.aiter_bytes():
-                pending.extend(packet)
-                if not collected and pending.startswith(b'{"error"'):
-                    raise ProviderError("语音合成返回了错误数据")
-                if len(collected) + len(pending) > 4_800_000:
-                    raise ProviderError("单句音频超出长度限制")
-                while len(pending) >= 1920:
-                    chunk = bytes(pending[:1920])
-                    del pending[:1920]
-                    collected.extend(chunk)
-                    yield chunk
-            if len(pending) % 2:
-                raise ProviderError("语音合成的音频不完整")
-            if pending:
-                collected.extend(pending)
-                yield bytes(pending)
-        if not collected:
-            raise ProviderError("语音合成返回了空音频")
-        self.remember(text, bytes(collected))
+            collected = bytearray()
+            pending = bytearray()
+            async with self.client.stream(
+                "POST", self.settings.base_url + "/v1/tools/tts", headers=self.headers,
+                json={"text": text, "voice_id": self.settings.voice, "format": "pcm"},
+            ) as response:
+                self.check(response, "语音合成")
+                kind = response.headers.get("content-type", "").lower()
+                if "json" in kind:
+                    body = await response.aread()
+                    try:
+                        payload = json.loads(body)
+                        value = payload.get("audio") or payload.get("audio_base64") or payload.get("data")
+                        pcm = base64.b64decode(value, validate=True)
+                        if not pcm or len(pcm) % 2:
+                            raise ValueError()
+                    except (ValueError, TypeError) as exc:
+                        raise ProviderError("语音合成没有返回 PCM 音频") from exc
+                    self.remember(text, pcm)
+                    self.audit.tts(text=text, voice=self.settings.voice, pcm=pcm)
+                    for offset in range(0, len(pcm), 1920):
+                        yield pcm[offset:offset + 1920]
+                    self.emit_cache_event("tts", False, started)
+                    emitted = True
+                    return
+                if not ("audio/pcm" in kind or "application/octet-stream" in kind):
+                    raise ProviderError("语音合成返回了不支持的音频格式")
+                async for packet in response.aiter_bytes():
+                    pending.extend(packet)
+                    if not collected and pending.startswith(b'{"error"'):
+                        raise ProviderError("语音合成返回了错误数据")
+                    if len(collected) + len(pending) > 4_800_000:
+                        raise ProviderError("单句音频超出长度限制")
+                    while len(pending) >= 1920:
+                        chunk = bytes(pending[:1920])
+                        del pending[:1920]
+                        collected.extend(chunk)
+                        yield chunk
+                if len(pending) % 2:
+                    raise ProviderError("语音合成的音频不完整")
+                if pending:
+                    collected.extend(pending)
+                    yield bytes(pending)
+            if not collected:
+                raise ProviderError("语音合成返回了空音频")
+            self.remember(text, bytes(collected))
+            self.audit.tts(text=text, voice=self.settings.voice, pcm=bytes(collected))
+            self.emit_cache_event("tts", False, started)
+            emitted = True
+        finally:
+            if not emitted:
+                self.emit_cache_event("tts", hit, started, interrupted=True)
 
     async def prefetch(self, text: str) -> bytes:
         # Return ownership to the forecast even if the shared LRU rejects or
