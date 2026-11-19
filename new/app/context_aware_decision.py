@@ -7,7 +7,16 @@ from typing import Literal
 
 from .forecast import compatible_short_answer, match_example, spoken_form
 from .models import Candidate, TaskCard
-from .ticket_phrases import SHORT_NO, SHORT_YES, rule_candidate, terms
+from .ticket_phrases import (
+    SHORT_NO,
+    SHORT_YES,
+    canonical,
+    evidence_allowed,
+    out_of_scope,
+    rule_candidate,
+    terms,
+    uncovered_topic,
+)
 
 
 # Each intent has separate surface forms in speech and in forecast conditions.
@@ -32,7 +41,7 @@ REQUIREMENTS = {
     "ack": r"明白|理解|懂了|了解", "owner": r"负责|负责人",
 }
 
-EXTRA = re.compile(r"[?？]|为什么|怎么|如何|哪里|哪儿|多少|能不能|可不可以|但是|不过|可是|然而|另外|还有|顺便|其实|改口|不方便|忙|拒绝|算了|不用|不要|不需要|催|加急")
+EXTRA = re.compile(r"[?？]|为什么|怎么|如何|哪里|哪儿|在哪|从哪|哪边|多少|能不能|可不可以|但是|不过|可是|然而|另外|还有|顺便|其实|改口|不方便|忙|拒绝|算了|不用|不要|不需要|催|加急|投诉|保证|换人|换个人|上门|维修|退款|开发票|发票|转人工|回电|转接|登记|说错|刚才说")
 NEGATION = re.compile(r"不是|不对|没有|没|不行|不可以|不清楚|不一致|对不上|看不清")
 
 
@@ -125,10 +134,19 @@ class ContextAwareDecisionEngine:
         """Ticket-derived broad match for short answers after exact rules fail."""
         if card is None:
             return None
-        normalized = self._normalize(user_input)
+        normalized = canonical(user_input)
         if not normalized or len(normalized) > 24:
             return None
         if EXTRA.search(user_input) or NEGATION.search(user_input):
+            return None
+        # Location/method/time/price aspects and out-of-scope requests must
+        # survive the same evidence gate as the primary ticket matcher.
+        if out_of_scope(normalized):
+            return None
+        if re.fullmatch(r"[a-z]+", normalized) and normalized not in SHORT_YES and normalized not in SHORT_NO:
+            return None
+        if uncovered_topic(normalized, (canonical(c.when + " " + c.reply.text + " "
+                                                  + " ".join(c.examples)) for c in candidates)):
             return None
         if normalized not in SHORT_YES and normalized not in SHORT_NO:
             # Do not broad-match a bare "好的/是的"; those are handled by the
@@ -136,6 +154,7 @@ class ContextAwareDecisionEngine:
             if len(normalized) < 3:
                 return None
         broad_terms = set(terms(card))
+        broad_words = tuple(broad_terms)
         # Also score substrings of the actual caller sentence. This picks up
         # "已经提交显示审核中" against a candidate that names both facts,
         # without requiring an exact business-word list.
@@ -149,8 +168,9 @@ class ContextAwareDecisionEngine:
         user_grams = {gram for gram in user_grams if gram not in stop}
         scored: list[tuple[int, Candidate]] = []
         for candidate in candidates:
-            source = candidate.when + " " + candidate.reply.text + " " + " ".join(candidate.examples)
-            source = self._normalize(source)
+            source = canonical(candidate.when + " " + candidate.reply.text + " " + " ".join(candidate.examples))
+            if not evidence_allowed(normalized, source, broad_words):
+                continue
             phrase_score = sum(len(term) for term in broad_terms
                                if term in normalized and term in source)
             ngram_score = sum(len(term) for term in user_grams if term in source)
