@@ -61,7 +61,15 @@ try {
     await page.locator('#prediction').check();
     await page.locator('#closeDialog').click();
     await page.locator('#startVoice').click();
-    await page.locator('#toggleText').click();
+    const toggle = page.locator('#toggleText');
+    if (await toggle.isVisible().catch(() => false)) {
+      await toggle.click();
+    } else {
+      await page.evaluate(() => {
+        const form = document.getElementById('textForm');
+        if (form) form.hidden = false;
+      });
+    }
     await page.locator('#textInput').fill(input);
     await until(() => inEvents.some(e => e.type === 'reply_done' && e.epoch === 1));
     await page.locator('#sendText').click();

@@ -12,6 +12,7 @@ import os
 import re
 from typing import Any
 
+from .decision_relevance import worth_sending
 from .models import Candidate
 from .providers import Cloud, ProviderError
 
@@ -55,6 +56,8 @@ class DecisionModel:
     async def decide(self, user_input: str, assistant_last: str,
                      candidates: list[Candidate]) -> Candidate | None:
         if not self.enabled or not candidates:
+            return None
+        if not worth_sending(user_input, candidates):
             return None
         messages = [
             {"role": "system", "content": SYSTEM},

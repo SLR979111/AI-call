@@ -1,4 +1,4 @@
-// Feed the same saved 24 kHz mono PCM through the real browser capture path.
+﻿// Feed the same saved 24 kHz mono PCM through the real browser capture path.
 // Example: node scripts/check-first-response.mjs runtime/validation/user-question.pcm before
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -29,6 +29,7 @@ try {
             if (e.type === 'utterance') trace.units.set(e.epoch + ':' + e.unit, {...e, at: performance.now()});
             if (e.type === 'transcript' && e.final) trace.transcripts.push({...e, at: performance.now()});
             if (e.type === 'reply_done') trace.replies.push(e.epoch);
+            if (e.type === 'candidates') trace.candidates = (e.items || []).length;
             if (e.type === 'latency' && e.voice_to_playback_ms != null) trace.latency = e;
             if (e.type === 'error') trace.error = e.message;
           });
@@ -55,11 +56,13 @@ try {
     });
     await page.goto(process.env.CALL_URL || 'http://127.0.0.1:8088');
     await page.locator('#startVoice:enabled').waitFor();
-    await page.getByRole('button', {name:'任务设置', exact:true}).click();
-    await page.locator('#prediction').uncheck();
+    await page.getByRole('button', {name:'浠诲姟璁剧疆', exact:true}).click();
+    await page.locator('#prediction').check();
     await page.locator('#closeDialog').click();
     await page.locator('#startVoice').click();
     await page.waitForFunction(() => trace.replies.length || trace.error, null, {timeout:55000});
+    await page.waitForFunction(() => (trace.candidates || 0) > 0 || trace.error, null, {timeout:15000});
+    await new Promise(resolve => setTimeout(resolve, 500));
     await page.evaluate(data => speak(data), pcm);
     await page.waitForFunction(() => trace.error || (trace.replies.length >= 2 && trace.latency), null, {timeout:55000});
     const row = await page.evaluate(() => {
@@ -80,3 +83,5 @@ try {
   await fs.mkdir('runtime/validation', {recursive:true});
   await fs.writeFile('runtime/validation/first-response-' + label + '.json', JSON.stringify(results, null, 2));
 } finally { await browser.close(); }
+
+
