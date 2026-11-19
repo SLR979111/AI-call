@@ -325,6 +325,29 @@ async def test_long_bridge_is_not_used_to_delay_answer():
     await session.close()
 
 
+async def test_real_filler_length_is_usable_as_a_bridge():
+    """A synthesized "嗯。" is ~0.76 s; the bridge ceiling must allow it.
+
+    The previous 0.5 s ceiling rejected every real clip, which silently
+    disabled the bridge in production.
+    """
+    from app.models import DEFAULT_CARD
+    from app.session import BRIDGE_MAX_BYTES, Session
+
+    class Cloud:
+        async def prefetch(self, text):
+            return b'\x00\x00' * 18240  # 0.76 s, measured from the live TTS
+
+    async def send(event):
+        pass
+
+    session = Session(DEFAULT_CARD, Cloud(), None, send, voice=True)
+    await session._warm_bridge()
+    assert session.bridge_audio is not None
+    assert len(session.bridge_audio) <= BRIDGE_MAX_BYTES
+    await session.close()
+
+
 async def test_playback_metrics_separate_bridge_from_answer():
     from app.models import DEFAULT_CARD
     from app.session import Session, Unit

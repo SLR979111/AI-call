@@ -22,6 +22,11 @@ from .silent_logger import silent_log
 
 PREDICTION_AUDIO_LIMIT_ENV = "PREDICTION_AUDIO_LIMIT"
 
+# Longest filler the bridge may speak while the real answer is still being
+# synthesized. At 24 kHz mono PCM16 this is one second, which covers the
+# LLM-to-first-audio gap without talking over an answer that has arrived.
+BRIDGE_MAX_BYTES = 48000
+
 
 def prediction_audio_limit_from_env() -> int | None:
     """Number of leading forecast candidates allowed to prepare audio.
@@ -777,9 +782,13 @@ class Session:
     async def _warm_bridge(self):
         try:
             pcm = await self.cloud.prefetch(self.bridge_text)
-            # Never put a long filler ahead of a ready answer. At 24 kHz
-            # mono PCM16, 24,000 bytes is 500 ms. Skip rather than truncate.
-            if not self.closed and pcm and len(pcm) <= 24000:
+            # Never put a long filler ahead of a ready answer. At 24 kHz mono
+            # PCM16, 48,000 bytes is one second: a filler may cover the gap
+            # until the answer starts (~0.95 s after the LLM's first token),
+            # but must not talk over it. A synthesized "嗯。" measures ~0.76 s,
+            # so the earlier 0.5 s ceiling rejected every real clip and left
+            # the bridge permanently silent. Skip rather than truncate.
+            if not self.closed and pcm and len(pcm) <= BRIDGE_MAX_BYTES:
                 self.bridge_audio = pcm
             elif pcm:
                 self.log("bridge_unavailable", reason="audio_too_long", audio_bytes=len(pcm))
