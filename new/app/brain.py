@@ -19,6 +19,7 @@ from .ticket_forecast import excluded_intents_from_env
 from .ticket_forecast import generate_ticket_candidates
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
+from .semantic_decision import shared_matcher
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -118,6 +119,10 @@ class Brain:
         self.decision_engine = ContextAwareDecisionEngine()
         self.ticket_forecasts = ticket_forecasts
         self.candidate_limit = candidate_limit
+        # Optional second opinion for the cases the lexical rules reject. It is
+        # silent (None) when the embedding model is missing, so the default path
+        # never depends on it.
+        self.semantic_engine = shared_matcher()
         # Set before each emitted reply so Session can count the decision path
         # (rule vs model vs model text) without parsing model output again.
         self.last_decision: dict | None = None
@@ -170,6 +175,17 @@ class Brain:
             self._last_completed_assistant(memory))
         return selected if decision == "reuse" else None
 
+    async def _semantic_rescue(self, user_input: str, candidates: list[Candidate],
+                               assistant_last_text: str) -> Candidate | None:
+        """Last chance before a regeneration: ask the embeddings, not the model.
+
+        Disabled by an absent model, an unclear answer or a question from the
+        user; every failure degrades to ``None`` so the model still answers.
+        """
+        if self.semantic_engine is None:
+            return None
+        return await self.semantic_engine.confirm(user_input, candidates, assistant_last_text)
+
     async def respond(self, memory: Memory, candidates: list[Candidate]):
         self.last_decision = None
         if memory.history and has_unasked_question(memory.history[-1]["text"]):
@@ -211,7 +227,18 @@ class Brain:
                 yield "update_async", selected_candidate
                 return
             elif decision == "say":
-                # Context-aware rejection (generate new, ignore candidates)
+                # The lexical rules found no unambiguous evidence. Before paying
+                # for a regeneration, let the embedding matcher look at a short
+                # answer to a question we just asked. A miss here costs ~10 ms.
+                rescued = await self._semantic_rescue(
+                    last_user_input, candidates, assistant_last_text
+                )
+                if rescued is not None:
+                    self.last_decision = {"kind": "reuse", "path": "semantic",
+                                          "candidate_id": rescued.id}
+                    yield "reuse", rescued.reply
+                    yield "update_async", rescued
+                    return
                 candidates = []
         
         # Slow path: LLM-based decision
