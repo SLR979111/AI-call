@@ -372,3 +372,51 @@ python -m app.ticket_audit --task tasks/jd-qualification.json --fit fit.txt --he
 cd new
 python scripts/ticket_exclusion_ab.py
 ```
+
+
+## 11. 工单载入后的后台预热
+
+新增：
+
+```text
+new/app/task_warmup.py
+```
+
+触发：
+
+```text
+TaskCard 载入后
+→ 后台 asyncio task
+→ Brain.predict 生成开场预测
+→ Cloud.prefetch 生成候选音频
+→ 写入原有 opening forecast / TTS 缓存
+→ 不向 WebSocket 发任何事件
+```
+
+日志：
+
+```text
+new/runtime/task-warmup/<时间>-<task_key>.jsonl
+```
+
+开关：
+
+```text
+TASK_WARMUP_ON_LOAD=1
+```
+
+关闭：
+
+```text
+TASK_WARMUP_ON_LOAD=0
+```
+
+说明：
+
+```text
+这是 best-effort
+失败只写 warm_error，不影响真实会话
+同一 task key 同一时刻只跑一个 warmup
+它让第一次真实通话尽量变成“重复会话”
+但不会强制阻塞首通；缓存是否已就绪取决于后台完成时间
+```
