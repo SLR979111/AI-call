@@ -374,49 +374,76 @@ python scripts/ticket_exclusion_ab.py
 ```
 
 
-## 11. 工单载入后的后台预热
+## 11. 工单载入后的完整对话预热
 
 新增：
 
 ```text
-new/app/task_warmup.py
+new/app/task_prewarm.py
 ```
 
 触发：
 
 ```text
-TaskCard 载入后
-→ 后台 asyncio task
-→ Brain.predict 生成开场预测
-→ Cloud.prefetch 生成候选音频
-→ 写入原有 opening forecast / TTS 缓存
-→ 不向 WebSocket 发任何事件
+页面任务载入 / 保存任务
+→ POST /api/warm {task}
+→ 后台创建合成 Session
+→ 通过正常 Brain/Cloud 调用模型和 TTS
+→ transport sink 丢弃所有帧和 PCM
+→ 只写模型/TTS 缓存和独立日志
+```
+
+前台通话开始：
+
+```text
+WebSocket start
+→ cancel_task_prewarm(card)
+→ 取消后台 Session
+→ 已写入的缓存保留
+→ 5 秒内阻止迟到的 /api/warm 重新启动
+```
+
+预设情景：
+
+```text
+1. card：从 TaskCard 生成的 ticket 候选 examples + 短答
+2. official：工单进度、补材料、时间、催办
+3. adversarial：否认、保证、投诉、换人、拒绝、新问题
 ```
 
 日志：
 
 ```text
-new/runtime/task-warmup/<时间>-<task_key>.jsonl
+new/runtime/task-prewarm/<时间>-<task_key>.jsonl
+new/runtime/task-prewarm/sessions/
+```
+
+日志内容：
+
+```text
+prewarm_start
+scenario_start
+turn
+reply_done
+scenario_timeout
+scenario_done
+prewarm_summary
+prewarm_cancelled
+prewarm_error
 ```
 
 开关：
 
 ```text
-TASK_WARMUP_ON_LOAD=1
-```
-
-关闭：
-
-```text
-TASK_WARMUP_ON_LOAD=0
+TASK_PREWARM_ON_LOAD=1
+TASK_PREWARM_ON_LOAD=0
 ```
 
 说明：
 
 ```text
 这是 best-effort
-失败只写 warm_error，不影响真实会话
-同一 task key 同一时刻只跑一个 warmup
-它让第一次真实通话尽量变成“重复会话”
-但不会强制阻塞首通；缓存是否已就绪取决于后台完成时间
+失败只写 prewarm_error，不影响真实会话
+前台通话优先，取消后台任务
+首通是否能完全变成“重复会话”取决于后台完成时间
 ```

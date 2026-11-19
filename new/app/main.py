@@ -20,7 +20,7 @@ from .models import TaskCard
 from .providers import Cloud, Settings
 from .session import Session
 from .decision_model import DecisionModel
-from .task_warmup import start_task_warmup
+from .task_prewarm import cancel_task_prewarm, start_task_prewarm
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
@@ -104,6 +104,18 @@ async def prediction_stats():
                                   app.state.performance_monitor)
 
 
+@app.post("/api/warm")
+async def warm(payload: dict):
+    """Start a background synthetic conversation for a loaded task card."""
+    try:
+        card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
+    except (ValidationError, TypeError, ValueError):
+        return {"started": False, "error": "invalid_task"}
+    task = start_task_prewarm(card, app.state.cloud,
+                              app.state.opening_forecasts, ROOT / "runtime")
+    return {"started": task is not None}
+
+
 @app.get("/healthz")
 async def health():
     return {"ok": True, "name": "ai-call-g2", "sessions": len(app.state.sessions)}
@@ -164,11 +176,10 @@ async def websocket(ws: WebSocket):
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
                     cloud = app.state.cloud
-                    # Best-effort background warmup: generate the opening
-                    # forecast and TTS audio into the normal caches. It sends
-                    # nothing to this WebSocket.
-                    start_task_warmup(card, cloud, app.state.opening_forecasts,
-                                      ROOT / "runtime")
+                    # The real call wins immediately. Cancel any synthetic
+                    # prewarm conversation for this card; cache entries already
+                    # prepared before this point remain valid.
+                    cancel_task_prewarm(card, "foreground")
                     session = Session(card, cloud, Brain(
                         cloud, app.state.opening_forecasts,
                         forecast_branches=app.state.settings.forecast_branches,
