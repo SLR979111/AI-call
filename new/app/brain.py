@@ -23,6 +23,7 @@ from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
 from .decision_model import DecisionModel
 from .ticket_forecast import enabled as ticket_forecast_enabled
+from .ticket_forecast import excluded_intents_from_env
 from .ticket_forecast import generate_ticket_candidates
 
 
@@ -321,9 +322,12 @@ class Brain:
             model = getattr(getattr(self.cloud, "settings", None), "model", "")
             key = json.dumps({
                 "task": snapshot["task"], "model": model,
-                # Switching ticket templates or the cap changes which model
-                # candidates were cached, so A/B arms must not share records.
-                "ticket_forecast": ticket_mode, "candidate_limit": limit,
+                # Switching ticket templates, exclusions or the cap changes
+                # which model candidates were cached, so A/B arms must not
+                # share records.
+                "ticket_forecast": ticket_mode,
+                "ticket_exclude": sorted(excluded_intents_from_env()),
+                "candidate_limit": limit,
             }, sort_keys=True, ensure_ascii=False)
             cached, complete = self.opening_forecasts.get(key)
         # Deterministic ticket candidates take the first slots, then the cached

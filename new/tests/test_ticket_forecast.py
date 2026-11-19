@@ -19,6 +19,7 @@ from app.models import DEFAULT_CARD, Candidate, Memory, Say, TaskCard
 from app.ticket_forecast import (
     DEFAULT_MAX,
     enabled,
+    excluded_intents_from_env,
     generate_ticket_candidates,
     max_candidates_from_env,
 )
@@ -42,6 +43,40 @@ def official_card() -> TaskCard:
             {"id": "limit", "description": "说明不能承诺具体出结果时间"},
         ],
         "opening": "您好，这里是工单进度咨询。您想了解当前进度，还是补充材料？",
+    })
+
+
+def cargo_card() -> TaskCard:
+    """Mirror of integration/prediction-rules new/tasks/logistics-delivery.json."""
+    return TaskCard.model_validate({
+        "title": "快递物流异常",
+        "goal": "说明快递未收到、物流停滞、改地址或签收异常的下一步，不承诺具体派送时间。",
+        "facts": "【场景资料】本任务讨论快递物流异常。当前可以查询到运单状态和最近一条物流记录；"
+                 "看不到更细的网点内部进度。可以建议联系承运快递员或官方客服，"
+                 "但不能承诺今天送达、不能直接修改地址。",
+        "checkpoints": [
+            {"id": "status", "description": "说明当前运单状态和最近物流记录"},
+            {"id": "contact", "description": "说明联系快递员或官方客服的方式边界"},
+            {"id": "address", "description": "说明改地址需要联系承运方，不能直接保证成功"},
+        ],
+        "opening": "您好，这里是物流异常咨询。您是没收到件，还是物流一直没更新？",
+    })
+
+
+def invoice_card() -> TaskCard:
+    """Mirror of integration/prediction-rules new/tasks/after-sales-invoice.json."""
+    return TaskCard.model_validate({
+        "title": "发票开具咨询",
+        "goal": "说明发票类型、抬头、开具状态和重开方式，不承诺具体开票时间。",
+        "facts": "【场景资料】本任务讨论发票咨询。当前只能看到申请记录和页面状态，"
+                 "不能直接开票或改抬头。普通发票和专用发票需要的资料不同；"
+                 "抬头填错通常需要先作废原申请再重新提交，具体以页面提示为准。",
+        "checkpoints": [
+            {"id": "type", "description": "说明普通发票和专用发票的区别"},
+            {"id": "header", "description": "说明发票抬头需要与主体信息一致"},
+            {"id": "status", "description": "说明开票状态和重开方式"},
+        ],
+        "opening": "您好，这里是发票咨询。您是想开发票，还是发票抬头/类型有问题？",
     })
 
 
@@ -92,31 +127,64 @@ def test_jd_card_generates_every_required_family_with_labels():
         assert item.reply.question == ""
 
 
-def test_question_families_cover_all_four_scenarios_without_borrowing_facts():
+def test_question_families_cover_all_scenarios_without_borrowing_facts():
+    logistics = cargo_card()
+    invoice = invoice_card()
     expectations = {
         "jd": (
             card("jd-qualification.json"),
             {"missing_material", "how_to_submit", "authorization",
              "name_mismatch", "screenshot", "saved", "submitted",
              "in_review", "timing"},
-            set(),
+            {"handoff", "connectivity", "slow", "router", "price", "recommend",
+             "install", "logistics_status", "logistics_contact",
+             "logistics_address", "invoice_type", "invoice_header",
+             "invoice_status"},
         ),
         "official": (
             official_card(),
-            {"missing_material", "how_to_submit", "in_review", "timing"},
-            {"authorization", "name_mismatch", "screenshot", "saved", "submitted"},
+            {"missing_material", "how_to_submit", "in_review", "handoff",
+             "timing"},
+            {"authorization", "name_mismatch", "screenshot", "saved",
+             "submitted", "connectivity", "slow", "router", "price",
+             "recommend", "install", "logistics_status", "logistics_contact",
+             "logistics_address", "invoice_type", "invoice_header",
+             "invoice_status"},
         ),
         "broadband": (
             card("home-broadband-support.json"),
-            {"how_to_submit", "timing"},
+            {"how_to_submit", "connectivity", "slow", "router", "timing"},
             {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review"},
+             "submitted", "in_review", "handoff", "price", "recommend",
+             "install", "logistics_status", "logistics_contact",
+             "logistics_address", "invoice_type", "invoice_header",
+             "invoice_status"},
         ),
         "network": (
             card("network-consultation.json"),
-            {"how_to_submit", "timing"},
+            {"how_to_submit", "price", "recommend", "install", "timing"},
             {"authorization", "name_mismatch", "screenshot", "saved",
-             "submitted", "in_review"},
+             "submitted", "in_review", "handoff", "connectivity", "slow",
+             "router", "logistics_status", "logistics_contact",
+             "logistics_address", "invoice_type", "invoice_header",
+             "invoice_status"},
+        ),
+        "logistics": (
+            logistics,
+            {"logistics_status", "logistics_contact", "logistics_address",
+             "timing"},
+            {"authorization", "name_mismatch", "screenshot", "saved",
+             "submitted", "in_review", "handoff", "connectivity", "slow",
+             "router", "price", "recommend", "install", "invoice_type",
+             "invoice_header", "invoice_status"},
+        ),
+        "invoice": (
+            invoice,
+            {"invoice_type", "invoice_header", "invoice_status", "timing"},
+            {"authorization", "name_mismatch", "screenshot", "saved",
+             "submitted", "in_review", "handoff", "connectivity", "slow",
+             "router", "price", "recommend", "install", "logistics_status",
+             "logistics_contact", "logistics_address"},
         ),
     }
     for name, (task, required, forbidden) in expectations.items():
@@ -128,15 +196,34 @@ def test_question_families_cover_all_four_scenarios_without_borrowing_facts():
         assert len({item.reply.text for item in items}) == len(items)
         examples = [example for item in items for example in item.examples]
         assert len(examples) == len(set(examples)), name
+        for item in items:
+            assert item.checkpoint is None or item.checkpoint in {
+                point.id for point in task.checkpoints}
+            assert item.intent and item.polarity
 
 
-def test_generated_examples_are_selectable_by_existing_matcher():
+def test_new_scenario_families_are_selectable_and_grounded():
     scenarios = [
         (card("jd-qualification.json"), "缺什么材料？", "missing_material"),
         (card("jd-qualification.json"), "已经提交了。", "submitted"),
         (official_card(), "多久能出结果？", "timing"),
         (card("home-broadband-support.json"), "怎么报修？", "how_to_submit"),
         (card("network-consultation.json"), "怎么安装？", "how_to_submit"),
+        (cargo_card(), "到哪了？", "logistics_status"),
+        (cargo_card(), "物流一直没更新。", "logistics_status"),
+        (cargo_card(), "快递员电话多少？", "logistics_contact"),
+        (cargo_card(), "能改地址吗？", "logistics_address"),
+        (invoice_card(), "普票和专票有什么区别？", "invoice_type"),
+        (invoice_card(), "抬头写错了怎么办？", "invoice_header"),
+        (invoice_card(), "开票到哪一步了？", "invoice_status"),
+        (card("home-broadband-support.json"), "上不了网怎么办？", "connectivity"),
+        (card("home-broadband-support.json"), "网速很慢怎么办？", "slow"),
+        (card("home-broadband-support.json"), "路由器怎么重启？", "router"),
+        (card("network-consultation.json"), "300M 多少钱？", "price"),
+        (card("network-consultation.json"), "推荐哪个套餐？", "recommend"),
+        (card("network-consultation.json"), "什么时候能装？", "install"),
+        (official_card(), "材料交到哪？", "handoff"),
+        (official_card(), "能催一下吗？", "handoff"),
     ]
     engine = ContextAwareDecisionEngine()
     for task, utterance, expected in scenarios:
@@ -151,9 +238,29 @@ def test_generated_replies_pass_the_prediction_compliance_filter():
 
     for task in (card("jd-qualification.json"), official_card(),
                  card("home-broadband-support.json"),
-                 card("network-consultation.json"), DEFAULT_CARD):
+                 card("network-consultation.json"), cargo_card(),
+                 invoice_card(), DEFAULT_CARD):
         for item in generate_ticket_candidates(task):
             assert prediction_text_allowed(item.reply.text), item.reply.text
+
+
+def test_exclude_switch_skips_only_named_intents(monkeypatch):
+    task = card("home-broadband-support.json")
+    monkeypatch.delenv("TICKET_FORECAST_EXCLUDE", raising=False)
+    baseline = generate_ticket_candidates(task)
+    monkeypatch.setenv("TICKET_FORECAST_EXCLUDE", "connectivity, slow")
+    filtered = generate_ticket_candidates(task)
+    assert [item.intent for item in filtered] == [
+        item.intent for item in baseline
+        if item.intent not in {"connectivity", "slow"}]
+    assert {"connectivity", "slow"} & intents(filtered) == set()
+
+    # An explicit argument wins over the environment.
+    assert generate_ticket_candidates(task, exclude=[]) == baseline
+    # Unknown names and empty values are harmless.
+    monkeypatch.setenv("TICKET_FORECAST_EXCLUDE", " not_a_family ,, ")
+    assert generate_ticket_candidates(task) == baseline
+    assert excluded_intents_from_env() == {"not_a_family"}
 
 
 def test_generation_is_deterministic_and_never_calls_a_model():
@@ -325,6 +432,18 @@ async def test_single_ticket_leaves_the_remaining_slots_to_the_model():
     assert all(item.id.startswith("p") for item in model_items)
 
 
+async def test_five_scenario_tickets_still_leave_five_model_slots():
+    task = card("home-broadband-support.json")
+    tickets = generate_ticket_candidates(task)
+    assert len(tickets) == 5
+    items = await Brain(OneCandidateCloud(), forecast_branches=5).predict(
+        Brain.snapshot(Memory(task)))
+    assert len(items) == 10
+    assert sum(item.id.startswith("t_") for item in items) == 5
+    assert sum(item.id.startswith("p") for item in items) == 5
+    assert [item.id for item in items[:5]] == [item.id for item in tickets]
+
+
 async def test_merged_cap_is_ten_even_when_tickets_fill_most_slots():
     cloud = OneCandidateCloud()
     brain = Brain(cloud, forecast_branches=5)
@@ -369,3 +488,18 @@ async def test_switching_the_feature_off_does_not_hit_the_other_arm_cache():
     assert cloud.calls > calls
     assert any(item.id.startswith("t_") for item in with_tickets)
     assert not any(item.id.startswith("t_") for item in without_tickets)
+
+
+async def test_exclude_switch_is_part_of_the_opening_cache_arm(monkeypatch):
+    cloud = OneCandidateCloud()
+    cache = OpeningForecastCache()
+    task = card("home-broadband-support.json")
+    snapshot = {**Brain.snapshot(Memory(task)), "opening": True}
+    monkeypatch.setenv("TICKET_FORECAST_EXCLUDE", "router")
+    first = await Brain(cloud, cache).predict(snapshot)
+    calls = cloud.calls
+    monkeypatch.setenv("TICKET_FORECAST_EXCLUDE", "")
+    second = await Brain(cloud, cache).predict(snapshot)
+    assert cloud.calls > calls
+    assert "router" not in intents(first)
+    assert "router" in intents(second)
