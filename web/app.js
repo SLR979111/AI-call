@@ -1,8 +1,8 @@
 import {prepareTask, checkPreparation} from './preparation.js';
-import {Player, Microphone} from './audio.js';
+import {CallConnection} from './connection.js';
 
 const $ = id => document.getElementById(id);
-let task, socket, context, player, mic, voice = false, connected = false, epoch = 0;
+let task, call, voice = false, connected = false, epoch = 0;
 let startedAt = 0, timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false;
 let waveformCanvas, waveformCtx, animationFrame;
 let pipelineNodes = [];
@@ -134,6 +134,7 @@ function initWaveform() {
   waveformCtx.scale(dpr, dpr);
   
   // Setup audio analyser for real-time visualization
+  const {context, mic, player} = call ?? {};
   if (context && !analyser) {
     analyser = context.createAnalyser();
     analyser.fftSize = 128;
@@ -394,7 +395,7 @@ function updateMetrics(data) {
 
 // ==================== WEBSOCKET HANDLERS ====================
 function send(event) { 
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); 
+  call?.send(event);
 }
 
 function showError(text) { 
@@ -409,7 +410,7 @@ function clearError() {
 
 function onMessage({data}) {
   if (data instanceof ArrayBuffer) { 
-    player?.packet(data); 
+    call?.player?.packet(data);
     return; 
   }
   
@@ -419,13 +420,13 @@ function onMessage({data}) {
   switch (event.type) {
     case 'reply_start':
       epoch = event.epoch;
-      player?.begin(epoch);
+      call?.player?.begin(epoch);
       clearError();
       break;
       
     case 'utterance':
-      if (event.epoch !== epoch || player?.blocked.has(event.epoch)) break;
-      player?.unit(event);
+      if (event.epoch !== epoch || call?.player?.blocked.has(event.epoch)) break;
+      call?.player?.unit(event);
       addDataCard('AI Response', event.text);
       records.push({role: 'assistant', text: event.text});
       if (event.text) {
@@ -435,11 +436,11 @@ function onMessage({data}) {
       break;
       
     case 'utterance_end':
-      player?.finish(event);
+      call?.player?.finish(event);
       break;
       
     case 'cancel':
-      player?.cancel(event.epoch);
+      call?.player?.cancel(event.epoch);
       break;
       
     case 'transcript':
@@ -492,42 +493,23 @@ async function start(useVoice) {
   
   $('startVoice').disabled = $('startText').disabled = true;
   
+  const active = call = new CallConnection({
+    onMessage, onError: showError, onClose: () => cleanup('Connection closed'),
+    onDone(epoch, unit) {
+      const item = uiUnits.get(epoch + ':' + unit);
+      if (item) item.delivered = true;
+    }
+  });
   try {
     voice = useVoice;
     
-    if (voice) {
-      context = new AudioContext();
-      if (context.state === 'suspended') {
-        await context.resume();
-      }
-    }
-    
+    await active.resumeAudio(voice);
+    if (call !== active) return;
     $('connection').textContent = '正在准备工单';
     checkPreparation(await prepareTask(task, {retry: true}));
-    socket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-    socket.binaryType = 'arraybuffer';
-    
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 6000);
-      socket.onopen = () => { clearTimeout(timeout); resolve(); };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('Connection failed')); };
-    });
-    
-    if (voice) {
-      player = new Player(context, send, (e, u) => {
-        const item = uiUnits.get(`${e}:${u}`);
-        if (item) item.delivered = true;
-      });
-      mic = new Microphone(context, socket, showError, player.output);
-      await mic.open();
-      
-      // Connect audio to analyser after player and mic are created
-      if (analyser) {
-        if (mic.source) mic.source.connect(analyser);
-        if (player.output) player.output.connect(analyser);
-      }
-    }
-    
+    if (call !== active) return;
+    await active.open();
+    if (call !== active) return;
     records = [];
     uiUnits.clear();
     turns = hits = 0;
@@ -535,11 +517,7 @@ async function start(useVoice) {
     
     connected = true;
     startedAt = performance.now();
-    
-    socket.onmessage = onMessage;
-    socket.onclose = () => cleanup('Connection closed');
-    socket.onerror = () => showError('Connection error');
-    
+
     $('startControls').classList.add('hidden');
     $('callControls').classList.remove('hidden');
     $('textForm').classList.remove('hidden');
@@ -555,33 +533,26 @@ async function start(useVoice) {
     if (!voice) $('textInput').focus();
     
   } catch (error) {
+    if (call !== active) return;
     await cleanup();
+    if (call) return;
     showError(error.name === 'NotAllowedError' ? 
       'Microphone permission denied' : error.message);
   } finally {
-    inputInFlight = false;
-    $('startVoice').disabled = $('startText').disabled = false;
+    if (!call || call === active) {
+      inputInFlight = false;
+      $('startVoice').disabled = $('startText').disabled = false;
+    }
   }
 }
 
 async function cleanup(message) {
   connected = false;
-  if (socket) {
-    socket.close();
-    socket = null;
-  }
-  if (mic) {
-    mic.close();
-    mic = null;
-  }
-  if (player) {
-    player.close();
-    player = null;
-  }
-  if (context) {
-    await context.close();
-    context = null;
-  }
+  const active = call;
+  call = null;
+  const closing = active?.close();
+  analyser?.disconnect();
+  analyser = analyserData = null;
   if (animationFrame) {
     cancelAnimationFrame(animationFrame);
     animationFrame = null;
@@ -603,11 +574,12 @@ async function cleanup(message) {
   $('sentimentValue').textContent = '--';
   $('wpmValue').textContent = '--';
   $('bargeValue').textContent = '--';
+  await closing;
 }
 
 function interrupt() {
   if (!connected || !epoch) return;
-  const progress = player?.stop(true) || [];
+  const progress = call?.player?.stop(true) || [];
   send({type: 'interrupt', epoch, progress, source: 'manual'});
   $('phaseIndicator').textContent = voice ? 'Listening' : 'Interrupted';
 }

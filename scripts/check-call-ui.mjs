@@ -221,6 +221,49 @@ try {
   assert.equal(sent.filter(event => event.type === 'start').at(-1).voice, true);
   report.microphone_opens_after_preparation = true;
 
+  await page.goto(base + '/static/classic.html');
+  await page.waitForFunction(() => document.querySelector('#checkpoints').children.length > 0);
+  await page.locator('#editTask').click();
+  await page.locator('#editTitle').fill('经典界面工单');
+  await page.locator('#taskForm button[type=submit]').click();
+  assert.equal(await page.locator('#taskTitle').textContent(), '经典界面工单');
+  await page.locator('#startText').click();
+  await page.locator('#transcript .message.assistant').waitFor();
+  assert.equal(sent.filter(event => event.type === 'start').at(-1).task.title, '经典界面工单');
+  emit({type: 'state', epoch: 1, phase: 'listening', delivered: [], status: 'active'});
+  await page.getByText('在听，请说', {exact: true}).waitFor();
+  await page.locator('#stop').click();
+  await page.locator('#startText:visible').waitFor();
+  report.classic_task_editor_and_call = true;
+
+  // Hold the first microphone grant until after hangup and redial.
+  await page.addInitScript(() => {
+    const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    let first = true;
+    navigator.mediaDevices.getUserMedia = async constraints => {
+      const stream = await getMedia(constraints);
+      if (first) {
+        first = false;
+        window.oldTrack = stream.getAudioTracks()[0];
+        await new Promise(resolve => { window.releaseGrant = resolve; });
+      }
+      return stream;
+    };
+  });
+  await page.goto(base + '/static/display.html');
+  await page.getByText('点击接听', {exact: true}).last().waitFor();
+  await page.locator('#callBtn').click();
+  await page.waitForFunction(() => typeof window.releaseGrant === 'function');
+  await page.locator('#stopBtn').click();
+  await page.locator('#callBtn').click();
+  await page.waitForFunction(() => document.querySelector('#words').textContent.includes('您好'));
+  await page.evaluate(() => window.releaseGrant());
+  await page.waitForFunction(() => window.oldTrack.readyState === 'ended');
+  assert.equal(await page.locator('#stopBtn').isVisible(), true);
+  await page.locator('#stopBtn').click();
+  await page.locator('#callBtn:visible').waitFor();
+  report.display_redial_during_microphone_permission = true;
+
   assert.deepEqual(errors, []); report.errors = errors; report.passed = true;
 } finally {
   await fs.writeFile(path.join(out, 'call-ui-check.json'), JSON.stringify(report, null, 2));

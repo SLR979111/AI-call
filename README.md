@@ -77,13 +77,15 @@ uv run --no-project --python 3.12 --with-requirements old/requirements.txt pytho
 | `app/brain.py` | 当前回应、可丢弃预测、流式输出解析 |
 | `app/context_aware_decision.py` | 词典规则：短答是否无歧义地满足某条候选 |
 | `app/semantic_decision.py` | 句向量裁决：规则否决时的同义改写兜底（可关） |
-| `app/session.py` | 取消、音频队列、播放回执、会话日志 |
+| `app/session.py` | 会话轮次、打断续说、候选回复和会话日志 |
+| `app/playback.py` | 每轮的 PCM 音频队列、发送窗口和播放回执 |
 | `app/hearing.py` | 收音、判停、预识别和续说合并 |
 | `app/vad.py`、`app/assets/` | 本机人声检测与带许可证的公开模型 |
 | `app/providers.py` | 新写的 ASR/LLM/TTS HTTP 适配、音频缓存 |
 | `app/persistent_cache.py` | 跨对话/跨重启的 SQLite 缓存 |
 | `app/main.py` | 一个服务和一个 WebSocket 入口 |
 | `web/` | 无构建步骤的页面、采集和播放器 |
+| `web/connection.js` | 一次拨打所用的连接、麦克风和播放设备的生命周期 |
 | `web/acoustics.js`、`web/vendor/` | 播放参考比对、AEC3、降噪及其许可证 |
 
 互动工单的场景事实由任务卡提供，实际业务查询、登记、派单和转接仍需在外部系统办理。预测、LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。

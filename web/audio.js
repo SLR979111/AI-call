@@ -145,6 +145,7 @@ export class Microphone {
     this.onLevel = onLevel;
     this.seq = 0;
     this.muted = false;
+    this.closed = false;
   }
   async open() {
     if (!acousticModule) {
@@ -152,33 +153,49 @@ export class Microphone {
       if (!response.ok) throw new Error('消回声组件未能载入，请刷新后重试。');
       acousticModule = await WebAssembly.compile(await response.arrayBuffer());
     }
-    this.stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,
+    this.checkOpen();
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,
       echoCancellation:true, noiseSuppression:false, autoGainControl:false}, video:false});
+    if (this.closed) stream.getTracks().forEach(track => track.stop());
+    this.checkOpen();
+    this.stream = stream;
     await this.context.audioWorklet.addModule('/static/capture.js');
+    this.checkOpen();
     this.source = this.context.createMediaStreamSource(this.stream);
     this.worklet = new AudioWorkletNode(this.context, 'capture-16k', {
       numberOfInputs:2, numberOfOutputs:1, outputChannelCount:[1],
       channelCount:1, channelCountMode:'explicit', processorOptions:{module:acousticModule},
     });
-    const ready = new Promise((resolve,reject) => {
-      const timeout = setTimeout(()=>reject(new Error('消回声组件启动超时，请重新开始通话。')),5000);
-      this.worklet.onprocessorerror = () => {
-        clearTimeout(timeout);
-        const message='声音处理出现问题，请重新开始通话。';
-        this.onError(message); reject(new Error(message));
-      };
-      this.worklet.port.onmessage = ({data}) => {
-        if (data.type==='ready') { clearTimeout(timeout); resolve(); }
-        else if (data.type==='error') { clearTimeout(timeout); this.onError('声音处理出现问题，请重新开始通话。'); }
-        else if (data.type==='audio') this.frame(data);
-      };
-    });
-    this.source.connect(this.worklet,0,0);
-    this.playbackNode.connect(this.worklet,0,1);
+    this.source.connect(this.worklet, 0, 0);
+    this.playbackNode.connect(this.worklet, 0, 1);
     this.worklet.connect(this.context.destination);
-    await ready;
+    let timeout;
+    try {
+      await new Promise((resolve, reject) => {
+        this.cancelReady = reject;
+        timeout = setTimeout(() => reject(new Error('消回声组件启动超时，请重新开始通话。')), 5000);
+        const fail = () => {
+          const message = '声音处理出现问题，请重新开始通话。';
+          if (this.cancelReady) reject(new Error(message));
+          else this.onError(message);
+        };
+        this.worklet.onprocessorerror = fail;
+        this.worklet.port.onmessage = ({data}) => {
+          if (data.type === 'ready') resolve();
+          else if (data.type === 'error') fail();
+          else if (data.type === 'audio') this.frame(data);
+        };
+      });
+    } finally {
+      clearTimeout(timeout);
+      this.cancelReady = null;
+    }
+  }
+  checkOpen() {
+    if (this.closed) throw new DOMException('通话已结束', 'AbortError');
   }
   frame(frame) {
+    if (this.closed) return;
     this.onLevel({active: !this.muted && !!frame.speech && !frame.warming,
       level: this.muted ? 0 : Math.min(1, Math.sqrt(Math.max(0, frame.clean_rms || 0)) * 3)});
     if (this.socket.readyState !== WebSocket.OPEN) return;
@@ -209,7 +226,11 @@ export class Microphone {
     this.socket.send(packet);
   }
   close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.cancelReady?.(new DOMException('通话已结束', 'AbortError'));
     if (this.worklet) {
+      this.worklet.onprocessorerror = null;
       this.worklet.port.onmessage = null;
       this.worklet.port.postMessage({type:'close'});
       try { this.playbackNode.disconnect(this.worklet); } catch {}

@@ -1,10 +1,10 @@
 import {prepareTask, checkPreparation} from './preparation.js';
-import {Player, Microphone} from './audio.js';
+import {CallConnection} from './connection.js';
 import {LiveConversation} from './conversation.js';
 
 const $ = id => document.getElementById(id);
 const view = new LiveConversation($('transcript'), $('viewport'));
-let task, defaultTask, socket, context, player, mic, voice = false, connected = false, epoch = 0;
+let task, defaultTask, call, voice = false, connected = false, epoch = 0;
 let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false, replyActive = false;
 let composing = false, editorTask, savedCustom;
 const packs = new Map();
@@ -20,14 +20,14 @@ $('callMode').onchange = () => {
 };
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
-function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
+function send(event) { call?.send(event); }
 function warmTask(card, retry = false) {
   if (mode !== 'cloud' || !cloudConfigured) {
     preparation = null;
     notice('当前工单：' + card.title);
     return null;
   }
-  if (sameTask(preparation?.card, card) && (!retry || preparation.status === 'preparing')) return preparation;
+  if (sameTask(preparation?.card, card) && (!retry || ['preparing', 'ready', 'disabled'].includes(preparation.status))) return preparation;
   const job = {card, status: 'preparing'};
   preparation = job;
   notice('正在准备工单：' + card.title);
@@ -107,7 +107,7 @@ function markCancelled(cancelledEpoch) {
 }
 function interrupt(source = 'manual', evidence = null) {
   if (!connected || !epoch || !replyActive) return;
-  const progress = player?.stop(true) || [];
+  const progress = call?.player?.stop(true) || [];
   markCancelled(epoch);
   send({type: 'interrupt', epoch, progress, source, evidence});
   $('phase').textContent = voice ? '在听，请说' : '已打断，可以继续输入';
@@ -127,9 +127,18 @@ async function start(useVoice) {
   inputInFlight = true; clearError();
   $('editTask').disabled = true;
   $('startVoice').disabled = $('startText').disabled = true;
+  const active = call = new CallConnection({
+    onMessage, onError: showError, onClose: () => cleanup('连接已结束'),
+    onDone(epoch, unit) {
+      const item = uiUnits.get(epoch + ':' + unit);
+      if (item) item.delivery = 'complete';
+    },
+    onLevel: input => view.setInput(input)
+  });
   try {
     voice = useVoice;
-    if (voice) { context = new AudioContext(); await context.resume(); }
+    await active.resumeAudio(voice);
+    if (call !== active) return;
     const job = warmTask(task, true);
     if (job?.status === 'preparing') {
       const status = await waitToDial(job);
@@ -137,28 +146,13 @@ async function start(useVoice) {
       checkPreparation(status);
     }
     notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
-    socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-    const activeSocket = socket;
-    socket.binaryType = 'arraybuffer';
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('连接超时，请确认服务已启动。')), 6000);
-      socket.onopen = () => { clearTimeout(timeout); resolve(); };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('无法连接到本地服务。')); };
-    });
-    if (voice) {
-      player = new Player(context, send, (e, u) => {
-        const item = uiUnits.get(e + ':' + u); if (item) item.delivery = 'complete';
-      });
-      mic = new Microphone(context, socket, showError, player.output, input => view.setInput(input));
-      await mic.open();
-    }
+    if (call !== active) return;
+    await active.open();
+    if (call !== active) return;
     records = []; uiUnits.clear(); turns = hits = 0; epoch = 0; replyActive = false; view.reset();
     $('textInput').value = ''; composing = false;
     $('latency').textContent = ''; $('cacheStat').textContent = ''; $('latest').hidden = true;
     renderTask(); connected = true;
-    socket.onmessage = event => { if (socket === activeSocket && connected) onMessage(event); };
-    socket.onclose = () => { if (socket === activeSocket) cleanup('连接已结束'); };
-    socket.onerror = () => { if (socket === activeSocket) showError('连接发生错误，请重新开始。'); };
     $('startControls').hidden = true; $('callControls').hidden = false;
     $('mute').hidden = !voice;
     $('mute').setAttribute('aria-label', '暂停麦克风'); $('mute').title = '暂停麦克风'; $('mute').setAttribute('aria-pressed', 'false');
@@ -174,27 +168,31 @@ async function start(useVoice) {
     notice(mode === 'local' ? '正在准备本地模型…' : '');
     showText(!voice);
   } catch (error) {
+    if (call !== active) return;
     await cleanup();
+    if (call) return;
     notice('未能开始，可以重试');
     showError(error.name === 'NotAllowedError' ? '没有获得麦克风权限。允许后可重试，也可以先用文字试聊。' : error.message);
   } finally {
-    inputInFlight = false; $('editTask').disabled = false; $('startVoice').disabled = $('startText').disabled = false;
+    if (!call || call === active) {
+      inputInFlight = false; $('editTask').disabled = false; $('startVoice').disabled = $('startText').disabled = false;
+    }
   }
 }
 function onMessage({data}) {
-  if (data instanceof ArrayBuffer) { player?.packet(data); return; }
+  if (data instanceof ArrayBuffer) { call?.player?.packet(data); return; }
   let event; try { event = JSON.parse(data); } catch { return; }
   switch (event.type) {
     case 'ready': notice(); break;
     case 'reply_start':
       if (!view.handle(event)) break;
-      epoch = event.epoch; replyActive = true; player?.begin(epoch); $('latency').textContent = ''; clearError(); break;
+      epoch = event.epoch; replyActive = true; call?.player?.begin(epoch); $('latency').textContent = ''; clearError(); break;
     case 'utterance':
       if (!view.handle(event)) break;
-      player?.unit(event); record('assistant', event.text, event.epoch + ':' + event.unit); break;
-    case 'utterance_end': player?.finish(event); break;
+      call?.player?.unit(event); record('assistant', event.text, event.epoch + ':' + event.unit); break;
+    case 'utterance_end': call?.player?.finish(event); break;
     case 'cancel':
-      player?.cancel(event.epoch); markCancelled(event.epoch);
+      call?.player?.cancel(event.epoch); markCancelled(event.epoch);
       if (event.epoch === epoch) replyActive = false;
       break;
     case 'transcript':
@@ -231,16 +229,16 @@ function onMessage({data}) {
 async function cleanup(label = '对话已结束，可以重新开始') {
   connected = false; replyActive = false; clearInterval(timer);
   for (const item of uiUnits.values()) if (item.delivery === 'pending') item.delivery = 'interrupted';
-  mic?.close(); mic = null; player?.close(); player = null; view.stop();
-  const oldContext = context; context = null;
-  const oldSocket = socket; socket = null;
-  if (oldSocket && oldSocket.readyState < WebSocket.CLOSING) { oldSocket.onclose = null; oldSocket.close(); }
+  view.stop();
+  const active = call;
+  call = null;
+  const closing = active?.close();
   $('startControls').hidden = false; $('callControls').hidden = true; $('textForm').hidden = true;
   $('callMode').disabled = false; $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = $('taskPack').disabled = false;
   for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = false;
   $('connection').textContent = '未连接'; $('phase').textContent = label;
   notice(label);
-  if (oldContext && oldContext.state !== 'closed') await oldContext.close();
+  await closing;
 }
 $('startVoice').onclick = () => start(true);
 $('startText').onclick = () => start(false);
@@ -248,6 +246,7 @@ $('interrupt').onclick = () => interrupt();
 $('stop').onclick = () => { send({type: 'stop'}); cleanup(); };
 $('toggleText').onclick = () => showText($('textForm').hidden);
 $('mute').onclick = () => {
+  const mic = call?.mic;
   if (!mic) return;
   mic.muted = !mic.muted;
   const label = mic.muted ? '恢复麦克风' : '暂停麦克风';
@@ -302,7 +301,7 @@ $('export').onclick = () => {
 };
 view.engine.addEventListener('followchange', event => { $('latest').hidden = event.detail.following; });
 $('latest').onclick = () => view.engine.followLatest();
-window.addEventListener('beforeunload', () => { mic?.close(); player?.close(); socket?.close(); view.destroy(); });
+window.addEventListener('beforeunload', () => { call?.close(); view.destroy(); });
 try {
   const config = await (await fetch('/api/config')).json();
   defaultTask = config.default_task;

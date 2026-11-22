@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {CallConnection} from '../web/connection.js';
 import {Player, Microphone} from '../web/audio.js';
 
 function context() {
@@ -87,4 +88,34 @@ test('muting clears both cleaned audio and the speech decision',()=>{
     speech:true,playback:false,raw_rms:.1,clean_rms:.01,reference_rms:0,echo_score:0,raw_echo_score:0});
   assert.equal(new DataView(packets[0]).getUint32(12,true),0);
   assert.ok(new Int16Array(packets[0],36).every(s=>s===0));
+});
+
+
+test('a cancelled connection settles promptly and ignores its former close handler', async t => {
+  const previousLocation = globalThis.location;
+  const previousSocket = globalThis.WebSocket;
+  let closed = 0;
+  class Socket {
+    static OPEN = 1;
+    static CLOSING = 2;
+    readyState = 0;
+    close() { this.readyState = 3; }
+  }
+  globalThis.location = new URL('https://example.test/call');
+  globalThis.WebSocket = Socket;
+  t.after(() => { globalThis.location = previousLocation; globalThis.WebSocket = previousSocket; });
+  const options = {onClose: () => closed++, onMessage() {}, onError() {}};
+  const first = new CallConnection(options);
+  const pending = first.open();
+  await first.close();
+  await assert.rejects(pending, {name:'AbortError'});
+  const second = new CallConnection(options);
+  const opening = second.open();
+  second.socket.readyState = Socket.OPEN;
+  second.socket.onopen();
+  await opening;
+  const late = second.socket.onclose;
+  await second.close();
+  late();
+  assert.equal(closed, 0);
 });

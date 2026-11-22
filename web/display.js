@@ -15,7 +15,7 @@
  * 驱动服务端 checkpoint，这部分一行都不能省。
  */
 import {prepareTask, checkPreparation} from './preparation.js';
-import { Player, Microphone } from './audio.js';
+import {CallConnection} from './connection.js';
 import { SCRIPT } from './display-script.js';
 
 const $ = (id) => document.getElementById(id);
@@ -39,10 +39,7 @@ const PHASE = {
   listening: '在听',
 };
 
-let socket = null;
-let context = null;
-let player = null;
-let mic = null;
+let call = null;
 let voice = false;
 let connected = false;
 let epoch = 0;
@@ -197,7 +194,7 @@ function setPartial(text) {
 /* ============================ 连接 ============================ */
 
 function send(event) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+  call?.send(event);
 }
 
 function showError(text) {
@@ -207,10 +204,11 @@ function showError(text) {
 }
 function clearError() { $('err').classList.add('hidden'); }
 
-let dialAttempt = 0;
-
 async function start(useVoice) {
-  const attempt = ++dialAttempt;
+  if (call) return;
+  const active = call = new CallConnection({
+    onMessage, onError: showError, onClose: () => finish('通话已结束')
+  });
   hideHint();
   clearError();
   // 先切到通话界面再等授权：否则浏览器弹麦克风权限时用户会觉得"点了没反应"
@@ -220,30 +218,14 @@ async function start(useVoice) {
   $('callBtn').disabled = true;
   try {
     voice = useVoice;
-    if (voice) {
-      // 必须在点击手势内 resume，否则远端音频会被自动播放策略挂起
-      context = new AudioContext();
-      await context.resume();
-    }
-    if (attempt !== dialAttempt) return;
+    await active.resumeAudio(voice);
+    if (call !== active) return;
     $('phase').textContent = '正在准备工单';
     const status = await prepareTask(task, {retry: true});
-    if (attempt !== dialAttempt) return;
+    if (call !== active) return;
     checkPreparation(status);
-    socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-    socket.binaryType = 'arraybuffer';
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('连接超时，请确认服务已启动。')), 6000);
-      socket.onopen = () => { clearTimeout(timeout); resolve(); };
-      socket.onerror = () => { clearTimeout(timeout); reject(new Error('无法连接到本地服务。')); };
-    });
-
-    if (voice) {
-      player = new Player(context, send);
-      mic = new Microphone(context, socket, showError, player.output);
-      await mic.open();
-    }
-
+    await active.open();
+    if (call !== active) return;
     connected = true;
     epoch = 0; lineSeq = 0; interrupted = false;
     lines.clear();
@@ -251,14 +233,13 @@ async function start(useVoice) {
     setPartial('');
     startedAt = performance.now();
     timer = setInterval(tick, 500);
-    socket.onmessage = onMessage;
-    socket.onclose = () => finish('通话已结束');
-    socket.onerror = () => showError('连接发生错误，请重新开始。');
 
     send({ type: 'start', task, voice, audio_protocol: 2, predictions: true });
     $('phase').textContent = '等待应答';
   } catch (error) {
+    if (call !== active) return;
     await finish('未能接通');
+    if (call) return;
     showError(error.name === 'NotAllowedError'
       ? '没有获得麦克风权限。允许后可重试。'
       : error.message);
@@ -279,28 +260,22 @@ function showCallView() {
 }
 
 async function finish(label = '') {
-  dialAttempt++;
   connected = false;
   clearInterval(timer);
-  mic?.close(); mic = null;
-  player?.close(); player = null;
-  if (context && context.state !== 'closed') { try { await context.close(); } catch { /* noop */ } }
-  context = null;
-  if (socket && socket.readyState < WebSocket.CLOSING) {
-    socket.onclose = null; socket.onmessage = null;
-    try { socket.close(); } catch { /* noop */ }
-  }
-  socket = null;
+  const active = call;
+  call = null;
+  const closing = active?.close();
   $('call').classList.add('hidden');
   $('incoming').classList.remove('hidden');
   $('callBtn').disabled = false;
   $('incomingSub').textContent = label || '点击接听';
+  await closing;
 }
 
 /* ============================ 下行 ============================ */
 
 function onMessage({ data }) {
-  if (data instanceof ArrayBuffer) { player?.packet(data); return; }
+  if (data instanceof ArrayBuffer) { call?.player?.packet(data); return; }
   let event;
   try { event = JSON.parse(data); } catch { return; }
 
@@ -313,23 +288,23 @@ function onMessage({ data }) {
 
     case 'reply_start':
       epoch = event.epoch;
-      player?.begin(epoch);
+      call?.player?.begin(epoch);
       $('latency').textContent = '';
       break;
 
     case 'utterance':
-      if (event.epoch !== epoch || player?.blocked.has(event.epoch)) break;
-      player?.unit(event);
+      if (event.epoch !== epoch || call?.player?.blocked.has(event.epoch)) break;
+      call?.player?.unit(event);
       addLine('ai', event.text, `${event.epoch}:${event.unit}`);
       setPartial('');
       break;
 
     case 'utterance_end':
-      player?.finish(event);
+      call?.player?.finish(event);
       break;
 
     case 'cancel':
-      player?.cancel(event.epoch);
+      call?.player?.cancel(event.epoch);
       markCancelled(event.epoch);
       $('phase').textContent = PHASE.listening;
       break;
@@ -368,7 +343,7 @@ function hideHint() { $('hint')?.classList.add('fade'); }
 
 function interrupt(source = 'manual') {
   if (!connected || !epoch) return;
-  const progress = player?.stop(true) || [];
+  const progress = call?.player?.stop(true) || [];
   markCancelled(epoch);
   send({ type: 'interrupt', epoch, progress, source });
   setPartial('');
@@ -391,7 +366,7 @@ $('call').addEventListener('click', (ev) => {
 });
 
 window.addEventListener('beforeunload', () => {
-  mic?.close(); player?.close(); socket?.close();
+  call?.close();
 });
 
 /* ============================ 启动 ============================ */
