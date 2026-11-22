@@ -48,7 +48,7 @@ function makeStubEngine() {
       const src = {
         buffer: null, onended: null, started: -1, stopped: false,
         connect() {}, disconnect() {},
-        start(when) { src.started = when; created.starts.push(when); },
+        start(when, offset = 0) { src.started = when; src.offset = offset; created.starts.push(when); },
         stop() { src.stopped = true; }
       };
       created.sources.push(src);
@@ -196,6 +196,33 @@ check('unduck 恢复 gain=1 并上报 BargeInCancelledLocal',
 pb.stopNow();
 check('stopNow 停掉全部 source', created.sources.every((s) => s.stopped));
 check('stopNow 复位播放时钟', pb.playedMs() === 0);
+
+{
+  const { engine, created, ctx } = makeStubEngine();
+  const client = makeStubClient();
+  const playback = new Playback(engine, cfg, client);
+  playback.begin({ reply_id: 'r_paused', turn_id: 't_paused', audio_format: 'pcm16' });
+  const chunk = { pcm_b64: toB64(int16(24000)), sample_rate: 24000 };
+  playback.pcm(chunk);
+  playback.pcm(chunk);
+  ctx.currentTime = 0.52;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  playback.pausePcm();
+  playback.pcm(chunk);
+  playback.complete({});
+  ctx.currentTime += 5;
+  check('Paused PCM stops scheduled audio, freezes the cursor and holds new chunks',
+    playback.playedMs() === 500 && created.sources.length === 2 && created.sources.every(source => source.stopped));
+  check('A different reply cannot resume the paused audio', !playback.resumePcm('r_other'));
+  check('PCM continues from the first unplayed sample and keeps later chunks in order',
+    playback.resumePcm('r_paused') && created.sources.length === 5 &&
+    created.sources.slice(2).every((source, index) => source.offset === (index === 0 ? 0.5 : 0)) &&
+    Math.abs(created.starts[3] - created.starts[2] - 0.5) < 1e-9 &&
+    Math.abs(created.starts[4] - created.starts[3] - 1) < 1e-9 && client.calls.firstFrame.length === 1);
+  playback.pausePcm();
+  playback.abort();
+  check('A cancelled PCM reply cannot resume', !playback.resumePcm('r_paused') && !playback.isPlaying());
+}
 
 console.log(fails.length ? `\n❌ ${fails.length} 项失败：\n - ` + fails.join('\n - ') : '\n✅ 全部通过');
 process.exit(fails.length ? 1 : 0);

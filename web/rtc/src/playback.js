@@ -34,7 +34,11 @@ export class Playback {
     this.uttStartCtx = 0;          // pcm：utterance 开始时的 ctx.currentTime
     this.uttStartMono = 0;         // speech：utterance 开始时的 performance.now()
     this.nextAt = 0;               // pcm：下一个块最早可播时刻
-    this.sources = /** @type {AudioBufferSourceNode[]} */ ([]);
+    this.sources = new Map();
+    this.pausedPcm = null;
+    this.completed = false;
+    this.endTimer = 0;
+    this.firstFrameTimer = 0;
     this.playing = false;
     this.ducked = false;
     this.underruns = 0;
@@ -61,6 +65,11 @@ export class Playback {
 
   /** @param {any} d tts_started */
   begin(d) {
+    clearTimeout(this.endTimer);
+    clearTimeout(this.firstFrameTimer);
+    this.firstFrameTimer = 0;
+    this.pausedPcm = null;
+    this.completed = false;
     this.replyId = d.reply_id;
     this.turnId = d.turn_id;
     this.sampleRate = d.sample_rate || 24000;
@@ -119,28 +128,34 @@ export class Playback {
 
     const buf = ctx.createBuffer(1, pcm.length, rate);   // 让浏览器按 ctx 采样率自动重采样
     buf.copyToChannel(Float32Array.from(pcm, (value) => value / 32768), 0);
+    if (this.pausedPcm) {
+      this.pausedPcm.buffers.push({ buf, offset: 0 });
+      return;
+    }
+    this._schedulePcm(buf);
+  }
+
+  _schedulePcm(buf, offset = 0) {
+    const ctx = this.engine.ctx;
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(gain);
+    src.connect(this.gain);
 
     const when = Math.max(ctx.currentTime + 0.02, this.nextAt);
     if (this.nextAt && when - this.nextAt > 0.04) {       // 队空过久：记 underrun
       this.underruns++;
       this.client.clientEvent('PlaybackUnderrun', { reply_id: this.replyId, gap_ms: Math.round((when - this.nextAt) * 1000) });
     }
-    src.start(when);
-    this.sources.push(src);
-    this.nextAt = when + buf.duration;
+    src.start(when, offset);
+    this.sources.set(src, { when, offset });
+    this.nextAt = when + buf.duration - offset;
 
     if (!this.uttStartCtx) {
       this.uttStartCtx = when;
       this.playing = true;
       this._fireFirstFrame(when);
     }
-    src.onended = () => {
-      const k = this.sources.indexOf(src);
-      if (k >= 0) this.sources.splice(k, 1);
-    };
+    src.onended = () => this.sources.delete(src);
   }
 
   /** @param {any} d tts_completed */
@@ -149,10 +164,17 @@ export class Playback {
       // speechSynthesis 的 onend 会驱动结束；这里只兜底一次
       setTimeout(() => { if (!this.playing) this._emitEnd(); }, 300);
     } else {
-      const remain = Math.max(0, (this.nextAt - (this.engine.ctx ? this.engine.ctx.currentTime : 0)) * 1000);
-      setTimeout(() => this._emitEnd(), remain + 60);
+      this.completed = true;
+      this._schedulePcmEnd();
     }
     if (d && d.interrupted) this.refDb = -99;
+  }
+
+  _schedulePcmEnd() {
+    clearTimeout(this.endTimer);
+    if (!this.completed || this.pausedPcm) return;
+    const remain = Math.max(0, (this.nextAt - (this.engine.ctx?.currentTime ?? 0)) * 1000);
+    this.endTimer = setTimeout(() => this._emitEnd(), remain + 60);
   }
 
   _emitEnd() {
@@ -195,6 +217,42 @@ export class Playback {
   }
 
   /* ============================ 打断 ============================ */
+
+  /** Freeze at the current sample, including the unplayed part of the current buffer. */
+  pausePcm() {
+    if (this.form !== 'pcm' || !this.playing || this.ducked || !this.engine.ctx) return null;
+    const at = this.engine.ctx.currentTime;
+    const buffers = [];
+    for (const [src, { when, offset }] of this.sources) {
+      const remainingOffset = offset + Math.max(0, at - when);
+      if (remainingOffset < src.buffer.duration) buffers.push({ buf: src.buffer, offset: remainingOffset });
+      src.stop(0);
+    }
+    this.sources.clear();
+    clearTimeout(this.endTimer);
+    clearTimeout(this.firstFrameTimer);
+    this.firstFrameTimer = 0;
+    this.pausedPcm = { buffers, playedMs: this.playedMs() };
+    this.ducked = true;
+    this.refDb = -99;
+    const stoppedAt = now();
+    this.client.clientEvent('PlaybackCancelled', { reply_id: this.replyId, played_ms: Math.round(this.playedMs()) });
+    return stoppedAt;
+  }
+
+  resumePcm(replyId) {
+    if (replyId !== this.replyId || !this.pausedPcm || this.aborted || !this.engine.ctx) return false;
+    const { buffers, playedMs } = this.pausedPcm;
+    this.pausedPcm = null;
+    this.ducked = false;
+    this.nextAt = 0;
+    const startAt = this.engine.ctx.currentTime + 0.02;
+    this.uttStartCtx = startAt - playedMs / 1000;
+    for (const { buf, offset } of buffers) this._schedulePcm(buf, offset);
+    if (buffers.length) this._fireFirstFrame(startAt);
+    this._schedulePcmEnd();
+    return true;
+  }
 
   /** 立即本地静音，**不丢缓冲**（G11）；返回 b3（最后一帧播出的时刻） */
   duck() {
@@ -269,8 +327,12 @@ export class Playback {
 
   /** 硬停（挂断/取消确认后） */
   stopNow() {
-    for (const s of this.sources) { try { s.stop(0); } catch { /* noop */ } }
-    this.sources = [];
+    for (const s of this.sources.keys()) { try { s.stop(0); } catch { /* noop */ } }
+    this.sources.clear();
+    clearTimeout(this.endTimer);
+    clearTimeout(this.firstFrameTimer);
+    this.firstFrameTimer = 0;
+    this.pausedPcm = null;
     if (hasSpeech()) window.speechSynthesis.cancel();
     if (this.gain) this.gain.gain.value = 1;
     this.ducked = false;
@@ -284,17 +346,19 @@ export class Playback {
   /* ============================ 度量 ============================ */
 
   _fireFirstFrame(ctxStartAt) {
-    if (this.firstFrameSent) return;
-    this.firstFrameSent = true;
+    if (this.firstFrameSent || this.firstFrameTimer) return;
     const delayMs = ctxStartAt && this.engine.ctx
       ? Math.max(0, (ctxStartAt - this.engine.ctx.currentTime) * 1000)
       : 0;
-    setTimeout(() => {
+    this.firstFrameTimer = setTimeout(() => {
+      this.firstFrameTimer = 0;
+      this.firstFrameSent = true;
       this.client.playbackFirstFrame(this.replyId, this.turnId, this.engine.ctxTime());
     }, delayMs);
   }
 
   playedMs() {
+    if (this.pausedPcm) return this.pausedPcm.playedMs;
     if (this.form === 'speech') {
       return this.uttStartMono ? Math.max(0, now() - this.uttStartMono) : 0;
     }

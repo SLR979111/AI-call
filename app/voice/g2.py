@@ -11,6 +11,7 @@ import httpx
 from new.app.local_asr import load_from_env, make_transcriber
 from new.app.providers import Cloud, ProviderError, Settings
 
+from .speech_endpoint import SpeechEndpoint
 from .types import AsrEvent, AudioChunk, VoiceError, mono_ms
 
 
@@ -62,19 +63,26 @@ class G2Asr:
     def __init__(self, transcribe):
         self.transcribe = transcribe
 
-    async def start(self, session_id, *, sample_rate=16000, hotwords=None, client_endpointing=False):
+    async def start(self, session_id, *, sample_rate=16000, hotwords=None, client_endpointing=False,
+                    server_silence_ms=None):
         if sample_rate != 16000 or hotwords:
             raise VoiceError("ASR_CONFIG", "G2 expects 16 kHz PCM")
-        return G2AsrStream(self.transcribe)
+        endpoint = None
+        if server_silence_ms is not None:
+            from new.app.vad import SpeechDetector
+
+            endpoint = SpeechEndpoint(SpeechDetector(), server_silence_ms)
+        return G2AsrStream(self.transcribe, endpoint)
 
 
 class G2AsrStream:
-    def __init__(self, transcribe):
+    def __init__(self, transcribe, endpoint=None):
         self.transcribe = transcribe
         self.frames = bytearray()
         self.queue = asyncio.Queue()
         self.closed = False
         self.overflow = False
+        self.endpoint = endpoint
 
     async def push(self, frame):
         if self.closed:
@@ -82,7 +90,9 @@ class G2AsrStream:
         if len(self.frames) + len(frame.pcm) > 16000 * 2 * 30:
             self.overflow = True
             return
-        if not self.overflow:
+        if self.endpoint:
+            self.endpoint.feed(frame, self.frames)
+        else:
             self.frames.extend(frame.pcm)
 
     async def finish(self):
@@ -91,9 +101,10 @@ class G2AsrStream:
         try:
             if self.overflow:
                 raise VoiceError("ASR_TOO_LONG", "请分成两句话再说。", retryable=True)
-            if self.frames:
-                text = await self.transcribe(bytes(self.frames))
-                self.queue.put_nowait(AsrEvent("final", text=text, audio_end_ms=len(self.frames) // 32))
+            clip = self.endpoint.clip(self.frames) if self.endpoint else bytes(self.frames)
+            if clip:
+                text = await self.transcribe(clip)
+                self.queue.put_nowait(AsrEvent("final", text=text, audio_end_ms=len(clip) // 32))
         except VoiceError as exc:
             self.queue.put_nowait(AsrEvent("error", error=exc.to_dict()))
         except (ProviderError, httpx.HTTPError):

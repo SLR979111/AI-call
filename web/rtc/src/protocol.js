@@ -32,6 +32,8 @@ export const S2C = Object.freeze({
   HELLO_ACK: 'hello_ack',         // ★ 真实抓包有，03/11 未定义：回显 protocol/server_version/transport
   STATE: 'state',
   TRANSCRIPT: 'transcript',
+  SPEECH_ENDPOINT: 'speech_endpoint',
+  BARGE_RESUME: 'barge_resume',
   AGENT_TEXT: 'agent_text',
   TTS_STARTED: 'tts_started',
   TTS_SENTENCE: 'tts_sentence',
