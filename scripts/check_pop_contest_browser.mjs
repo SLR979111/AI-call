@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 
 const [base, output, transport = 'ws_pcm', followup = 'reason', endpointArg] = process.argv.slice(2);
 if (!base || !output) throw new Error('Usage: node scripts/check_pop_contest_browser.mjs BASE OUTPUT');
-const endpointMs = endpointArg === undefined ? null : Number(endpointArg);
+const endpointMs = endpointArg === undefined || followup === 'closure' ? null : Number(endpointArg);
 if (endpointMs !== null && (followup !== 'pauses' || !Number.isInteger(endpointMs) || endpointMs < 200 || endpointMs > 1200)) {
   throw new Error('Endpoint override is available for pause diagnostics (200–1200 ms).');
 }
@@ -38,6 +38,7 @@ const identityChecks = [];
 const pauseChecks = [];
 const textChecks = [];
 const scenarioChecks = [];
+const closureChecks = [];
 let capturedAudio = null;
 let noMatch = null;
 page.on('pageerror', error => errors.push(String(error)));
@@ -422,12 +423,41 @@ async function checkSceneRsi() {
   await page.locator('#btnHangup').click();
 }
 
+async function checkClosure() {
+  if (transport !== 'rtc_pcm' || !endpointArg) throw new Error('Closure replay requires rtc_pcm and a plan JSON');
+  const plan = JSON.parse(readFileSync(endpointArg, 'utf8'));
+  for (const call of plan.calls) {
+    const start = server.length;
+    const session = await connect(call.doc);
+    await finishOpening(session, start);
+    const rows = [];
+    for (const [file, outcome, tool] of call.turns) {
+      const row = await speak(session, file);
+      measurements.push(row);
+      rows.push({ ...row, expected_outcome: outcome, expected_tool: tool ?? null });
+    }
+    const receipt = server.slice(start).find(event =>
+      event.type === 'turn_result' && event.result?.result?.writeback)?.result.result.writeback.record_id;
+    if (receipt) {
+      await page.waitForFunction(id => document.getElementById('result').textContent.includes(id), receipt);
+    }
+    await page.screenshot({ path: join(output, `closure-${call.id}.png`) });
+    await page.locator('#btnHangup').click();
+    const wire = await page.evaluate(() => window.contestWire);
+    const counts = await page.evaluate(() => window.contestUploads);
+    closureChecks.push({id: call.id, doc: call.doc, session_id: session.session_id, rows, uploads: counts});
+    client.push(wire);
+    uploads.push(counts);
+  }
+}
+
 let failure = null;
 try {
   if (followup === 'pauses') await checkPauses();
   else if (followup === 'resilient') await checkResilient();
   else if (followup === 'scenarios') await checkScenarios();
   else if (followup === 'scene-rsi') await checkSceneRsi();
+  else if (followup === 'closure') await checkClosure();
   else await checkCall();
 } catch (error) {
   failure = String(error);
@@ -440,6 +470,7 @@ try {
     transport, failure, errors, openings, measurements, identity_checks: identityChecks, pause_checks: pauseChecks,
     endpoint_override_ms: endpointMs,
     text_checks: textChecks, scenario_checks: scenarioChecks,
+    closure_checks: closureChecks,
     no_match_retry: noMatch, client, uploads, server,
   }, null, 2));
   await browser.close();

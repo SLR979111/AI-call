@@ -7,15 +7,16 @@ import hashlib
 import os
 import shutil
 import sys
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.cancel import CancelToken
-from app.eval.pop_runner import KNOWLEDGE, read_json
+from app.eval.pop_runner import KNOWLEDGE, read_json, write_json
 from app.agent.pop_competition import PRIME_SENTENCES, PopCompetitionAgent
+from app.agent.pop_phone_style import load_phone_style
 from app.agent.pop_guidance import GUIDANCE_PROMPT, GUIDANCE_TOPICS
 from app.agent.pop_grounded_answer import BASE_ADVICE, GroundedAnswer
 from app.agent.pop_local_topics import MODEL_BUDGET_MS, PROMPT_C, LocalTopics
@@ -23,6 +24,7 @@ from app.agent.pop_repair import BASELINE, CONTEXTUAL, FAST, GUIDED, REPAIRED, R
 from app.agent.pop_resilient import PRIME_REPLIES, masked_shop
 from app.agent.pop_scene_followup import load_scene_policy
 from app.eval.pop_judge import JudgeConfig
+from app.rsi.pop_closure import load_policy as load_closure_policy
 from app.tools.pop_writeback import PopContactStore
 from app.voice.primed import PrimedTts
 from probe_pop_voice import RATE, write_wav
@@ -49,9 +51,21 @@ CONTEST_SILENCE_MS = 900
 def build_app(args):
     policy = {"legacy": BASELINE, "repair": REPAIRED, "guided": GUIDED,
               "contextual": CONTEXTUAL, "fast": FAST, "resilient": RESILIENT}[args.dialogue_version]
+    closure_path = getattr(args, "closure_policy", None)
+    if closure_path:
+        if policy is not RESILIENT:
+            raise ValueError("Closure releases require resilient dialogue")
+        policy = load_closure_policy(read_json(closure_path))
     scene_policy = (load_scene_policy(ROOT, getattr(args, "scene_policy", None))
                     if policy.resilient_dialogue and not getattr(args, "no_scene_policy", False) else None)
     semantic_config = JudgeConfig.from_env() if args.semantic_followups else None
+    intent_mode = getattr(args, "turn_intent", None)
+    intent_config = JudgeConfig.from_env() if intent_mode else None
+    g2_settings = None
+    if getattr(args, "g2_voice", False):
+        from app.voice.g2 import load_g2_settings
+
+        g2_settings = load_g2_settings()
     answer_advice = args.answer_prompt.read_text(encoding="utf-8").strip() if args.answer_prompt else BASE_ADVICE
     if not 5 <= len(answer_advice) <= 350:
         raise ValueError("Reply advice must contain 5–350 characters")
@@ -69,6 +83,8 @@ def build_app(args):
         artifacts += (ROOT / "app/agent/pop_fast_reply.py").read_bytes()
     if policy.resilient_dialogue:
         artifacts += (ROOT / "app/agent/pop_resilient.py").read_bytes()
+    if closure_path:
+        artifacts += (ROOT / "app/agent/pop_confirmation.py").read_bytes() + closure_path.read_bytes()
     if scene_policy:
         artifacts += (ROOT / "app/agent/pop_scene_followup.py").read_bytes() + scene_policy.version.encode()
     if args.local_followups_port:
@@ -78,13 +94,41 @@ def build_app(args):
         artifacts += (ROOT / "app/agent/pop_grounded_answer.py").read_bytes() + answer_advice.encode()
     if args.prime_tts:
         artifacts += (ROOT / "app/voice/primed.py").read_bytes()
+    phone_style_path = getattr(args, "phone_style", None)
+    phone_style = load_phone_style(phone_style_path) if phone_style_path else None
+    if phone_style:
+        artifacts += (ROOT / "app/agent/pop_phone_style.py").read_bytes() + phone_style.version.encode()
+    if getattr(args, "prime_followup_tts", False):
+        artifacts += b"|warm-shared-followups"
+    if intent_config:
+        artifacts += (ROOT / "app/agent/pop_turn_intent.py").read_bytes()
+        if intent_mode in {"plan", "plan-retry"}:
+            artifacts += (ROOT / "app/agent/pop_turn_plan.py").read_bytes()
+        artifacts += f"|{intent_mode}:{intent_config.model}:{args.intent_budget_ms}".encode()
+    if g2_settings:
+        artifacts += b"".join((ROOT / path).read_bytes() for path in
+                              ("app/voice/g2.py", "new/app/providers.py", "new/app/local_asr.py"))
+        artifacts += f"|g2-voice:{g2_settings.voice}".encode()
     digest = hashlib.sha256(artifacts).hexdigest()[:12]
     release = f"pop-contest-resilient-{digest}" if policy.resilient_dialogue else f"pop-contest-{digest}"
+    runtime_path = args.output / "contest-runtime.json"
+    runtime_config = {
+        "release": release, "dialogue_policy": policy.version, "scene_policy": scene_policy.version if scene_policy else None,
+        "asr": "initializing" if g2_settings else "sherpa", "tts": "deepseek" if g2_settings else "melo",
+        "tts_speed": None if g2_settings else args.tts_speed, "rtc_pcm": args.rtc_pcm,
+        "voice": g2_settings.voice if g2_settings else None,
+        "turn_intent": intent_mode,
+        "phone_style": phone_style.version if phone_style else None,
+        "language_model_enabled": bool(semantic_config or args.local_followups_port or args.local_answer_port or intent_config),
+        "writeback_fault": args.fault_writeback,
+        "confirmation_rules": hashlib.sha256((ROOT / "app/agent/pop_confirmation.py").read_bytes()).hexdigest(),
+    }
+    write_json(runtime_path, runtime_config)
     os.environ.update(
         APP_ENV="contest_demo", DEV_NO_AUTH="0", AGENT_PROVIDER="fake", SCENARIO_ID="pop_qualification_audit",
         DATA_DIR=str(args.output), RELEASE_ID=release,
-        ASR_PROVIDER="sherpa", TTS_PROVIDER="melo", TTS_FALLBACK_PROVIDER="",
-        ASR_MODEL_DIR=str(args.asr_model), MELO_MODEL_DIR=str(args.tts_model),
+        ASR_PROVIDER="fake" if g2_settings else "sherpa", TTS_PROVIDER="fake" if g2_settings else "melo",
+        TTS_FALLBACK_PROVIDER="", ASR_MODEL_DIR=str(args.asr_model or ""), MELO_MODEL_DIR=str(args.tts_model or ""),
         MELO_SPEED=str(args.tts_speed),
     )
     from app.main import app, lifespan
@@ -123,13 +167,29 @@ def build_app(args):
     async def contest_lifespan(app):
         import httpx
 
-        async with lifespan(app), httpx.AsyncClient(
-            follow_redirects=False, trust_env=not (args.local_followups_port or args.local_answer_port),
+        async with lifespan(app), AsyncExitStack() as stack, httpx.AsyncClient(
+            follow_redirects=False, trust_env=not (args.local_followups_port or args.local_answer_port or intent_config),
         ) as client:
             runtime = app.state.voice
+            if g2_settings:
+                from app.voice.g2 import build_g2_voice
+
+                cloud, runtime.asr, runtime.tts, asr_name = await build_g2_voice(
+                    g2_settings, args.output / "g2-speech.sqlite3")
+                stack.push_async_callback(cloud.close)
+                runtime.status.asr_provider = asr_name
+                runtime.status.asr_detail = "G2 transcriber"
+                runtime.status.tts_provider = "deepseek"
+                runtime.status.tts_detail = f"G2 provider, voice={g2_settings.voice}"
+                app.state.orchestrator.tts = runtime.tts
+                app.state.orchestrator.tts_provider = "deepseek"
+                app.state.orchestrator.tts_alignment = True
+                runtime_config["asr"] = asr_name
+                write_json(runtime_path, runtime_config)
             if runtime.asr is None or runtime.tts is None:
                 raise RuntimeError((await runtime.refresh()).detail)
-            runtime.asr.finish_padding_ms = 500
+            if not g2_settings:
+                runtime.asr.finish_padding_ms = 500
             store = PopContactStore(args.output / "index/pop_contacts.db", app.state.bus,
                                     fault=args.fault_writeback)
             try:
@@ -141,17 +201,39 @@ def build_app(args):
                     semantic = LocalTopics(client, args.local_followups_port, prompt=PROMPT_C, constrained=True)
                 generator = (GroundedAnswer.local(client, args.local_answer_port, advice=answer_advice)
                              if args.local_answer_port else None)
+                intent = None
+                if intent_config:
+                    from app.agent.pop_turn_intent import PopTurnIntent
+                    from app.agent.pop_turn_plan import PopTurnPlan
+
+                    if intent_mode in {"plan", "plan-retry"}:
+                        intent = PopTurnPlan(client, intent_config, budget_ms=args.intent_budget_ms,
+                                             retry_writes=intent_mode == "plan-retry")
+                    else:
+                        intent = PopTurnIntent(client, intent_config, budget_ms=args.intent_budget_ms)
+                    runtime_config["intent_version"] = intent.version
+                    write_json(runtime_path, runtime_config)
                 app.state.orchestrator.agent = PopCompetitionAgent(
                     KNOWLEDGE, case_contexts[args.doc_id], store, policy=policy,
                     semantic_topics=semantic, grounded_answer=generator, case_contexts=case_contexts,
                     scene_policy=scene_policy,
+                    turn_intent=intent, resolve_followups=intent_mode in {"grounded", "plan", "plan-retry"},
+                    phone_style=phone_style,
                 )
                 if args.prime_tts:
                     primed = PrimedTts(runtime.tts)
                     lines = PRIME_SENTENCES
                     if policy.resilient_dialogue:
                         lines += PRIME_REPLIES + (masked_shop(args.brand),)
-                    await primed.prime(dict.fromkeys(lines))
+                    if getattr(args, "prime_followup_tts", False):
+                        from app.agent.pop_contextual import CONFIRM_QUESTION
+                        from app.agent.pop_turn_intent import grounded_followup
+
+                        fixed = tuple(grounded_followup(topic, "", "")[0] for topic in ("channel", "review"))
+                        lines += fixed + (CONFIRM_QUESTION,)
+                        runtime_config["extra_primed_replies"] = list(fixed + (CONFIRM_QUESTION,))
+                        write_json(runtime_path, runtime_config)
+                    await primed.prime(dict.fromkeys(phone_style.render(lines) if phone_style else lines))
                     app.state.orchestrator.tts = primed
                 if args.reuse_audio:
                     shutil.copytree(args.reuse_audio, args.output / "input_audio")
@@ -176,8 +258,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--asr-model", type=Path, required=True)
-    parser.add_argument("--tts-model", type=Path, required=True)
+    parser.add_argument("--asr-model", type=Path)
+    parser.add_argument("--tts-model", type=Path)
     parser.add_argument("--dll-dir", type=Path)
     parser.add_argument("--port", type=int, default=8091)
     parser.add_argument("--doc-id", default="pop-scene-034")
@@ -201,7 +283,21 @@ if __name__ == "__main__":
     parser.add_argument("--rtc-pcm", action="store_true",
                         help="enable optional WebRTC DataChannel (install requirements-rtc.txt first)")
     parser.add_argument("--fault-writeback", action="store_true")
+    parser.add_argument("--closure-policy", type=Path, help="Pin a verified closure release JSON")
+    parser.add_argument("--g2-voice", action="store_true", help="Use the original G2 DeepSeek audio providers")
+    parser.add_argument("--prime-followup-tts", action="store_true", help="Also prewarm three shared follow-up replies")
+    parser.add_argument("--turn-intent", choices=("stance", "grounded", "plan", "plan-retry"), help="Enable the bounded POP intent candidate")
+    parser.add_argument("--intent-budget-ms", type=int, default=1800)
+    parser.add_argument("--phone-style", type=Path, help="Load reviewed telephone wording without a live rewrite call")
     args = parser.parse_args()
+    if not args.g2_voice and (not args.asr_model or not args.tts_model):
+        parser.error("Choose --g2-voice or provide both local model paths")
+    if args.g2_voice and args.prepare_audio:
+        parser.error("Use pre-generated 16 kHz fixtures with --g2-voice")
+    if args.prime_followup_tts and (not args.prime_tts or args.turn_intent not in {"grounded", "plan", "plan-retry"}):
+        parser.error("--prime-followup-tts requires --prime-tts and a grounded candidate")
+    if args.turn_intent and (not args.closure_policy or not 250 <= args.intent_budget_ms <= 2500):
+        parser.error("--turn-intent requires a closure policy and a budget of 250–2500 ms")
     if args.local_followups_port is not None and (
         args.dialogue_version not in {"guided", "contextual"} or not 1 <= args.local_followups_port <= 65535
     ):

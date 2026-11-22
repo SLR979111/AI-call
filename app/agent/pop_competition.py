@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
 
+from .pop_confirmation import AVAILABLE_NOW, LISTENING, NEEDS_ACTION_HELP, OWN_ROLE, STOP_NOW, explicit_understanding
 from .pop_contextual import DEFINITION, REVIEW_MEANING, CONFIRM_QUESTION, FollowupContext, reply as contextual_reply
 from .pop_grounded_answer import case_evidence
 from .pop_guidance import guidance_reply, guidance_topics
@@ -18,6 +19,8 @@ from .pop_resilient import (
 from .pop_strategy import (
     PopStrategyAgent, _FORMER_CONTACT, _HUMAN, _OPT_OUT, _WRONG_PERSON,
 )
+from .pop_turn_intent import grounded_followup
+from .pop_turn_plan import RETRY, plan_reply
 
 STAGES = ("OPEN", "IDENTITY_CONFIRM", "NEED_CONFIRM", "OFFER", "RESULT_CONFIRM", "WRITEBACK")
 SEPARATORS = re.compile(r"[\s,。!、;：:…]+")
@@ -90,6 +93,7 @@ class Contact:
     slots: dict | None = None
     source: dict | None = None
     writeback: dict | None = None
+    writeback_failed: bool = False
     spoken_reason: str = ""
     followup: FollowupContext = field(default_factory=FollowupContext)
     last_public: str = ""
@@ -101,7 +105,7 @@ class PopCompetitionAgent(PopStrategyAgent):
 
     def __init__(self, knowledge_path: Path, context: dict, store, *, policy: RepairPolicy = GUIDED,
                  semantic_topics=None, grounded_answer=None, case_contexts: dict | None = None,
-                 scene_policy=None) -> None:
+                 scene_policy=None, turn_intent=None, resolve_followups=False, phone_style=None) -> None:
         super().__init__(knowledge_path, 0, identity_first=True, case_grounding=True,
                          callback_receipt=True, answer_followups=True)
         self.context = context
@@ -112,6 +116,10 @@ class PopCompetitionAgent(PopStrategyAgent):
         self.semantic_topics = semantic_topics
         self.grounded_answer = grounded_answer
         self.scene_policy = scene_policy
+        self.turn_intent = turn_intent
+        self.resolve_followups = resolve_followups
+        self.phone_style = phone_style
+        self.retry_writes = getattr(turn_intent, "retry_writes", False)
         self.contacts: dict[str, Contact] = {}
 
     async def start_session(self, session_id: str, version_set: dict[str, str], flow_pack: dict) -> None:
@@ -155,14 +163,52 @@ class PopCompetitionAgent(PopStrategyAgent):
         resilient = self.policy.resilient_dialogue
         normalized = normalize_answer(text)
         confirmed = result_confirmed(text) or (contextual and CONTEXTUAL_ACK.fullmatch(normalize_answer(text)))
+        if self.policy.grounded_confirmation:
+            confirmed = confirmed or explicit_understanding(normalized)
         needs_identity = state.phase in {"open", "identity"}
         answer = identity_answer(text) if needs_identity else None
+        if needs_identity and self.policy.explicit_identity and answer != "denied":
+            clear_identity = re.fullmatch(YES, normalized) or IDENTITY.search(normalized) or OWN_ROLE.fullmatch(normalized)
+            answer = "confirmed" if clear_identity and not UNCERTAIN.search(normalized) else "unclear"
+        explicit_stop = (state.phase == "stopped" or STOP.search(text) or _OPT_OUT.search(text)
+                         or (self.policy.explicit_stop and STOP_NOW.fullmatch(normalized))
+                         or (self.policy.repair_followups and WITHHOLD.search(text))
+                         or answer == "denied" or (resilient and REVOKED.search(normalized)))
+        known_availability = (AVAILABLE.fullmatch(normalized) or ASSENT.fullmatch(normalized)
+                              or (self.policy.natural_availability and AVAILABLE_NOW.fullmatch(normalized))
+                              or CASE_QUESTION.search(text))
+        busy = bool(BUSY.search(normalized) or (contextual and UNAVAILABLE.search(text)))
+        retry_requested = (self.retry_writes and state.phase == "confirm" and state.writeback_failed
+                           and bool(RETRY.fullmatch(normalized)))
+        needs_action_help = (self.policy.grounded_confirmation and state.phase == "confirm"
+                             and not state.writeback_failed and bool(NEEDS_ACTION_HELP.fullmatch(normalized)))
+        intent = None
+        if self.turn_intent and text and not explicit_stop and not FAREWELL.fullmatch(text):
+            ambiguous = ((state.phase == "identity" and answer == "unclear" and not ASK_SHOP.search(text))
+                         or (state.phase == "need" and (busy or not known_availability)
+                             and not GENERAL_REVIEW.search(text))
+                         or (state.phase == "confirm" and not ((confirmed and state.followup.can_confirm)
+                                                              or retry_requested or needs_action_help)))
+            if ambiguous:
+                intent = await self.turn_intent(state.phase, text, state.last_public)
+                cancel.check()
+        label = (intent or {}).get("intent")
+        topics = (intent or {}).get("topics")
+        if self.resolve_followups and state.phase == "confirm":
+            resolved = (plan_reply(topics, state.spoken_reason, state.slots["remediation"])
+                        if topics is not None else grounded_followup(label, state.spoken_reason, state.slots["remediation"]))
+        else:
+            resolved = None
+        if label == "identity_yes":
+            answer = "confirmed"
+        elif label == "identity_no":
+            answer = "denied"
+        if label == "understood" and state.followup.can_confirm:
+            confirmed = True
         if resilient and FAREWELL.fullmatch(text):
             state.phase = "stopped"
             sentences, outcome, stage = [FAREWELL_REPLY], "safe_exit", None
-        elif (state.phase == "stopped" or STOP.search(text) or _OPT_OUT.search(text)
-                or (self.policy.repair_followups and WITHHOLD.search(text))
-                or answer == "denied" or (resilient and REVOKED.search(normalized))):
+        elif explicit_stop or answer == "denied" or label == "stop":
             state.phase = "stopped"
             sentences, outcome, stage = ["为保护商家信息，本次通话到这里。谢谢接听。"], "safe_exit", None
         elif _HUMAN.search(text) and not (resilient and DECLINE_TRANSFER.search(text)):
@@ -200,14 +246,16 @@ class PopCompetitionAgent(PopStrategyAgent):
                            or (self.policy.answer_implied_need and asks_for_explanation(text)))
             if resilient:
                 allowed = bool(AVAILABLE.fullmatch(normalized) or ASSENT.fullmatch(normalized) or CASE_QUESTION.search(text))
-            if BUSY.search(normalized) or (contextual and UNAVAILABLE.search(text)):
+            if self.policy.natural_availability:
+                allowed = allowed or AVAILABLE_NOW.fullmatch(normalized) is not None
+            if label == "unavailable" or (busy and label != "available"):
                 state.phase = "stopped"
                 sentences, outcome, stage = ["好的，感谢接听。再见。"], "safe_exit", None
             elif resilient and GENERAL_REVIEW.search(text):
                 sentences, outcome, stage = [REVIEW_EXPLANATION, ASK_AVAILABILITY], "pending_need", None
             elif contextual and DEFINITION.search(text):
                 sentences, outcome, stage = [REVIEW_MEANING, ASK_AVAILABILITY], "pending_need", None
-            elif allowed:
+            elif allowed or label == "available":
                 explanation, route_outcome, slots, source = self._explain(text, self._case_doc(context), context)
                 if route_outcome != "rejected":
                     sentences, outcome, stage = ["请以京麦的书面审核意见为准。"], "route_unknown", None
@@ -233,10 +281,28 @@ class PopCompetitionAgent(PopStrategyAgent):
                 sentences, outcome, stage = ["您现在方便听一下资质审核结果吗？"], "pending_need", None
         elif state.phase == "done":
             sentences, outcome, stage = ["本次沟通结果已记录。感谢接听。"], "pop_contact_recorded", None
+        elif needs_action_help:
+            if state.followup.step == "confirm_action_recap":
+                sentences = ["我们先找这笔申请。您现在能打开京麦吗？"]
+                next_followup = FollowupContext(step="open_application", can_confirm=False, focus="action")
+                repair = {"source": "confirmation_step_guidance", "topics": ["channel"]}
+            else:
+                action = state.slots["remediation"]
+                sentences = [
+                    *grounded_followup("action", state.spoken_reason, action),
+                    *grounded_followup("channel", state.spoken_reason, action),
+                    CONFIRM_QUESTION,
+                ]
+                next_followup = FollowupContext(step="confirm_action_recap", focus="action")
+                repair = {"source": "confirmation_action_recap", "topics": ["action", "channel"]}
+            outcome, stage = "pending_result", None
+        elif (self.policy.grounded_confirmation and state.phase == "confirm" and state.followup.can_confirm
+              and LISTENING.fullmatch(normalized)):
+            sentences, outcome, stage = [CONFIRM_QUESTION], "pending_result", None
         elif contextual and confirmed and not state.followup.can_confirm:
             sentences, outcome, stage = [CONFIRM_QUESTION], "pending_result", None
             next_followup = FollowupContext()
-        elif confirmed:
+        elif confirmed or retry_requested:
             yield {"kind": "stage", "reply_id": reply, "stage": "RESULT_CONFIRM"}
             cancel.check()
             result = await self.store.record(req, request_id=state.slots["request_id"],
@@ -244,11 +310,22 @@ class PopCompetitionAgent(PopStrategyAgent):
                                              route=state.slots["handling_mode"])
             if result:
                 state.phase, state.writeback = "done", result
+                state.writeback_failed = False
                 yield {"kind": "stage", "reply_id": reply, "stage": "WRITEBACK"}
                 sentences, outcome, stage = [RECORDED], "pop_contact_recorded", None
             else:
                 sentences, outcome, stage = ["这次没能记录沟通结果，请在京麦查看审核意见。"], "writeback_failed", None
+                if self.retry_writes:
+                    state.writeback_failed = True
+                    sentences.append("您要我再试一次记录吗？")
+        elif resolved:
+            state.writeback_failed = False
+            sentences = [*resolved, CONFIRM_QUESTION]
+            repair = {"source": "phase_intent_grounded", "topics": topics or [label]}
+            next_followup = FollowupContext(focus=label)
+            outcome, stage = "pending_result", None
         elif contextual:
+            state.writeback_failed = False
             sentences, repair, next_followup = await contextual_reply(
                 text, state.followup, reason=state.spoken_reason, action=state.slots["remediation"],
                 doc_id=state.source["citation"]["doc_id"], semantic_topics=self.semantic_topics,
@@ -285,21 +362,24 @@ class PopCompetitionAgent(PopStrategyAgent):
             cancel.check()
             # Keep the question's topic after an interruption, but require a complete explanation before confirmation.
             state.followup = replace(state.followup, focus=next_followup.focus, can_confirm=False)
-        for index, sentence in enumerate(sentences, start=1):
+        spoken = self.phone_style.render(sentences) if self.phone_style else sentences
+        for index, sentence in enumerate(spoken, start=1):
             cancel.check()
             yield {"kind": "sentence", "reply_id": reply, "text": sentence,
-                   "sentence_id": index, "final": index == len(sentences)}
+                   "sentence_id": index, "final": index == len(spoken)}
         if stage:
             reached, state.phase = stage
             yield {"kind": "stage", "reply_id": reply, "stage": reached}
         if next_followup is not None:
             cancel.check()
             state.followup = next_followup
-        if self.grounded_answer and state.phase == "confirm":
-            state.last_public = "".join(sentences)[:140]
+        if self.turn_intent or (self.grounded_answer and state.phase == "confirm"):
+            state.last_public = "".join(sentences)
         result = dict(state.source or {})
         if repair:
             result["followup"] = repair
+        if intent:
+            result["turn_intent"] = intent
         if state.writeback:
             result["writeback"] = state.writeback
         yield {"kind": "end", "reply_id": reply, "outcome": outcome, "slots": state.slots or {}, "result": result}

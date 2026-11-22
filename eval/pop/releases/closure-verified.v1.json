@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "parent": "pop-dialogue-efb175279111",
+  "version": "pop-dialogue-7510eae9b62b",
+  "enabled": [
+    "explicit_identity",
+    "explicit_stop",
+    "grounded_confirmation",
+    "natural_availability"
+  ]
+}

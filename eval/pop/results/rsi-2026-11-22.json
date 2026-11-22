@@ -1,0 +1,431 @@
+{
+  "date": "2026-11-22",
+  "scope": "Synthetic POP calls, SQLite mock writeback, local WebRTC playback timing",
+  "closure_rules": {
+    "version": "pop-dialogue-7510eae9b62b",
+    "changes": {
+      "explicit_identity": "身份问句接受明确身份陈述或直接确认，通用承接语继续核验。",
+      "explicit_stop": "明确要求停止说话或联系时退出。",
+      "grounded_confirmation": "接收明确听懂并说明将按当单要求处理的完整陈述。保留追问、撤回和待澄清的拦截。",
+      "natural_availability": "已核验后识别完整的方便听、请讲等沟通意愿，忙碌和拒绝优先。"
+    },
+    "validation": {
+      "before": {
+        "cases": 12,
+        "passed": 3,
+        "closed_correctly": 0,
+        "severe_cases": 2
+      },
+      "after": {
+        "cases": 12,
+        "passed": 11,
+        "closed_correctly": 7,
+        "severe_cases": 0
+      }
+    },
+    "test": {
+      "before": {
+        "cases": 12,
+        "passed": 3,
+        "closed_correctly": 2,
+        "severe_cases": 0
+      },
+      "after": {
+        "cases": 12,
+        "passed": 8,
+        "closed_correctly": 7,
+        "severe_cases": 0
+      }
+    },
+    "rollback": {
+      "reproduced": 12,
+      "cases": 12
+    },
+    "voice": {
+      "before": {
+        "passed": 1,
+        "records": 1,
+        "turns": 7,
+        "first_sound_p50_ms": 440.9,
+        "first_sound_p95_ms": 1480.4,
+        "severe_cases": 0
+      },
+      "after": {
+        "passed": 2,
+        "records": 2,
+        "turns": 7,
+        "first_sound_p50_ms": 386,
+        "first_sound_p95_ms": 634.9,
+        "severe_cases": 0
+      }
+    }
+  },
+  "phase_intent": {
+    "validation": {
+      "normal": {
+        "before": {
+          "cases": 16,
+          "passed": 0,
+          "closed_correctly": 0,
+          "severe_cases": 0
+        },
+        "after": {
+          "cases": 16,
+          "passed": 11,
+          "closed_correctly": 11,
+          "severe_cases": 0
+        }
+      },
+      "pressure": {
+        "before": {
+          "cases": 8,
+          "passed": 3,
+          "closed_correctly": 0,
+          "severe_cases": 0
+        },
+        "after": {
+          "cases": 8,
+          "passed": 7,
+          "closed_correctly": 2,
+          "severe_cases": 0
+        }
+      }
+    },
+    "test": {
+      "normal": {
+        "before": {
+          "cases": 16,
+          "passed": 0,
+          "closed_correctly": 0,
+          "severe_cases": 0
+        },
+        "after": {
+          "cases": 16,
+          "passed": 15,
+          "closed_correctly": 15,
+          "severe_cases": 0
+        }
+      },
+      "pressure": {
+        "before": {
+          "cases": 8,
+          "passed": 3,
+          "closed_correctly": 0,
+          "severe_cases": 0
+        },
+        "after": {
+          "cases": 8,
+          "passed": 7,
+          "closed_correctly": 2,
+          "severe_cases": 0
+        }
+      }
+    }
+  },
+  "reactive": {
+    "text": {
+      "validation": {
+        "normal": {
+          "before": {
+            "cases": 12,
+            "passed": 10,
+            "closed_correctly": 10,
+            "severe_cases": 0,
+            "complete_first_answers": 5,
+            "repair_prompts": 7
+          },
+          "after": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 11,
+            "repair_prompts": 1
+          }
+        },
+        "pressure": {
+          "before": {
+            "cases": 8,
+            "passed": 4,
+            "closed_correctly": 0,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          },
+          "after": {
+            "cases": 8,
+            "passed": 7,
+            "closed_correctly": 3,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          }
+        }
+      },
+      "test": {
+        "normal": {
+          "before": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 4,
+            "repair_prompts": 8
+          },
+          "after": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 10,
+            "repair_prompts": 2
+          }
+        },
+        "pressure": {
+          "before": {
+            "cases": 8,
+            "passed": 3,
+            "closed_correctly": 0,
+            "severe_cases": 1,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          },
+          "after": {
+            "cases": 8,
+            "passed": 6,
+            "closed_correctly": 4,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          }
+        }
+      }
+    },
+    "voice": {
+      "baseline": {
+        "passed": 2,
+        "records": 2,
+        "first_sound_p50_ms": 1174.45,
+        "first_sound_p95_ms": 4087.2,
+        "fully_answered_and_recorded": 0
+      },
+      "candidate": {
+        "passed": 2,
+        "records": 2,
+        "first_sound_p50_ms": 1628.15,
+        "first_sound_p95_ms": 2941.4,
+        "fully_answered_and_recorded": 1
+      }
+    },
+    "tts_offline_ranking": [
+      "restate",
+      "channel",
+      "review",
+      "action"
+    ],
+    "tts_offline_slots": {
+      "validation": {
+        "0": {
+          "slots": 0,
+          "additional_covered_first_answers": 0,
+          "already_reusable_first_answers": 4
+        },
+        "1": {
+          "slots": 12,
+          "additional_covered_first_answers": 3,
+          "already_reusable_first_answers": 4
+        },
+        "2": {
+          "slots": 24,
+          "additional_covered_first_answers": 5,
+          "already_reusable_first_answers": 4
+        },
+        "3": {
+          "slots": 36,
+          "additional_covered_first_answers": 7,
+          "already_reusable_first_answers": 4
+        },
+        "4": {
+          "slots": 48,
+          "additional_covered_first_answers": 7,
+          "already_reusable_first_answers": 4
+        }
+      },
+      "test": {
+        "0": {
+          "slots": 0,
+          "additional_covered_first_answers": 0,
+          "already_reusable_first_answers": 3
+        },
+        "1": {
+          "slots": 12,
+          "additional_covered_first_answers": 4,
+          "already_reusable_first_answers": 3
+        },
+        "2": {
+          "slots": 24,
+          "additional_covered_first_answers": 6,
+          "already_reusable_first_answers": 3
+        },
+        "3": {
+          "slots": 36,
+          "additional_covered_first_answers": 7,
+          "already_reusable_first_answers": 3
+        },
+        "4": {
+          "slots": 48,
+          "additional_covered_first_answers": 7,
+          "already_reusable_first_answers": 3
+        }
+      }
+    }
+  },
+  "phone_style": {
+    "text": {
+      "validation": {
+        "normal": {
+          "before": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 11,
+            "repair_prompts": 1
+          },
+          "after": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 10,
+            "repair_prompts": 4
+          }
+        },
+        "pressure": {
+          "before": {
+            "cases": 8,
+            "passed": 7,
+            "closed_correctly": 3,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          },
+          "after": {
+            "cases": 8,
+            "passed": 7,
+            "closed_correctly": 3,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          }
+        }
+      },
+      "test": {
+        "normal": {
+          "before": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 10,
+            "repair_prompts": 2
+          },
+          "after": {
+            "cases": 12,
+            "passed": 12,
+            "closed_correctly": 12,
+            "severe_cases": 0,
+            "complete_first_answers": 9,
+            "repair_prompts": 3
+          }
+        },
+        "pressure": {
+          "before": {
+            "cases": 8,
+            "passed": 6,
+            "closed_correctly": 4,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          },
+          "after": {
+            "cases": 8,
+            "passed": 7,
+            "closed_correctly": 4,
+            "severe_cases": 0,
+            "complete_first_answers": 0,
+            "repair_prompts": 0
+          }
+        }
+      }
+    },
+    "voice": {
+      "before": {
+        "passed": 2,
+        "records": 2,
+        "turns": 8,
+        "first_sound_p50_ms": 1628.15,
+        "first_sound_p95_ms": 2941.4,
+        "severe_cases": 0
+      },
+      "after": {
+        "passed": 2,
+        "records": 2,
+        "turns": 8,
+        "first_sound_p50_ms": 1540.75,
+        "first_sound_p95_ms": 2817.2,
+        "severe_cases": 0
+      }
+    },
+    "blinded_model_preference": {
+      "style": 8,
+      "tie": 1
+    }
+  },
+  "short_negative": {
+    "scenario": "pop-scene-061",
+    "transport": "rtc_pcm",
+    "turns": [
+      {
+        "asr": "我是这家店的负责人。",
+        "outcome": "pending_need",
+        "spoken": [
+          "您现在方便听一下资质审核的情况吗？"
+        ],
+        "tool_events": []
+      },
+      {
+        "asr": "可以说。",
+        "outcome": "pending_result",
+        "spoken": [
+          "这笔资质申请未通过。",
+          "审核问题是法人证件信息错误。",
+          "请核对并改正填写的法人证件信息后重新提交。",
+          "能不能通过，要看复审结果。您知道下一步怎么改吗？"
+        ],
+        "tool_events": []
+      },
+      {
+        "asr": "我不知道。",
+        "outcome": "pending_result",
+        "spoken": [
+          "请核对并改正填写的法人证件信息后重新提交。",
+          "您打开京麦，进入这笔原申请，就能看到书面意见。",
+          "您清楚接下来怎么改了吗？"
+        ],
+        "tool_events": []
+      },
+      {
+        "asr": "清楚了。",
+        "outcome": "pop_contact_recorded",
+        "spoken": [
+          "沟通结果已记录。感谢接听。"
+        ],
+        "tool_events": [
+          "ToolCalled",
+          "ToolReturned"
+        ]
+      }
+    ]
+  }
+}
