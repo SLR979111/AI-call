@@ -153,12 +153,19 @@ class LocalProvider(Cloud):
                     return model.model_validate(value)
         return model.model_validate_json(raw)
 
-    async def respond_local(self, snapshot, candidates, on_first_clause=None):
+    async def respond_local(self, snapshot, candidates, on_first_clause=None, *, semantic_engine=None):
         latest = snapshot["dialogue"][-1]["text"]
         previous = next((e for e in reversed(snapshot["dialogue"][:-1]) if e["role"] == "assistant"), {})
         anchor = previous.get("text", "") if previous.get("delivery") == "complete" else ""
         match = match_example(latest, candidates, anchor)
-        if match:
+        semantic = None
+        if match is None and semantic_engine:
+            eligible = [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))]
+            semantic = await semantic_engine.confirm(latest, eligible, anchor)
+        if semantic:
+            line = semantic.reply
+            yield "semantic_reuse", semantic
+        elif match:
             line = match.reply
             yield "reuse", line
         else:

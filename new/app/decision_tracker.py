@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 CacheType = Literal["llm", "tts", "asr"]
-ReusePath = Literal["rule", "model", "model_text", "unknown"]
+ReusePath = Literal["rule", "model", "model_text", "semantic", "decision_model", "unknown"]
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
