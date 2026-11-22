@@ -17,6 +17,11 @@
   <div id="error" class="error" role="alert" hidden></div>
   <footer class="controls" aria-label="通话控制">
     <p id="callNotice" class="call-notice" role="status" hidden></p>
+    <details id="timingPanel" class="timing-panel" hidden>
+      <summary id="timingSummary">本通话时延 · 等待麦克风输入</summary>
+      <p>从你说完开始计时。首声包含可能播放的过渡音，正文是开始回答问题的声音。</p>
+      <table><thead><tr><th>语音轮</th><th>首声</th><th>正文首播</th><th>答复来源</th></tr></thead><tbody id="timingRows"></tbody></table>
+    </details>
     <form id="textForm" class="text-form" hidden>
       <label class="sr-only" for="textInput">输入一句话</label>
       <input id="textInput" maxlength="2000" autocomplete="off" placeholder="输入…">

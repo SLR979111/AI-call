@@ -81,4 +81,4 @@
 })();
 
 // 运行时换肤：注入 ./theme-inject.js（不改 DOM、不进 release 指纹；?theme=off 可关闭）
-import('./theme-inject.js');
+if (document.body?.dataset.callUi !== 'g2-timing') import('./theme-inject.js');

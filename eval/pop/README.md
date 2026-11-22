@@ -80,11 +80,13 @@ if ($candidateArm -eq 'plan-retry') {
 }
 ```
 
-使用 `requirements-rtc.txt` 中的 WebRTC 依赖后，可在现有 `/rtc/?transport=rtc_pcm&downlink=pcm` 页面试听。TTS 使用 G2 适配器的默认声音 `stella`，语音服务凭据从本地环境加载。以下为本轮实际对照的候选，显式开启才生效。
+安装 `requirements-rtc.txt` 中的 WebRTC 依赖后，可启动以下 Demo。TTS 使用 G2 适配器的默认声音 `stella`，语音服务凭据从本地环境加载。打开 `http://127.0.0.1:8091/?timing=1` 可查看首声和正文首播时间。
 
 ```powershell
-python -X utf8 scripts/serve_pop_contest.py --output data/pop-voice-review --rtc-pcm --g2-voice --prime-tts --prime-followup-tts --closure-policy eval/pop/releases/closure-verified.v1.json --turn-intent plan-retry --phone-style eval/pop/phone_style.v1.json
+python -X utf8 scripts/serve_pop_contest.py --output data/pop-voice-review --rtc-pcm --g2-voice --timing-frontend --speech-endpoint --prime-tts --prime-followup-tts --closure-policy eval/pop/releases/closure-verified.v1.json --turn-intent plan-retry --phone-style eval/pop/phone_style.v1.json
 ```
+
+开启 `--speech-endpoint` 后，用户开口后连续 900 毫秒没有检测到人声就会收轮。播报被打断后会暂停，5 秒内没有检测到人声时从断点续播。用户开口会取消续播并进入新一轮。
 
 录音对照使用 `scripts/build_pop_closure_voice.py --plan eval/pop/reactive_voice.v1.json` 生成 16 kHz 合成商家输入。启动服务时增加 `--reuse-audio <录音目录> --doc-id pop-scene-053 --request-id Q984053`，再用 `scripts/check_pop_contest_browser.mjs` 的 `closure` 模式和同一份计划回放。浏览器工具需要 Playwright 和 Chromium，网页使用已有的通话控件。
 

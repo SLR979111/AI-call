@@ -15,8 +15,14 @@ import { LocalVad } from './vad-local.js';
 import { Playback } from './playback.js';
 import { FileUplink } from './uplink-file.js';
 import { initUi } from './ui.js';
+import { initTimingUi } from './timing-ui.js';
 
 const cfg = /** @type {any} */ (window.__AICALL_CONFIG__);
+const timingFrontend = document.body.dataset.callUi === 'g2-timing';
+if (timingFrontend) {
+  cfg.TRANSPORT_PREF = 'rtc_pcm';
+  cfg.DOWNLINK = 'pcm';
+}
 const client = new SessionClient(cfg);
 const engine = new AudioEngine(cfg);
 const playback = new Playback(engine, cfg, client);
@@ -50,7 +56,7 @@ let backendSince = 0;
 let backendCount = 0;
 let backendTimer = 0;
 
-ui = initUi({
+ui = (timingFrontend ? initTimingUi : initUi)({
   initialSource: !cfg.ENABLE_MIC || cfg.UPLINK_MODE === 'file' ? 'file' : 'mic',
   onStart: (source) => startCall(source).catch((e) => {
     engine.stopCapture();
@@ -75,13 +81,20 @@ const contestConfig = fetch(`${cfg.APP_BASE}/contest/cases`).then(async (respons
   vad.endFrames = Math.max(40, Math.ceil(catalog.silence_ms / cfg.FRAME_MS));
   vad.contestEndpointing = true;
   contestEndpointing = true;
+  cfg.SPEECH_ENDPOINTING = catalog.speech_endpointing === true && cfg.TRANSPORT_PREF === 'rtc_pcm';
+  cfg.BARGE_RESUME = cfg.SPEECH_ENDPOINTING && catalog.resume_on_silence === true;
   ui.setContestCases(catalog.cases, catalog.default_case_id);
 }).catch(error => console.warn('读取赛题场景失败', error));
 
 /* ============================ 通话生命周期 ============================ */
 
 async function startCall(source) {
+  client.prepareCall();
   inputSource = source;
+  if (timingFrontend) {
+    muted = false;
+    engine.setMuted(false);
+  }
   lastSpeechEnd = 0;
   timingTurn = null;
   livekitReportedKeys.clear();
@@ -90,7 +103,7 @@ async function startCall(source) {
   listeningPreRoll.length = 0;
   vad.reset();
   ui.setStarting();
-  ui.status(source === 'mic' ? '请求麦克风权限…' : '准备录音回放…');
+  ui.status(source === 'mic' ? '请求麦克风权限…' : '建立会话…');
   try {
     await engine.start(source === 'mic');       // ★ 必须在点击手势内
   } catch (e) {
@@ -175,6 +188,8 @@ function showConnected() {
     const err = engine.lastError;
     const detail = err ? `${err.name || 'Error'}: ${err.message || err}` : '未获得麦克风轨道';
     ui.status(`麦克风不可用（${detail}）。请用独立 Chrome/Edge 打开并允许麦克风。`, 'err');
+  } else if (inputSource === 'text') {
+    ui.status('已连接，可以输入文字。', 'ok');
   } else if (useFile) {
     ui.status('已连接，请选择录音文件。', 'ok');
   } else {
@@ -197,7 +212,11 @@ async function startDemoUplink(source) {
   store.log(`回放音源 ${fileUplink.sourceLabel} ${info.durationMs}ms @${info.sampleRate}Hz`);
   await fileUplink.start({
     onFrame: handleFrame,
-    onEnd: () => { store.log('回放结束'); reportSpeechEnd(vad.lastVoicedMono); }
+    onEnd: () => {
+      store.log('回放结束');
+      reportSpeechEnd(vad.lastVoicedMono, cfg.SPEECH_ENDPOINTING === true);
+      if (timingFrontend) ui.status('可以继续选择录音文件，或结束对话。', 'ok');
+    }
   });
   ui.status(`回放中：${fileUplink.sourceLabel}（${info.durationMs}ms）`, 'ok');
 }
@@ -216,7 +235,8 @@ function toggleMute() {
   muted = !muted;
   engine.setMuted(muted);
   const b = /** @type {HTMLButtonElement} */ (document.getElementById('btnMute'));
-  b.textContent = muted ? '取消静音' : '静音';
+  if (b) b.textContent = muted ? '取消静音' : '静音';
+  return muted;
 }
 
 /* ============================ 采集 → 上行 ============================ */
@@ -255,7 +275,7 @@ function handleFrame(f) {
     }
   } else {
     playbackPreRoll.length = 0;
-    if (!contestEndpointing || audioSinceEnd) {
+    if (cfg.SPEECH_ENDPOINTING || !contestEndpointing || audioSinceEnd) {
       sendUplinkFrame(f);
     } else {
       // Retain the quiet onset while keeping continuous ambient silence out of ASR.
@@ -266,12 +286,12 @@ function handleFrame(f) {
         listeningPreRoll.length = 0;
       }
     }
-    if (r.start != null) {
+    if (r.start != null && !cfg.SPEECH_ENDPOINTING) {
       store.set({ b0: Math.round(r.start) });
       client.speechStarted(r.start, r.db);
     }
   }
-  if (r.end != null) reportSpeechEnd(vad.lastVoicedMono);
+  if (r.end != null && !cfg.SPEECH_ENDPOINTING) reportSpeechEnd(vad.lastVoicedMono);
 }
 
 /** @param {{pcm:Int16Array, monoMs:number}} f */
@@ -286,27 +306,33 @@ function sendUplinkFrame(f) {
   audioSinceEnd = true;
 }
 
-function reportSpeechEnd(lastVoiced) {
+function reportSpeechEnd(lastVoiced, endOfInput = false) {
   if (!audioSinceEnd) return;
   audioSinceEnd = false;
-  if (lastVoiced > lastSpeechEnd) lastSpeechEnd = lastVoiced;
-  client.speechEnded(lastVoiced);
+  if (!cfg.SPEECH_ENDPOINTING && lastVoiced > lastSpeechEnd) lastSpeechEnd = lastVoiced;
+  client.speechEnded(lastVoiced, endOfInput);
 }
+
+client.addEventListener('speech-endpoint', (event) => {
+  if (!cfg.SPEECH_ENDPOINTING) return;
+  const { last_voiced_mono_ms: voiced } = /** @type {CustomEvent} */ (event).detail;
+  if (Number.isFinite(voiced)) lastSpeechEnd = voiced;
+});
 
 /* ============================ 打断（C2 / C3） ============================ */
 
 /** @param {'local_vad'|'manual'} source @param {number} [b0Hint] @param {number} [db] */
 function triggerBarge(source, b0Hint, db = store.get().db) {
   if (inBarge) return false;
-  const pcmPlaying = playback.isPlaying();
+  const pcmPlaying = playback.isPlaying() && !playback.ducked;
   const lkPlaying = client.livekitIsPlaying();
   if (!pcmPlaying && !lkPlaying) { store.log('当前未播放，忽略打断'); return false; }
   inBarge = true;
 
   const b0 = b0Hint != null ? b0Hint : (vad.b0Mono || now() - client.t0);
   const cur = pcmPlaying ? playback.cursor() : null;
-  // 两种传输都只做「本地静音」：pcm 压增益、LiveKit 静音 <audio>，都不丢缓冲
-  const b3 = pcmPlaying ? playback.duck() : client.duckLiveKit();
+  const pausedAt = cfg.BARGE_RESUME && pcmPlaying ? playback.pausePcm() : null;
+  const b3 = pausedAt ?? (pcmPlaying ? playback.duck() : client.duckLiveKit());
   const stopLatency = Math.max(0, b3 - b0);
 
   store.set({ b0: Math.round(b0), b3: Math.round(b3), stopLatency: Math.round(stopLatency) });
@@ -317,10 +343,17 @@ function triggerBarge(source, b0Hint, db = store.get().db) {
     charIdx: cur ? cur.char_idx : undefined,
     replyId: playback.replyId,
     turnId: playback.turnId,
+    resumeOnSilence: pausedAt != null,
     reason: source === 'manual' ? 'user_barge_button' : 'barge_in'
   });
-  client.speechStarted(b0, db);
   store.log(`打断 source=${source} b0=${b0.toFixed(0)} b3=${b3.toFixed(0)} stop=${stopLatency.toFixed(1)}ms cursor=${JSON.stringify(cur)}`);
+  store.set({ hint: '（已打断，正在等您继续说话…）' });
+  if (pausedAt != null) {
+    inBarge = false;
+    ui.status('已暂停，正在听您说话');
+    return true;
+  }
+  client.speechStarted(b0, db);
 
   // C3：**只有本地 VAD 判定的打断**才允许 300ms 后自恢复（"误打断"）。
   // 手动按钮没有 VAD 证据 → 一律当真实打断：保持静音，等服务端 cancel/turn_aborted 裁决，
@@ -342,9 +375,6 @@ function triggerBarge(source, b0Hint, db = store.get().db) {
     inBarge = false;
     ui.status('已打断（本地静音），等待服务端裁决…');
   }
-  // 纯 UI 状态提示（不是业务话术）：让用户知道"该你说了"。
-  // 真正的"打断后静默兜底话术"由服务端在 N 秒后以 agent_text + tts_* 下发（契约 §0 第 4 条）。
-  store.set({ hint: '（已打断，正在等您继续说话…）' });
   return true;
 }
 
@@ -361,6 +391,11 @@ client.addEventListener('tts-completed', (ev) => {
   if (ev.detail.interrupted) store.log('tts_completed interrupted=true');
 });
 client.addEventListener('pcm', (ev) => playback.pcm(ev.detail));
+client.addEventListener('barge-resume', (ev) => {
+  if (!playback.resumePcm(/** @type {CustomEvent} */ (ev).detail.reply_id)) return;
+  store.set({ hint: '' });
+  ui.status('');
+});
 
 /* ============================ LiveKit 媒体面（入房 / 播放 / AEC） ============================ */
 
@@ -491,7 +526,11 @@ client.addEventListener('final-transcript', (event) => {
 });
 const origFirstFrame = client.playbackFirstFrame.bind(client);
 client.playbackFirstFrame = (replyId, turnId, audioCtxTime, formal = false) => {
-  if (timingTurn?.id === turnId) store.set({ ttfb: Math.round(now() - timingTurn.lastVoiced) });
+  if (timingTurn?.id === turnId) {
+    const elapsed = Math.round(now() - timingTurn.lastVoiced);
+    store.set({ ttfb: elapsed });
+    ui.recordTiming?.(turnId, elapsed, formal || !client.currentTtsFiller);
+  }
   origFirstFrame(replyId, turnId, audioCtxTime, formal);
 };
 

@@ -54,8 +54,12 @@ export class SessionClient extends EventTarget {
 
   /* ============================ 建会话 ============================ */
 
-  async startCall(caseId = '') {
+  prepareCall() {
+    this.detachConnection();
     store.resetForNewCall();
+  }
+
+  async startCall(caseId = '') {
     this.t0 = now();
     this.intentionalClose = false;
     this.reconnectAttempt = 0;
@@ -65,8 +69,6 @@ export class SessionClient extends EventTarget {
     this.currentReplyId = '';
     this.currentTtsFiller = false;
     this.transport = 'ws_pcm';
-    this.rtcPeer = null;
-    this.rtcChannel = null;
 
     const body = { mode: 'voice', scenario_id: this.cfg.SCENARIO_ID };
     if (caseId) body.case_id = caseId;
@@ -134,7 +136,7 @@ export class SessionClient extends EventTarget {
       else store.log(`收到二进制帧 ${ev.data.byteLength}B（W1 不使用）`);
     };
 
-    ws.onerror = () => store.log('WS error');
+    ws.onerror = () => { if (this.ws === ws) store.log('WS error'); };
     ws.onclose = (ev) => { if (this.ws === ws) this.onClose(ev); };
   }
 
@@ -160,7 +162,8 @@ export class SessionClient extends EventTarget {
     const delay = backoff[Math.min(this.reconnectAttempt, backoff.length - 1)];
     this.reconnectAttempt++;
     store.log(`WS closed code=${ev.code} → ${delay}ms 后重连（第 ${this.reconnectAttempt} 次）`);
-    setTimeout(() => this.connect(), delay);
+    const ws = this.ws;
+    setTimeout(() => { if (this.ws === ws && !this.intentionalClose) this.connect(); }, delay);
   }
 
   /* ============================ 发送 ============================ */
@@ -203,6 +206,8 @@ export class SessionClient extends EventTarget {
       case S2C.HELLO_ACK: return this.onHelloAck(d);
       case S2C.STATE: return this.onState(d);
       case S2C.TRANSCRIPT: return this.onTranscript(d);
+      case S2C.SPEECH_ENDPOINT: return this.dispatchEvent(new CustomEvent('speech-endpoint', { detail: d }));
+      case S2C.BARGE_RESUME: return this.dispatchEvent(new CustomEvent('barge-resume', { detail: d }));
       case S2C.AGENT_TEXT: return this.onAgentText(d);
       case S2C.TTS_STARTED: return this.onTtsStarted(d);
       case S2C.TTS_SENTENCE: return this.onTtsSentence(d);
@@ -247,7 +252,7 @@ export class SessionClient extends EventTarget {
     if (d.transport) this.setTransport(d.transport, '');
     this.startPing();
     this.requestMedia();
-    if (this.opensOutbound && this.cfg.TRANSPORT_PREF === 'ws_pcm') this.send(C2S.CALL_READY);
+    if (this.opensOutbound && this.cfg.TRANSPORT_PREF === 'ws_pcm') this.callReady();
     this.dispatchEvent(new CustomEvent('ready', { detail: d }));
   }
 
@@ -572,8 +577,12 @@ export class SessionClient extends EventTarget {
 
   onTransportSwitched(d) {
     this.setTransport(d.to || 'ws_pcm', d.to === 'rtc_pcm' ? 'WebRTC 数据通道' : '兼容模式');
-    if (this.opensOutbound) this.send(C2S.CALL_READY);
+    if (this.opensOutbound) this.callReady();
     this.dispatchEvent(new CustomEvent('transport-switched', { detail: d }));
+  }
+
+  callReady() {
+    this.send(C2S.CALL_READY, this.cfg.SPEECH_ENDPOINTING ? { speech_endpointing: true } : {});
   }
 
   onTransportFailed(d) {
@@ -626,18 +635,19 @@ export class SessionClient extends EventTarget {
     });
   }
 
-  speechEnded(lastVoicedMono) {
+  speechEnded(lastVoicedMono, endOfInput = false) {
     this.send(C2S.SPEECH_ENDED, {
       client_mono_ms: round3(this.mono()),
       last_voiced_mono_ms: round3(lastVoicedMono),
-      reason: 'local_vad'
+      reason: 'local_vad',
+      ...(endOfInput ? { end_of_input: true } : {}),
     });
   }
 
   /**
    * C2/P1：三个时间字段各司其职，不许混用
    * @param {{b0Mono:number, b3Mono:number, playedMs:number, sentenceId?:number,
-   *          charIdx?:number, replyId?:string, turnId?:string, reason?:string}} p
+   *          charIdx?:number, replyId?:string, turnId?:string, reason?:string, resumeOnSilence?:boolean}} p
    */
   localMuted(p) {
     this.send(C2S.LOCAL_MUTED, {
@@ -650,6 +660,7 @@ export class SessionClient extends EventTarget {
       played_ms: Math.round(p.playedMs || 0),
       sentence_id: p.sentenceId ?? null,
       char_idx: p.charIdx ?? null,
+      ...(p.resumeOnSilence ? { resume_on_silence: true } : {}),
       reason: p.reason || 'barge_in'
     });
   }
@@ -699,11 +710,20 @@ export class SessionClient extends EventTarget {
   hangup(reason = 'user_click') {
     this.intentionalClose = true;
     this.send(C2S.HANGUP, { reason, client_mono_ms: round3(this.mono()) });
+    this.detachConnection();
+    void this.livekit.stop();          // 先退房，避免远端还能听见我们
+    store.set({ phase: 'ended', turnState: 'ENDED' });
+  }
+
+  detachConnection() {
     clearInterval(this.pingTimer);
     const ws = this.ws;
     const peer = this.rtcPeer;
-    void this.livekit.stop();          // 先退房，避免远端还能听见我们
-    setTimeout(() => { peer?.close(); ws?.close(); }, 200);
+    // Ignore callbacks immediately while still letting hangup reach the server.
+    this.ws = null;
+    this.rtcPeer = null;
+    this.rtcChannel = null;
+    if (ws || peer) setTimeout(() => { peer?.close(); ws?.close(); }, 200);
   }
 }
 
