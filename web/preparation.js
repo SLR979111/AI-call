@@ -2,7 +2,7 @@
 export async function prepareTask(task, {wait = true, retry = false, phoneFile} = {}) {
   try {
     const response = await fetch('/api/warm', {method: 'POST',
-      headers: {'content-type': 'application/json'}, body: JSON.stringify({task, wait, retry, phone_file: phoneFile})});
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({...(phoneFile ? {phone_file: phoneFile} : {task}), wait, retry})});
     if (response.ok) {
       const {status} = await response.json();
       if (['preparing', 'ready', 'disabled', 'unconfigured'].includes(status)) return status;

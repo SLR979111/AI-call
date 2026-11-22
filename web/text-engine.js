@@ -46,7 +46,9 @@ class TextLayoutEngine extends EventTarget {
   revise(handle, text) { const record = this.record(handle); if (!record) return false; record.text = String(text); this.invalidate(); return true; }
   finish(handle) { const record = this.record(handle); if (record) record.closed = true; }
   cancel(handle) { this.finish(handle); }
-  setCandidates(items) {
+  setCandidateProgress(value) { this.candidateProgress = value; this.invalidate(); }
+  setCandidates(items, progress) {
+    this.candidateProgress = progress;
     if (new Set(items.map(item => item.id)).size !== items.length) throw new Error('Duplicate candidate id');
     this.candidateData = items.map(({id, text}) => ({id, text: String(text)})); this.invalidate();
   }
@@ -120,7 +122,15 @@ class TextLayoutEngine extends EventTarget {
     }
     const visible = this.interactiveCandidates || this.candidates?.open;
     if (!this.interactiveCandidates && this.candidates) {
-      this.candidates.firstElementChild.textContent = '备选回复 · ' + this.candidateData.length;
+      const summary = this.candidates.firstElementChild;
+      const progress = this.candidateProgress;
+      const fraction = progress?.target ? progress.ready / progress.target : 0;
+      summary.className = 'candidate-pie';
+      summary.style.setProperty('--fill', Math.min(progress?.complete ? 1 : .96, fraction) + 'turn');
+      summary.dataset.complete = String(!!progress?.complete);
+      const label = '备选回复 · ' + this.candidateData.length + ' 条' +
+        (progress?.complete ? '，已就绪' : progress?.settled ? '，部分语音未就绪' : '，准备中');
+      summary.setAttribute('aria-label', label); summary.title = label;
     }
     const rows = visible ? this.candidateData : [];
     const wanted = new Set(rows.map(item => item.id));

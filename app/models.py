@@ -156,6 +156,25 @@ class Memory:
                 covers.append(point.id)
         return covers
 
+    def fresh_candidates(self, candidates):
+        if not self.history or self.history[-1]["role"] != "user":
+            return candidates
+        user = self.history[-1]["text"]
+        if not re.fullmatch(r"[嗯啊哦，,。\s]*(?:好的?|明白了|知道了|清楚了|行|谢谢)[。！!\s]*", user):
+            return candidates
+        heard = []
+        for entry in reversed(self.history[:-1]):
+            if entry["role"] == "user":
+                break
+            if entry.get("delivery") == "complete" and not entry.get("bridge"):
+                heard.append(entry["text"])
+        if not heard or re.search(r"[？?]", heard[0]):
+            return candidates
+        normalize = lambda text: re.sub(r"[\W_]+", "", text)
+        last = normalize("".join(reversed(heard)))
+        return [c for c in candidates if normalize(c.reply.text) not in last
+                and not (c.reply.covers and set(c.reply.covers) <= self.delivered)]
+
     def requested_replay(self):
         if not self.history or self.history[-1]["role"] != "user":
             return []
@@ -227,19 +246,19 @@ class Memory:
         # In particular, a second goodbye must not depend on checkpoint credit.
         if wants_to_end(user):
             return "requested"
-        if not farewell_only(user) or re.search(r"[？?]", user):
+        understood = re.fullmatch(r"[嗯哦啊，,。\s]*(?:我)?(?:明白了|听懂了|知道了|清楚了|理解了)[，,。！!\s]*", user)
+        if (not understood and not farewell_only(user)) or re.search(r"[？?]", user):
             return ""
         index = next((i for i in range(len(self.history) - 1, -1, -1)
                       if self.history[i]["role"] == "user"), len(self.history))
         previous = self.history[:index]
         assistant = previous[-1] if previous and previous[-1]["role"] == "assistant" else {}
         if assistant.get("delivery") == "complete" and not assistant.get("bridge") and not assistant.get("filler"):
-            if ends_with_goodbye(assistant["text"]):
+            if not understood and ends_with_goodbye(assistant["text"]):
                 return "goodbye_acknowledged"
             if (not self.questions and not self.last_question and not re.search(r"[？?]", assistant["text"])
-                    and (not self.flow or not self.flow.judged or self.flow.leaf in self.flow.done)
                     and all(point.id in self.delivered for point in self.card.checkpoints)
-                    and (ends_with_goodbye(user) or
+                    and (understood or ends_with_goodbye(user) or
                          re.fullmatch(r"[嗯哦啊，,。！!\s]*(?:好(?:的|了)?|谢谢您?|行)[，,。！!\s]*", user))):
                 return "instructions_acknowledged"
         has_goodbye = bool(re.search(r"再见|拜拜|先这样|挂了", user))

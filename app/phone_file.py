@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import TaskCard
+from .models import Checkpoint, TaskCard
 
 NodeId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,47}$")]
 ShortText = Annotated[str, Field(min_length=1, max_length=320)]
@@ -21,6 +21,7 @@ class Node(BaseModel):
     id: NodeId
     goal: ShortText
     done_when: ShortText
+    action: str = Field(default="", max_length=320)
     requires: list[NodeId] = Field(default_factory=list, max_length=16)
     checkpoints: list[NodeId] = Field(default_factory=list, max_length=8)
 
@@ -51,22 +52,81 @@ class Graph(BaseModel):
         return self
 
 
+class BasicResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    opening: str = Field(min_length=1, max_length=180)
+    guide: str = Field(min_length=1, max_length=800)
+
+
+class CompiledMaterials(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    guide: str = Field(min_length=1, max_length=800)
+    background: str = Field(max_length=2400)
+    graph: Graph
+
+
+def extract_background(text: str) -> str:
+    # Offline migration: excerpt complete sentences from each section. The
+    # model compiler can distinguish guidance from facts more precisely.
+    sections = [s.strip() for s in text.splitlines() if s.strip()]
+    budget = 2300 // max(len(sections), 1)
+    parts = []
+    for section in sections:
+        pieces = re.findall(r"[^。！？；]+[。！？；]?", section)
+        selected = ""
+        for piece in pieces:
+            if selected and len(selected + piece) > budget:
+                break
+            selected += piece
+        if selected and len("\n".join([*parts, selected])) <= 2400:
+            parts.append(selected)
+    return "\n".join(parts)
+
+
 class PhoneFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    format: Literal["ai-call.phone.dag.v1"] = "ai-call.phone.dag.v1"
-    task: TaskCard
+    format: Literal["ai-call.phone.dag.v2"] = "ai-call.phone.dag.v2"
+    title: str = Field(min_length=1, max_length=80)
+    basic_response: BasicResponse
+    background: str = Field(max_length=2400)
+    checkpoints: list[Checkpoint] = Field(min_length=1, max_length=8)
     graph: Graph
     source: Literal["work_order", "model"] = "work_order"
 
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_v1(cls, data):
+        if isinstance(data, dict) and data.get("format") == "ai-call.phone.dag.v1":
+            card = TaskCard.model_validate(data.get("task"))
+            return dict(format="ai-call.phone.dag.v2", title=card.title,
+                        basic_response=BasicResponse(opening=card.opening, guide=DEFAULT_GUIDE),
+                        background=extract_background(card.facts), checkpoints=card.checkpoints,
+                        graph=data.get("graph"), source=data.get("source", "work_order"))
+        return data
+
     @model_validator(mode="after")
     def valid_points(self):
-        ids = {p.id for p in self.task.checkpoints}
-        if {p for n in self.graph.nodes for p in n.checkpoints} != ids:
+        ids = {p.id for p in self.checkpoints}
+        if len(ids) != len(self.checkpoints) or {p for n in self.graph.nodes for p in n.checkpoints} != ids:
             raise ValueError("图中必须包含全部工单要点，且只能引用本工单")
         return self
 
+    @property
+    def task(self):
+        # A compatibility view for the playback, ticket and prewarmer APIs.
+        goal = next(n.goal for n in self.graph.nodes if n.id == self.graph.default_leaf)
+        return TaskCard(title=self.title, goal=goal, opening=self.basic_response.opening,
+                        facts=self.background, checkpoints=self.checkpoints)
+
+    def briefing(self):
+        return {"basic_response": self.basic_response.model_dump(), "background": self.background,
+                "graph": self.graph.model_dump()}
+
     def fingerprint(self):
         return hashlib.sha256(self.model_dump_json().encode()).hexdigest()[:20]
+
+
+DEFAULT_GUIDE = "先直接回答对方这轮的问题，再推进一个小目标。只引用已知事实；区分已发生和假设，对方没有听懂时换个角度，尊重停止意愿。"
 
 
 def compile_phone(task: TaskCard) -> PhoneFile:
@@ -81,12 +141,14 @@ def compile_phone(task: TaskCard) -> PhoneFile:
                           requires=[step.id], done_when="这一项已经说清，对方表示只需处理此事或已无相关疑问。"))
     nodes.append(Node(id="goal_all", goal="对方知道这张工单接下来该怎么做",
                       requires=[s.id for s in steps], done_when="必要要点已弄清，对方确认知道下一步。"))
-    return PhoneFile(task=task, graph=Graph(nodes=nodes, default_leaf="goal_all"))
+    return PhoneFile(title=task.title, checkpoints=task.checkpoints, background=extract_background(task.facts),
+                     basic_response=BasicResponse(opening=task.opening, guide=DEFAULT_GUIDE),
+                     graph=Graph(nodes=nodes, default_leaf="goal_all"))
 
 
-PLAN_PROMPT = """从这张工单生成一张中文电话任务 DAG。只返回一个 JSON 对象。
-{"nodes":[{"id":"英文id","goal":"这一步让对方弄明白的具体事情","done_when":"通话中可观察的完成证据","requires":["必要前置id"],"checkpoints":["涉及的原工单要点id"]}],"default_leaf":"一个叶子id"}
-覆盖所有工单要点。用约5至12个短节点。终点是业务情境下不同的实际沟通结果，例如尚未处理与已经办理的人各自需要知道什么。用户可以从业务中途进入。已完成办理、只等结果的分支仅依赖确认对方现状，不依赖讲解怎么办理。已明确的身份可以用直接回答身份问题来确认。叶子 goal 必须描述对方最后弄明白的事。将可并行的小目标并列，只连接真实依赖，勿把互斥情形设为同一节点的共同前提。不要把识别意图、暂停通话或说再见当作所有分支的共同目标。不要虚构事实、操作能力或承诺。"""
+PLAN_PROMPT = """把原始工单编译成独立可执行的电话资料。回复客服永远看不到原工单。只返回 JSON，三个字段为 guide（用约百字说明客服身份、应答方式和能力边界）、background（保留名称、数字、实际记录、条件及例外，区分真实现状与假设；提炼业务依据，删除原稿的流程和话术指令）、graph。graph 格式如下。
+{"nodes":[{"id":"英文id","goal":"这一步让对方弄明白的具体事情","done_when":"通话中可观察的完成证据","action":"本节点具体怎样解释、问什么或提供什么行动，不写空泛建议","requires":["必要前置id"],"checkpoints":["涉及的原工单要点id"]}],"default_leaf":"一个叶子id"}
+图本身必须能带人办完事情。每个节点写清业务条件、一个明确动作和完成依据。保留真正的分支及依赖；不要将分支收缩成一句宽泛总结。覆盖所有工单要点。用约5至12个短节点。终点是业务情境下不同的实际沟通结果，例如尚未处理与已经办理的人各自需要知道什么。用户可以从业务中途进入。已完成办理、只等结果的分支仅依赖确认对方现状，不依赖讲解怎么办理。已明确的身份可以用直接回答身份问题来确认。叶子 goal 必须描述对方最后弄明白的事。将可并行的小目标并列，只连接真实依赖，勿把互斥情形设为同一节点的共同前提。不要把识别意图、暂停通话或说再见当作所有分支的共同目标。不要虚构事实、操作能力或承诺。"""
 
 
 class Prerequisites(BaseModel):
@@ -98,7 +160,7 @@ class DependencyReview(BaseModel):
     changes: list[Prerequisites] = Field(default_factory=list, max_length=28)
 
 
-REVIEW_PROMPT = """检查已生成电话任务图的每个前置依赖，特别是每个叶子的全部祖先。用一个从中途来电的反例检验：如果来电人自己已经完成这项业务，且此刻只问之后怎么办，客服需要先教他怎样完成这项业务吗？已提交后等待结果的叶子只依赖确认身份或确认已提交的独立节点，不能依赖教人修改或重新提交的节点，也不能经其他节点间接依赖它们。只修正不必要或缺失的边，不改写节点。保留正常主路径的真正必要依赖，不要把所有路径扁平化。目标仍应是叶子。只输出 JSON：{"changes":[{"id":"待修改节点","requires":["修改后的全部直接前置节点"]}]}，无需修改时 changes 为空。"""
+REVIEW_PROMPT = """检查已生成电话任务图的每个前置依赖，特别是每个叶子的全部祖先。用一个从中途来电的反例检验：如果来电人自己已经完成这项业务，且此刻只问之后怎么办，客服需要先教他怎样完成这项业务吗？已提交后等待结果的叶子只依赖确认身份或确认已提交的独立节点，不能依赖教人修改或重新提交的节点，也不能经其他节点间接依赖它们。只缩短已完成业务的分支：可用该节点已有的祖先或空列表替换前置，不得引入无关分支为新前置。未办理的主路径保留真实的业务步骤。保留正常主路径的真正必要依赖，不要把所有路径扁平化。目标仍应是叶子。只输出 JSON：{"changes":[{"id":"待修改节点","requires":["修改后的全部直接前置节点"]}]}，无需修改时 changes 为空。"""
 
 
 class Credit(BaseModel):
@@ -192,7 +254,7 @@ class Flow:
         current = self.preferred if self.preferred in ready else next(iter(ready), self.leaf)
         node = nodes[current]
         return {"file": self.file.fingerprint(), "leaf": self.leaf, "final_goal": nodes[self.leaf].goal,
-                "current": current, "goal": node.goal, "done_when": node.done_when, "available": ready,
+                "current": current, "goal": node.goal, "action": node.action or node.goal, "done_when": node.done_when, "available": ready,
                 "checkpoints": node.checkpoints, "completed": list(self.done), "path": path,
                 "need": self.need, "event": self.event,
                 **({"repair": "先用一两句交代为什么打来、这件事与对方有什么关系以及对方要做什么。对方此刻在问来意，避免重复上一轮的文件清单和公司名。"} if self.event == "需要全貌" else
@@ -205,6 +267,16 @@ class Flow:
         scope = self.context()
         points = scope["checkpoints"]
         return [c for c in options if not c.checkpoint or not points or c.checkpoint in points]
+
+
+def model_context(snapshot: dict) -> dict:
+    # The card is used by deterministic matchers only. No model receives it.
+    data = dict(snapshot)
+    card = data.pop("task", None)
+    briefing = data.pop("briefing", None)
+    if briefing is None and card:
+        briefing = compile_phone(TaskCard.model_validate(card)).briefing()
+    return {**(briefing or {}), **data}
 
 
 async def model_json(provider, prompt, data, schema, tokens):

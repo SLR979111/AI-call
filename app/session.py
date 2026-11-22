@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 
 from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
 from .continuation import heard_question, hesitation, pickup
+from .forecast import candidate_limit_from_env
 from .brain import Brain
 from .phone_file import Flow, PhoneFile, compile_phone
 from .speech_start import reusable_clause
@@ -78,7 +79,8 @@ class Session:
                  decision_tracker=None, performance_monitor=None, on_hangup=None,
                  wait_for_input_end: Callable[[], Awaitable] | None = None):
         self.id = uuid.uuid4().hex[:12]
-        self.memory = Memory(card, flow=Flow(phone_file or compile_phone(card)))
+        file = phone_file or compile_phone(card)
+        self.memory = Memory(file.task, flow=Flow(file))
         self.cloud, self.brain, self.transport = cloud, brain, send
         self.voice, self.predictions = voice, predictions
         self.epoch = 0
@@ -97,6 +99,8 @@ class Session:
         self.pending_update: asyncio.Task | None = None
         self.candidates: list[Candidate] = []
         self.prediction_audio: dict[str, bytes] = {}
+        self.forecast_finished_epoch = -1
+        self.expected_audio: set[str] = set()
         self.audio_warm: dict[str, AudioWarmup] = {}
         # Forecasts prepared for the turn a speech onset interrupted. They are
         # only candidates: the next user turn still has to pass the content
@@ -997,6 +1001,21 @@ class Session:
                      error=type(exc).__name__)
         finally:
             self.audio_warm.pop(text, None)
+            await self._send_candidate_progress(request.epoch)
+
+    def _candidate_progress(self, epoch):
+        total = len(self.candidates)
+        finished = self.forecast_finished_epoch == epoch
+        settled = finished and not any(job.epoch == epoch for job in self.audio_warm.values())
+        missing = len(self.expected_audio - self.prediction_audio.keys())
+        target = total if finished else max(total, getattr(self.brain, "candidate_limit", None) or candidate_limit_from_env())
+        return {"ready": max(0, total - missing), "target": target, "settled": settled,
+                "complete": settled and missing == 0}
+
+    async def _send_candidate_progress(self, epoch):
+        if self.is_current(epoch) and self.prediction_epoch == epoch and self.candidates:
+            await self.send({"type": "candidate_progress", "epoch": epoch,
+                             "progress": self._candidate_progress(epoch)}, epoch=epoch)
 
     async def _prediction_batches(self, snapshot):
         if hasattr(self.brain, "predict_batches"):
@@ -1010,6 +1029,8 @@ class Session:
         limit = prediction_audio_limit_from_env()
         if limit is not None:
             self.log("prediction_audio_limit", limit=limit)
+        self.expected_audio.clear()
+        self.forecast_finished_epoch = -1
         ready: list[Candidate] = []
         received = 0
         try:
@@ -1026,6 +1047,7 @@ class Session:
                     if self.voice:
                         if limit is None or received <= limit:
                             audio_status = "warming"
+                            self.expected_audio.add(item.reply.text)
                             self._request_prediction_audio(epoch, item)
                         else:
                             audio_status = "limit_skipped"
@@ -1034,7 +1056,7 @@ class Session:
                     ready.append(item)
                     self.candidates = ready.copy()
                     self.prediction_epoch = epoch
-                    await self.send({"type": "candidates", "epoch": epoch, "items": [
+                    await self.send({"type": "candidates", "epoch": epoch, "progress": self._candidate_progress(epoch), "items": [
                         {"id": candidate.id, "text": candidate.reply.text}
                         for candidate in ready]}, epoch=epoch)
                     self.log("prediction_ready", count=len(ready), candidate_id=item.id,
@@ -1048,6 +1070,9 @@ class Session:
                     await asyncio.sleep(0)
         except Exception as exc:
             self.log("prediction_miss", error=type(exc).__name__)
+        if self.is_current(epoch):
+            self.forecast_finished_epoch = epoch
+            await self._send_candidate_progress(epoch)
 
     async def settle_audio(self) -> None:
         pending = [request.task for request in self.audio_warm.values()]

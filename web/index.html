@@ -28,7 +28,10 @@
       <button id="sendText" aria-label="发送消息" title="发送消息" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 6-6 6 6M12 6v13"/></svg></button>
     </form>
     <div class="toolbar">
-      <button id="editTask" aria-label="任务设置" title="任务设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg></button>
+      <button id="editTask" class="order-picker" aria-label="选择工单" aria-haspopup="dialog" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM9 10h6m-6 4h6"/></svg>
+        <span id="selectedTitle">选择工单</span><span aria-hidden="true">⌄</span>
+      </button>
       <div id="startControls" class="button-group">
         <button id="startVoice" class="primary" aria-label="开始通话" title="开始通话" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button>
         <button id="startText" aria-label="文字试聊" title="文字试聊" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h0M6 12h1m3 0h1m3 0h1m3 0h0M7 16h10"/></svg></button>
@@ -43,26 +46,53 @@
       <div class="toolbar-end"><button id="latest" aria-label="回到最新" title="回到最新" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m-6-6 6 6 6-6M5 21h14"/></svg></button></div>
     </div>
   </footer>
-  <dialog id="taskDialog">
-    <form id="taskForm">
-      <div class="dialog-heading"><h1>任务设置</h1><button id="closeDialog" type="button" aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
-      <label>互动工单<select id="taskPack"><option value="">自定义工单</option></select></label>
-      <div class="task-shortcuts"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 ↗</a><button id="restoreTask" type="button">恢复默认任务</button></div>
-      <details id="phonePanel" class="phone-panel"><summary>电话文件与处理流程</summary>
-        <div id="phoneGraph"></div>
-        <div class="task-shortcuts"><button type="button" id="downloadPhone">下载电话文件</button>
-          <button type="button" id="importPhone">载入电话文件</button><input id="phoneInput" type="file" accept=".json" hidden></div>
-      </details>
-      <label>通话模式<select id="callMode"><option value="cloud">云端语音 · 当前音色</option><option value="local">纯本地 · MeloTTS 普通话女声</option></select></label>
-      <label>任务名称<input id="editTitle" required maxlength="80"></label>
+  <dialog id="taskDialog" aria-labelledby="orderHeading">
+    <div class="order-heading"><h1 id="orderHeading">工单流程</h1><button id="closeDialog" type="button" aria-label="关闭">×</button></div>
+    <div class="order-toolbar">
+      <select id="taskPack" aria-label="选择工单"></select>
+      <button id="addOrder" class="action" type="button">＋ 添加工单</button>
+    </div>
+    <p id="orderMessage" role="status" hidden></p>
+    <section id="graphView">
+      <nav class="order-tabs" aria-label="电话文件">
+        <button type="button" id="graphTab" aria-pressed="true">流程图</button>
+        <button type="button" id="materialsTab" aria-pressed="false">应答与背景</button>
+      </nav>
+      <div id="phoneGraph"></div>
+      <div id="materialsView" hidden>
+        <label>开场白<textarea id="basicOpening" maxlength="180"></textarea></label>
+        <label>基础应答<textarea id="basicGuide" maxlength="800" rows="3"></textarea></label>
+        <label>背景资料<textarea id="backgroundText" maxlength="2400" rows="6"></textarea></label>
+      </div>
+      <form id="nodeForm" class="node-form" hidden>
+        <h2>编辑节点</h2>
+        <label>小目标<input id="nodeGoal" required maxlength="320"></label>
+        <label>应答动作<textarea id="nodeAction" maxlength="320" rows="2"></textarea></label>
+        <label>完成依据<textarea id="nodeDone" required maxlength="320" rows="2"></textarea></label>
+        <fieldset><legend>前置节点</legend><div id="nodeDeps"></div></fieldset>
+        <fieldset><legend>涉及的工单要点</legend><div id="nodePoints"></div></fieldset>
+        <div class="action-row"><button class="action" type="submit">应用到草稿</button><button class="action" type="button" id="cancelNode">返回流程图</button><button class="action" type="button" id="removeNode">删除节点</button></div>
+      </form>
+      <div class="action-row" id="graphActions"><button type="button" class="action" id="editGraph">编辑电话文件</button><button type="button" class="action" id="addNode" hidden>＋ 添加节点</button>
+        <button type="button" class="action" id="editSource">编辑工单</button><button type="button" class="action" id="downloadPhone">下载电话文件</button></div>
+      <label id="defaultGoalField" hidden>默认通话目标<select id="defaultGoal"></select></label>
+    </section>
+    <form id="taskForm" hidden>
+      <label>工单名称<input id="editTitle" required maxlength="80"></label>
       <label>对话目标<textarea id="editGoal" required maxlength="1000" rows="2"></textarea></label>
-      <label>已知信息<textarea id="editFacts" maxlength="5000" rows="3"></textarea></label>
-      <label>需要说清楚的要点 <span>每行一项，最多 8 项</span><textarea id="editPoints" required rows="3"></textarea></label>
+      <label>已知信息<textarea id="editFacts" maxlength="5000" rows="4"></textarea></label>
+      <label>需要说清的要点 <small>每行一项，最多 8 项</small><textarea id="editPoints" required rows="3"></textarea></label>
       <label>开场白<textarea id="editOpening" required maxlength="180" rows="2"></textarea></label>
+      <button id="generateOrder" type="submit" class="action primary-action">生成流程图</button>
+    </form>
+    <div class="review-actions" id="reviewActions" hidden><button class="action" id="discardDraft" type="button">放弃草稿</button><button class="action primary-action" id="saveTask" type="button">确认并使用</button></div>
+    <details class="call-options" id="callOptions"><summary>通话选项</summary>
+      <label>通话模式<select id="callMode"><option value="cloud">云端语音 · 当前音色</option><option value="local">纯本地 · MeloTTS 普通话女声</option></select></label>
       <label class="prediction-option"><input id="prediction" type="checkbox" checked>提前准备可能的回复</label>
       <div class="session-details"><span id="outcomeText">等待开始</span><span id="latency"></span><span id="duration"></span><span id="cacheStat"></span><ul id="checkpoints"></ul></div>
-      <div class="dialog-actions"><button id="export" type="button" aria-label="导出对话" title="导出对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/></svg></button><button id="saveTask" class="save-task" type="submit">保存任务</button></div>
-    </form>
+      <div class="action-row"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 ↗</a><button class="action" id="export" type="button">导出对话</button><button class="action" id="restoreTask" type="button">使用默认工单</button></div>
+    </details>
+    <div class="import-row"><button type="button" class="action" id="importPhone">载入电话文件</button><input id="phoneInput" type="file" accept=".json" hidden></div>
   </dialog>
   <script src="/static/text-motion.js"></script>
   <script src="/static/text-engine.js"></script>

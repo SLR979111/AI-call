@@ -43,10 +43,13 @@ export class LiveConversation {
         this.engine.revise(this.partial, event.text);
         if (event.final) { this.engine.finish(this.partial); this.partial = null; }
         return true;
+      case 'candidate_progress':
+        if (event.epoch !== this.epoch || this.blocked.has(event.epoch) || !this.candidates.length) return false;
+        this.engine.setCandidateProgress(event.progress); return true;
       case 'candidates':
         if (event.epoch !== this.epoch || this.blocked.has(event.epoch)) return false;
         this.candidates = event.items;
-        this.engine.setCandidates(event.items); return true;
+        this.engine.setCandidates(event.items, event.progress); return true;
     }
     return false;
   }

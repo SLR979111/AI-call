@@ -30,6 +30,12 @@
 details.candidates { display: block; }
 details.candidates > summary { cursor: pointer; width: fit-content; max-width: 100%; color: #a2a2a2; font: 13px/1.6 system-ui, sans-serif; padding: 5px 3px; }
 details.candidates > summary:focus-visible { outline: 1px solid currentColor; }
+details.candidates > summary.candidate-pie { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; list-style: none; border-radius: 50%; }
+.candidate-pie::-webkit-details-marker { display: none; }
+.candidate-pie::before { content: ''; width: 15px; height: 15px; border-radius: 50%; border: 1px solid #969ca0; background: conic-gradient(#c4d8d0 var(--fill), #373c3e 0); transition: opacity .55s ease; }
+.candidate-pie[data-complete="true"]::before { opacity: .32; }
+details[open] > .candidate-pie::before, .candidate-pie:hover::before, .candidate-pie:focus-visible::before { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .candidate-pie::before { transition: none; } }
 .candidate-list { display: grid; gap: 6px; max-height: min(25dvh, 180px); overflow: auto; overscroll-behavior: contain; padding: 2px 8px; scrollbar-width: thin; }
 .candidate:focus-visible { outline: 1px solid #aaa; outline-offset: 5px; }
 div.candidate { cursor: default; }

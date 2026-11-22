@@ -34,12 +34,16 @@ try {
   await page.goto(process.env.CALL_URL || 'http://127.0.0.1:8088');
   await page.locator('#startVoice:enabled').waitFor();
   await page.locator('#editTask').click();
+  await page.locator('#addOrder').click();
   await page.locator('#editTitle').fill('图书室开门时间');
   await page.locator('#editGoal').fill('告知周六上午九点开门，对方确认理解后结束。');
   await page.locator('#editFacts').fill('图书室周六上午九点开门。没有其他要说明的事。');
   await page.locator('#editPoints').fill('说明周六上午九点开门');
   await page.locator('#editOpening').fill('您好，这里是社区图书室。我想和您说一下周末安排，您现在方便吗？');
+  await page.locator('#callOptions summary').click();
   await page.locator('#prediction').uncheck();
+  await page.locator('#generateOrder').click();
+  await page.locator('#saveTask:enabled').waitFor();
   await page.locator('#saveTask').click();
   await page.evaluate(() => {
     const frame = TextMotion.prototype.frame;

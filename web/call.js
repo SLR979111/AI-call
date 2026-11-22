@@ -1,4 +1,5 @@
-import {readPhone, showGraph, downloadPhone} from './phone-file.js';
+import {readPhone} from './phone-file.js';
+import {workOrders, sameCard as sameTask} from './work-orders.js';
 import {prepareTask, checkPreparation} from './preparation.js';
 import {CallConnection} from './connection.js';
 import {LiveConversation} from './conversation.js';
@@ -7,9 +8,9 @@ const $ = id => document.getElementById(id);
 const view = new LiveConversation($('transcript'), $('viewport'));
 let task, defaultTask, call, voice = false, connected = false, epoch = 0;
 let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false, replyActive = false;
-let composing = false, editorTask, savedCustom, prefixHits = 0;
+let composing = false, savedCustom, prefixHits = 0;
 const packs = new Map();
-let activePhone, editorPhone, flowState, draftVersion = 0;
+let activePhone, flowState;
 let mode = localStorage.getItem('g2-call-mode') === 'local' ? 'local' : 'cloud';
 let cloudConfigured = false, preparation = null;
 $('callMode').value = mode;
@@ -60,16 +61,23 @@ async function waitToDial(job) {
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 function notice(text = '') { $('callNotice').textContent = text; $('callNotice').hidden = !text; }
-function sameTask(a, b) {
-  return a && b && ['title', 'goal', 'facts', 'opening'].every(key => a[key] === b[key])
-    && JSON.stringify(a.checkpoints) === JSON.stringify(b.checkpoints);
-}
+const orders = workOrders({
+  mode: () => mode, locked: () => connected || inputInFlight,
+  progress: () => sameTask(flowState?.card,task) ? flowState.progress : null,
+  activate(card, file, id) {
+    if (!sameTask(card,task) || activePhone !== file) flowState = null;
+    activePhone = file; rememberTask(card);
+    if (file) localStorage.setItem('g2-phone', JSON.stringify(file));
+    else localStorage.removeItem('g2-phone');
+    localStorage.setItem('g2-active-order',id);
+    renderTask(); warmTask(card);
+  }
+});
 function packId(card) {
   for (const [id, pack] of packs) if (sameTask(card, pack)) return id;
   return '';
 }
 function rememberTask(card) {
-  if (!sameTask(activePhone?.task, card)) { activePhone = undefined; localStorage.removeItem("g2-phone"); }
   task = card;
   const id = packId(card);
   localStorage.setItem('g2-task', JSON.stringify(card));
@@ -80,16 +88,6 @@ function rememberTask(card) {
     savedCustom = card;
     localStorage.setItem('g2-custom-task', JSON.stringify(card));
   }
-}
-function fillTaskEditor(card, file = sameTask(activePhone?.task, card) ? activePhone : undefined) {
-  draftVersion++; editorPhone = file;
-  $('taskPack').value = packId(card);
-  $('taskPack').options[0].disabled = !savedCustom;
-  $('editPoints').setCustomValidity('');
-  editorTask = card;
-  $('editTitle').value = card.title; $('editGoal').value = card.goal; $('editFacts').value = card.facts;
-  $('editPoints').value = card.checkpoints.map(p => p.description).join('\n'); $('editOpening').value = card.opening;
-  if ($('phonePanel').open) refreshGraph();
 }
 function renderTask() {
   $('checkpoints').replaceChildren();
@@ -127,7 +125,7 @@ function showText(value) {
 async function start(useVoice) {
   if (connected || inputInFlight || !task) return;
   if (mode === 'cloud' && !cloudConfigured) {
-    showError('云端模式需要 API 凭据。可在任务设置中切换到纯本地。'); return;
+    showError('云端模式需要 API 凭据。可在工单的通话选项中切换到纯本地。'); return;
   }
   inputInFlight = true; clearError();
   $('editTask').disabled = true;
@@ -161,15 +159,14 @@ async function start(useVoice) {
     $('startControls').hidden = true; $('callControls').hidden = false;
     $('mute').hidden = !voice;
     $('mute').setAttribute('aria-label', '暂停麦克风'); $('mute').title = '暂停麦克风'; $('mute').setAttribute('aria-pressed', 'false');
-    $('callMode').disabled = true; $('prediction').disabled = true; $('saveTask').disabled = true; $('restoreTask').disabled = $('taskPack').disabled = true;
-    for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = true;
+    $('callMode').disabled = $('prediction').disabled = true;
     $('connection').textContent = '已连接';
     const startedAt = performance.now();
     timer = setInterval(() => {
       const seconds = Math.floor((performance.now() - startedAt) / 1000);
       $('duration').textContent = Math.floor(seconds / 60).toString().padStart(2, '0') + ':' + (seconds % 60).toString().padStart(2, '0');
     }, 1000);
-    send({type: 'start', task, phone_file: activePhone, voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
+    send({type: 'start', ...(activePhone ? {phone_file:activePhone} : {task}), voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
     notice(mode === 'local' ? '正在准备本地模型…' : '');
     showText(!voice);
   } catch (error) {
@@ -189,7 +186,7 @@ function onMessage({data}) {
   let event; try { event = JSON.parse(data); } catch { return; }
   switch (event.type) {
     case 'ready':
-      if (sameTask(event.phone_file?.task, task)) activePhone = event.phone_file;
+      if (event.phone_file) { activePhone = event.phone_file; orders.ready(activePhone); }
       notice(); break;
     case 'reply_start':
       if (!view.handle(event)) break;
@@ -205,13 +202,13 @@ function onMessage({data}) {
     case 'transcript':
       if (view.handle(event) && event.final) record('user', event.text);
       break;
-    case 'candidates': view.handle(event); break;
+    case 'candidate_progress': case 'candidates': view.handle(event); break;
     case 'state': {
       if (event.epoch < epoch) break;
       $('phase').textContent = phaseNames[event.phase] || '在听，请说';
       if (event.flow) {
         flowState = {progress: event.flow, card: task};
-        if ($('phonePanel').open && editorPhone && sameTask(editorPhone.task, task)) showGraph($('phoneGraph'), editorPhone, event.flow);
+        orders.refresh();
       }
       const status = {active: '对话进行中', complete: '已说明并得到明确确认', paused: '通话已结束', declined: '对方已拒绝，结束本次目标'};
       $('outcomeText').textContent = status[event.status] || '等待开始';
@@ -245,8 +242,7 @@ async function cleanup(label = '对话已结束，可以重新开始') {
   call = null;
   const closing = active?.close();
   $('startControls').hidden = false; $('callControls').hidden = true; $('textForm').hidden = true;
-  $('callMode').disabled = false; $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = $('taskPack').disabled = false;
-  for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = false;
+  $('callMode').disabled = $('prediction').disabled = false; orders.refresh();
   $('connection').textContent = '未连接'; $('phase').textContent = label;
   notice(label);
   await closing;
@@ -276,85 +272,6 @@ $('textInput').addEventListener('compositionend', () => { composing = false; });
 $('textInput').addEventListener('keydown', event => {
   if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault();
 });
-$('editTask').onclick = () => {
-  if (!task) return;
-  fillTaskEditor(task);
-  $('taskDialog').showModal();
-};
-$('taskPack').onchange = () => {
-  if (connected || inputInFlight) return;
-  const card = packs.get($('taskPack').value) || savedCustom;
-  if (card) fillTaskEditor(card);
-};
-$('taskForm').addEventListener('input', event => {
-  if (event.target.matches('textarea, input[type="text"], #editTitle')) {
-    $('taskPack').value = ''; draftVersion++; editorPhone = undefined;
-    if ($('phonePanel').open) {
-      const button = document.createElement('button'); button.type = 'button'; button.textContent = '按当前工单生成任务图';
-      button.onclick = refreshGraph; $('phoneGraph').replaceChildren(button);
-    }
-  }
-});
-$('restoreTask').onclick = () => { if (!connected && defaultTask) fillTaskEditor(defaultTask); };
-$('closeDialog').onclick = () => $('taskDialog').close();
-function editorCard() {
-  const descriptions = $('editPoints').value.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!descriptions.length || descriptions.length > 8 || descriptions.some(s => s.length > 300)) {
-    $('editPoints').setCustomValidity('请输入 1 至 8 个要点，每项不超过 300 字。'); $('editPoints').reportValidity(); return;
-  }
-  const samePoints = descriptions.length === editorTask.checkpoints.length
-    && descriptions.every((description, i) => description === editorTask.checkpoints[i].description);
-  const card = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
-    opening: $('editOpening').value.trim(), checkpoints: samePoints ? editorTask.checkpoints
-      : descriptions.map((description, i) => ({id: 'point_' + (i + 1), description}))};
-  return card;
-}
-
-async function draftFile() {
-  const card = editorCard();
-  if (!card || !card.title || !card.opening || !card.goal) throw new Error('请先填写工单必填项。');
-  if (sameTask(editorPhone?.task, card)) return editorPhone;
-  const revision = draftVersion;
-  const file = await readPhone(card, false, mode);
-  if (revision !== draftVersion) return null;
-  return editorPhone = file;
-}
-async function refreshGraph() {
-  const revision = draftVersion;
-  try {
-    if (!editorPhone) $('phoneGraph').textContent = '正在生成任务图…';
-    const file = await draftFile();
-    if (file && revision === draftVersion) showGraph($('phoneGraph'), file, sameTask(flowState?.card, file.task) && flowState.progress);
-  } catch (e) { if (revision === draftVersion) $('phoneGraph').textContent = e.message; }
-}
-$('phonePanel').ontoggle = () => { if ($('phonePanel').open) refreshGraph(); };
-$('downloadPhone').onclick = async () => {
-  try { const file = await draftFile(); if (file) downloadPhone(file); }
-  catch (e) { $('phoneGraph').textContent = e.message; }
-};
-$('importPhone').onclick = () => { if (!connected && !inputInFlight) $('phoneInput').click(); };
-$('phoneInput').onchange = async event => {
-  const source = event.target.files[0]; event.target.value = '';
-  if (!source || connected || inputInFlight) return;
-  const revision = ++draftVersion;
-  try {
-    if (source.size > 400000) throw new Error('电话文件过大。');
-    const file = await readPhone(JSON.parse(await source.text()), true);
-    if (revision === draftVersion) fillTaskEditor(file.task, file);
-  } catch { if (revision === draftVersion) $('phoneGraph').textContent = '载入失败，请选择有效的电话文件。'; }
-};
-$('taskForm').onsubmit = async event => {
-  event.preventDefault(); if (connected || inputInFlight) return;
-  try {
-    $('saveTask').disabled = true; $('saveTask').textContent = '生成电话文件…';
-    const file = await draftFile();
-    if (!file || connected || inputInFlight) return;
-    activePhone = file; rememberTask(file.task); localStorage.setItem('g2-phone', JSON.stringify(file));
-    renderTask(); $('taskDialog').close(); warmTask(task);
-  } catch (e) { $('phonePanel').open = true; $('phoneGraph').textContent = e.message; }
-  finally { $('saveTask').disabled = connected || inputInFlight; $('saveTask').textContent = '保存任务'; }
-};
-$('editPoints').oninput = () => $('editPoints').setCustomValidity('');
 $('export').onclick = () => {
   const blob = new Blob([JSON.stringify({task, conversation: records}, null, 2)], {type: 'application/json'});
   const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = 'ai-call-g2-conversation.json'; a.click();
@@ -368,13 +285,15 @@ try {
   defaultTask = config.default_task;
   for (const [id, card] of Object.entries(config.task_packs || {})) {
     packs.set(id, card);
-    $('taskPack').add(new Option(card.title, id));
   }
   try { task = JSON.parse(localStorage.getItem('g2-task')); } catch {}
   try {
     const stored = JSON.parse(localStorage.getItem('g2-phone'));
-    if (stored && sameTask(stored.task, task)) activePhone = await readPhone(stored, true);
-  } catch { localStorage.removeItem('g2-phone'); }
+    const selected = localStorage.getItem('g2-active-order');
+    const bound = stored?.task || JSON.parse(localStorage.getItem('g2-order/' + selected))?.card
+      || JSON.parse(localStorage.getItem('g2-task-pack'))?.card;
+    if (stored && sameTask(bound,task)) activePhone = await readPhone(stored, true);
+  } catch { /* The catalog retains the confirmed file if the service is temporarily unavailable. */ }
   try { savedCustom = JSON.parse(localStorage.getItem('g2-custom-task')); } catch {}
   const legacyDefaults = config.legacy_default_tasks || [config.legacy_default_task];
   let savedPack;
@@ -383,9 +302,9 @@ try {
   // checking whether a previously selected preset can follow a catalog update.
   if (packs.size && savedPack?.id && sameTask(savedPack.card, task)) {
     const latest = packs.get(savedPack.id) || defaultTask;
-    if (!sameTask(latest, task)) rememberTask(latest);
+    if (!sameTask(latest, task)) { activePhone = undefined; rememberTask(latest); }
   } else if (legacyDefaults.some(legacy => sameTask(task, legacy))) {
-    rememberTask(defaultTask);
+    activePhone = undefined; rememberTask(defaultTask);
   }
   if (!task?.checkpoints?.length || !task.goal || !task.opening) task = defaultTask;
   if (!packId(task) && packs.size) rememberTask(task);
@@ -394,6 +313,7 @@ try {
   if (requested !== null) {
     const card = packs.get(requested);
     if (card) {
+      if (!sameTask(card,task)) activePhone = undefined;
       rememberTask(card);
     } else {
       showError('找不到这张工单，可在任务设置中重新选择。');
@@ -402,6 +322,7 @@ try {
     history.replaceState(null, '', url);
   }
   cloudConfigured = config.configured;
-  $('prediction').checked = config.predictions; renderTask(); warmTask(task);
+  $('prediction').checked = config.predictions;
+  await orders.init(packs,task,activePhone,savedCustom,localStorage.getItem('g2-active-order'));
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }

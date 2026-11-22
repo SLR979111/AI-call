@@ -185,8 +185,11 @@ async def validate_phone_file(file: PhoneFile):
 def read_order(payload):
     if payload.get("phone_file") is not None:
         file = PhoneFile.model_validate(payload["phone_file"])
-        if "task" in payload and TaskCard.model_validate(payload["task"]) != file.task:
-            raise ValueError("电话文件与工单不一致")
+        if "task" in payload:
+            supplied = TaskCard.model_validate(payload["task"])
+            legacy = payload["phone_file"].get("task")
+            if supplied != (TaskCard.model_validate(legacy) if legacy else file.task):
+                raise ValueError("电话文件与工单不一致")
         return file.task, {"phone_file": file}
     return TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump())), {}
 
@@ -197,7 +200,8 @@ async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False,
     if phone_file is None:
         phone_file = await generate_phone_file(card)
     return await app.state.task_prewarmer.prepare(
-        card, app.state.cloud, app.state.opening_forecasts, ROOT / "runtime", wait=wait, retry=retry,
+        phone_file.task if phone_file else card, app.state.cloud, app.state.opening_forecasts,
+        ROOT / "runtime", wait=wait, retry=retry,
         **({"phone_file": phone_file} if phone_file else {}))
 
 

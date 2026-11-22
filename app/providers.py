@@ -13,6 +13,7 @@ import wave
 from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass
+from graphlib import TopologicalSorter
 from typing import AsyncIterator, Callable
 
 import httpx
@@ -391,18 +392,24 @@ class Cloud:
             return None
 
     async def plan_phone(self, card):
-        from .phone_file import DependencyReview, Graph, PhoneFile, PLAN_PROMPT, REVIEW_PROMPT, model_json
-        graph = await model_json(self, PLAN_PROMPT, card.model_dump(), Graph, 2800)
-        file = PhoneFile(task=card, graph=graph, source="model")
+        from .phone_file import BasicResponse, CompiledMaterials, DependencyReview, Graph, PhoneFile, PLAN_PROMPT, REVIEW_PROMPT, model_json
+        materials = await model_json(self, PLAN_PROMPT, card.model_dump(), CompiledMaterials, 4400)
+        graph = materials.graph
+        file = PhoneFile(title=card.title, basic_response=BasicResponse(opening=card.opening, guide=materials.guide),
+                         background=materials.background, checkpoints=card.checkpoints, graph=graph, source="model")
         try:
             review = await model_json(self, REVIEW_PROMPT, {"goal": card.goal, "graph": graph.model_dump()},
                                       DependencyReview, 650)
             changes = {entry.id: entry.requires for entry in review.changes}
-            if changes and changes.keys() <= graph.dependencies().keys():
+            ancestors = {}
+            deps = graph.dependencies()
+            for key in TopologicalSorter(deps).static_order():
+                ancestors[key] = set(deps[key]).union(*(ancestors[p] for p in deps[key]))
+            if changes and all(k in ancestors and set(v) <= ancestors[k] for k,v in changes.items()):
                 nodes = [node.model_copy(update={"requires": changes[node.id]}) if node.id in changes
                          else node for node in graph.nodes]
                 revised = Graph(nodes=nodes, default_leaf=graph.default_leaf)
-                return PhoneFile(task=card, graph=revised, source="model")
+                return file.model_copy(update={"graph": revised})
         except (ValueError, ProviderError, httpx.HTTPError, OSError):
             pass  # The original graph already passed structural validation.
         return file
@@ -410,10 +417,9 @@ class Cloud:
     async def route_phone(self, flow, history):
         from .phone_file import Route, ROUTE_PROMPT, model_json
         return await model_json(self, ROUTE_PROMPT, {
-            "graph": flow.file.graph.model_dump(), "leaves": flow.file.graph.leaves(),
+            **flow.file.briefing(), "leaves": flow.file.graph.leaves(),
             "paths": {leaf: flow.path(leaf) for leaf in flow.file.graph.leaves()},
             "state": flow.context(), "dialogue": history[-10:], "latest_user": history[-1]["text"],
-            "work_order_goal": flow.file.task.goal,
         }, Route, 350)
 
     async def forecast_clips(self, text):

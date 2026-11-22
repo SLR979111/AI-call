@@ -123,6 +123,8 @@ def test_portable_graph_drives_websocket_reply(monkeypatch):
 
     async def chat(self, messages, **kwargs):
         body = json.loads(messages[-1]["content"])
+        assert "task" not in body
+        assert {"basic_response","background","graph"} <= body.keys()
         if "leaves" in body:
             yield json.dumps({"leaf": "goal_reason", "need": "询问截图", "completed": [{"id":"purpose","quote":"哪张截图"}]})
         else:
@@ -160,8 +162,71 @@ async def test_dependency_review_can_shorten_a_path_and_cannot_introduce_cycles(
             if "changes" in messages[0]["content"]:
                 yield json.dumps({"changes": [{"id": "goal_reason", "requires": [parent]}]})
             else:
-                yield compile_phone(DEFAULT_CARD).graph.model_dump_json()
+                yield json.dumps({"guide":"直接回答","background":"已有记录","graph":compile_phone(DEFAULT_CARD).graph.model_dump()})
 
     file = await Planner().plan_phone(DEFAULT_CARD)
     goal = next(n for n in file.graph.nodes if n.id == "goal_reason")
     assert goal.requires == expected
+
+
+def test_confirmed_file_is_self_contained_and_source_never_enters_model_context():
+    from app.phone_file import model_context
+    source = DEFAULT_CARD.model_copy(update={"facts":"AUTHORING_SOURCE_ONLY", "goal":"ORIGINAL_MANUAL"})
+    file = compile_phone(source).model_copy(update={"background":"经确认的背景"})
+    memory = Memory(source, flow=Flow(file))
+    data = model_context(Brain.snapshot(memory))
+    for original in ("AUTHORING_SOURCE_ONLY", "ORIGINAL_MANUAL"):
+        assert original not in json.dumps(data,ensure_ascii=False)
+    assert data["basic_response"] == file.basic_response.model_dump()
+    assert data["graph"] == file.graph.model_dump()
+    assert data["state"]["flow"]["goal"]
+    assert "task" not in data and "task" not in file.model_dump()
+    assert PhoneFile.model_validate_json(file.model_dump_json()).task.facts == "经确认的背景"
+    legacy = {"format":"ai-call.phone.dag.v1","task":source.model_dump(),"graph":file.graph.model_dump()}
+    assert PhoneFile.model_validate(legacy).graph == file.graph
+
+
+def test_completed_instructions_do_not_loop_after_acknowledgment():
+    memory = Memory(DEFAULT_CARD, flow=Flow(compile_phone(DEFAULT_CARD)))
+    memory.flow.judged = True
+    memory.delivered = {p.id for p in DEFAULT_CARD.checkpoints}
+    memory.history = [{"role":"assistant", "delivery":"complete", "text":"提交后留意申请页的新提示就行。"}]
+    for ack in ("嗯，明白了。","好的。"):
+        memory.hear(ack)
+        assert memory.closing_reason(ack) == "instructions_acknowledged"
+        memory.history.pop()
+    for followup in ("好的，但是截图怎么弄？","我明白了，然后呢？"):
+        memory.hear(followup)
+        assert not memory.closing_reason(followup)
+        memory.history.pop()
+    memory.delivered.clear()
+    memory.hear("好的。")
+    assert not memory.closing_reason("好的。")
+    repeated = Candidate(id="old",when="同意",reply=Say(text="提交后留意申请页的新提示就行。"))
+    assert memory.fresh_candidates([repeated]) == []
+
+
+async def test_candidate_pie_settles_after_requested_audio_only(monkeypatch):
+    release = asyncio.Event()
+    class Voice:
+        async def prefetch(self,text):
+            await release.wait()
+            return b"spoken"
+    class Forecast:
+        async def predict(self,snapshot):
+            return [Candidate(id="x",when="问时间",reply=Say(text="九点开门。"))]
+    sent = []
+    async def send(e):
+        sent.append(e)
+    session = Session(DEFAULT_CARD,Voice(),Forecast(),send,voice=True)
+    monkeypatch.setenv("PREDICTION_AUDIO_LIMIT","1")
+    try:
+        await session._predict(session.epoch,{})
+        assert sent[-1]["progress"] == {"ready":0,"target":1,"settled":False,"complete":False}
+        release.set()
+        await session.settle_audio()
+        assert sent[-1]["type"] == "candidate_progress"
+        assert sent[-1]["progress"] == {"ready":1,"target":1,"settled":True,"complete":True}
+    finally:
+        release.set()
+        await session.close()

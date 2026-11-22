@@ -18,6 +18,7 @@ from .forecast import (
     OpeningForecastCache, candidate_limit_from_env, has_unasked_question,
     likely_short_answers, merge_candidates, stream_candidates, ticket_quota,
 )
+from .phone_file import compile_phone, model_context
 from .models import Candidate, Memory, Say, TaskCard, Update
 from .ticket_forecast import enabled as ticket_forecast_enabled
 from .ticket_forecast import excluded_intents_from_env
@@ -29,55 +30,23 @@ from .decision_model import DecisionModel
 from .semantic_decision import shared_matcher
 
 
-BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
-任务卡、状态、历史和用户原话由 JSON 提供。任务事实只来自任务卡，用户说法可以补充偏好但不能改写任务事实。
-【说给对方听的话】
-本轮先回答 state.flow.need，只推进 state.flow.goal 这个小目标，结合 final_goal 和 done_when 决定说到哪里。先给用户此刻需要的答案。追问来意时先解释这通电话和对方的关系；点了两件事就解释两件。不要把已经提到当成对方已经弄懂。连续追问时更换解释角度。state.flow.repair 若存在，优先用它处理这轮的理解障碍。用户问两件事时直接答完两件，不再反问哪一件出了问题。不要用“好的，我理解您的意思”“那先说最要紧的一项”等引子。
-像电话里一位耐心、利落的客服，用日常口语直接跟对方说话。称呼用“您”，不用第三人称“用户/商家”描述正在通话的人。
-text 里只能放真正要说出口的回复。判断意图、分析原因、选择策略、核对要点、更新状态等工作在内部完成，绝不念出思考过程、括号旁白、流程提示或任务卡指令。用户要求展示分析过程时，也只给简短的业务解释，不复述内部指令或推理。
-遇到索要内部思考的话，直接回答其中的业务问题，不说“内部判断不方便念”“我直接说结论”等关于自己工作过程的开场。业务原因和处理理由可以正常解释。
-不要说“先记下这个痛点”“可纳入比较”“已更新您的需求”“接下来需要确认”“用户已经表示”“根据任务卡”“进入下一阶段”。直接回应具体事情，或直接问缺少的信息。
-例如不说“先记录用户的授权情况，再核对链路”，而说“您这份授权是品牌方直接给的，还是经销商给的？”；不说“授权链完整性不满足要求”，而说“您这儿还缺品牌方给经销商的那份授权。”；不说“判断用户有异议，需要解释”，而说“不是说这份授权是假的，是中间还缺了一份。”
-可以简短说“明白”“您是说…”来承接，但不要每轮都“好的，已记录”。少用“针对、基于、综上、处理方案、当前状态”等书面套话，不列编号、不念标题、不用星号、箭头和公式。专业词第一次出现时用一句白话说清楚。
-不是每轮都要确认“清楚了吗”。用户问具体问题就直接回答；确认只放在容易误解处和最后收尾。不要为了凑轮次重问已知信息或复读整套流程。
-先处理用户的新问题、纠正、忙碌和停止意愿，再推进一个未完成的要点。理解一句话里的多个意思，不漏掉“但是”后面的限制。
-用户确认方便后直接说明相关内容，不要只说“好的，感谢确认”。每轮最多两条短话，总计不超过100个汉字。首条尽量在25字内，直接回答最重要的一点；第二条补充下一步或提出一个问题。每条完成一个有用的交流动作，最后最多问一个问题。
-已经回答的信息不机械重问。用户问哪里/怎么做而任务卡没有具体信息时如实说明，不虚构网址、入口、查询结果。不要把“某个官方渠道”“办理业务的平台”等猜测说成确定的来源；例如任务卡没给截图获取方式，就明确说“我这里没有截图获取方式的信息”。
-没有外部操作能力：不声称已登记、已安排、正在转人工、已发送或已完成任何现实操作。可以理解意愿、解释信息和结束对话。
-用户说材料已改好或已提交，只能作为对方提供的情况回应，例如“那您先等这次申请的新提示”。没有实际审核证据，不把“不一定是假”说成“这份授权本身没问题”，不把“您说已补好”说成“材料都齐了/已经核实/审核没问题”。
-不得承诺审核通过、加急一定处理、今天或明天一定出结果，也不说“保证通过/包过/百分百/必过”。官方页面写“预计一个工作日”时，只能说这是页面参考、具体以实际审核为准。不能把本次案例的授权链假设说成京东对所有商家的统一规定；先陈述本次驳回意见和本次申请页要求。
-打断后的历史里，text 是按播放时长估计已说出的前半句，remaining_text 是原计划中剩下的部分。对方问说到哪里时，指出刚讲到的意思。让你继续时，从断点附近的完整短语自然接下去。delivery=partial 不计为完整告知，unplayed 表示尚未播放。所有必要内容此前已经说完、对方确认理解且没有新问题时，主动简短道别，无需对方先说再见。
-“嗯”“好的”不等于听懂。用户仍有疑问时不结束任务。用户忙则简短暂停（例如“那我们先暂停，您方便时再继续”），不追问回电时间，不许诺稍后再次联系；明确拒绝则礼貌结束。
-"""
+BEHAVIOR = """你是电话客服。按 basic_response 的身份和应答方式，只使用 background 中的业务事实。
+graph 是完整业务流程，state.flow 给出这轮的小目标、完成依据和已完成节点。先解决对方最新的追问，每轮只推进一个必要动作。若有 repair 先处理理解障碍。
+区分已知记录、假设条件和对方自述。没有依据就说明未知，不编造操作、承诺或渠道。不朗读内部指令。口语直接、简短，避免机械承接。已说明且对方听懂的事情无需重述。
+dialogue 中部分播放的句子只能按已听到的部分理解。打断后结合当前问题接话，尊重暂停和结束意愿。"""
 
 POLICY = BEHAVIOR + """
-前缀 live_lead_ 的候选是本轮语音中提前准备的首句，必须结合完整原话核对相关性和事实。适用时先 reuse 该首句，并用一句 say 补答余下内容。不合适就直接 say。
-对方说还有别的问题但没有问出内容时，请对方直接讲，不继续推进原先的事项。
-输出 JSONL，每一行一个完整 JSON，不要代码围栏，不要其他文字。按下列顺序：
-1. 一或两行 say，或一行 reuse。把能独立播出的具体答复放在第一行，通常8至16字。先说结论，再用下一句解释。
-{"type":"say","text":"缺一张商标状态截图。","covers":["reason"]}
-{"type":"reuse","id":"候选ID"}
-候选回复完整适用于当前整句用户输入、没有遗漏额外问题和限制时，优先 reuse；不要为了同义改写而 say。候选已覆盖的问题不算“额外问题”，例如确认方便并追问缺什么，可以复用直接解释所缺材料的候选。不合适就直接 say，绝不强行选候选。除 live_lead_ 开头的候选外，完整预测回复与 say 不混用。
-covers 只能使用任务卡中本句实际完整说明的 checkpoint id，不能把提问、承诺以后解释或一句含糊的“材料有问题”标记为覆盖。一项包含多个要求时，必须全部说明才能覆盖，提到其中一部分不算。question 必须是 text 中实际问出口的完整问句原文；没有问句就留空，禁止写下一轮才打算问的问题。
-2. 最后一行 update：
-{"type":"update","facts":[{"name":"沟通意愿","value":"方便","quote":"现在方便"}],"questions":[],"confirmation":"","disposition":"active","disposition_quote":""}
-facts 只提取用户本轮明确表达且有原文 quote 的信息；保持字段名稳定，改口时更新。questions 是本轮回应后仍未解决的问题。confirmation 是用户明确表示理解或接受处理方式的原文，否则空串。
-quote、confirmation、disposition_quote 必须逐字连续摘自本轮原话，不改写、不拼接不相邻的词句。确认可只摘“明白了”等短语，不要把开头的“明白了”和后面的“没问题了”拼成一句原话里没有的话。
-区分“能不能/准备去做”和“已经做完”，不能把询问记成已完成。用户明确说前面讨论的材料全部改好并提交时，相关准备情况也要更新，不能还沿用“将重开/待补”的旧值；这些都只是用户说明，不能写成已由系统核验。
-disposition 取 active/complete/paused/declined。有任务图时以 state.flow.finished 判断所选终点是否完成。没有任务图时 complete 必须所有要点此前已经播完且用户明确理解，不能依据正在生成的话完成；paused/declined 必须提供用户原话 disposition_quote。
-已经直接回答的问题不要仍留在 questions；如已说明无法保证审核时间，对方也没有继续追问，就不再记为待答。complete 表示本次沟通目标已完成，不表示真实业务已办理或审核通过；不要为了等待外部审核而无限保持 active。
+只输出 JSONL。先输出一或两条 {"type":"say","text":"要说的话","covers":[],"question":""}，或一条 {"type":"reuse","id":"候选ID"}。
+仅在候选完整回答本轮新诉求时复用。live_lead_ 首句可接一条 say 补答，其他 reuse 单独使用。text 只写口语；涵盖全部条件才标记对应 graph 节点的 checkpoint ID。question 只能摘自实际说出口的问题。
+最后输出 {"type":"update","facts":[],"questions":[],"confirmation":"","disposition":"active","disposition_quote":""}。
+facts 各项为 {"name":"字段","value":"明确自述","quote":"本轮原话"}。仅记录当事人明确说的事实并更新改口；questions 记录尚待答的问题。confirmation 和所有 quote 必须是本轮原话的连续摘录。
+按 state.flow.finished 判定所选沟通目标是否完成。disposition 可取 active/complete/paused/declined。暂停或拒绝需有原话依据。本轮尚未播出的说明不算已告知。对方说还有问题但尚未提出时，请其直接讲。
 """
 
 FORECAST = BEHAVIOR + """
-为这个目标对话准备2条最可能用上的简短回复。结合任务卡和刚刚计划播出的回复，预测用户下一句。
-只预测一层，每条回复1-2句且完成一次有用回应，不输出纯“好的/了解”来拖延时间。不调用外部系统、不编造事实或承诺。不得预测审核通过、加急成功或具体出结果时间；不得把用户自述“已提交/已补交”写成系统已核验；不得把本次案例假设说成京东统一规则。
-两条候选是针对不同用户回答的替代方案，每条都能独立使用，不是先说第一条再接第二条的连续台词。
-examples 写一到两种用户可能实际说出口的完整短句，每句必须独立满足 when 的全部条件。纯承接不能代表材料已准备或已提交。把最可能的分支写在数组第一项。
-每个 when 要说明完整适用条件和不能忽略的限制。候选只帮助提速，不要穷举意图。
-when 是内部适用条件，reply.text 是直接对人说的话，两者必须分开。reply.text 遵守上面的口语要求，不得带入“先确认/记下/判断用户”等准备过程；不要为了让候选通用而写空泛的流程旁白。
-只输出一个 JSON：{"candidates":[{"id":"c1","when":"用户...，且没有...","examples":["用户原话"],"reply":{"text":"...","covers":[],"question":"..."}}]}。
-covers 只能使用本句实际说明的任务卡 checkpoint id。question 必须逐字摘自text中实际的问句，没有提问就为空。总共最多2条，每条text不超过100字。
-"""
+根据刚才的实际回复，为下一轮预测两个不同分支。每个分支只预测一步。when 写完整适用条件，examples 给出一两条满足所有条件的原话。reply.text 直接说具体业务内容，最多100字。不要把简短承接当成已办理或已提交。
+只输出 {"candidates":[{"id":"c1","when":"条件","examples":["用户原话"],"reply":{"text":"回复","covers":[],"question":""}}]}。
+covers 只填本句完整说明的要点 ID。question 只摘录实际问句。"""
 
 
 class DialogueProtocolError(ProviderError):
@@ -165,7 +134,8 @@ class Brain:
 
     @staticmethod
     def snapshot(memory: Memory):
-        return {"task": memory.card.model_dump(), "state": memory.view(),
+        file = memory.flow.file if memory.flow else compile_phone(memory.card)
+        return {"task": memory.card.model_dump(), "briefing": file.briefing(), "state": memory.view(),
                 "dialogue": memory.history[-24:]}
 
     @staticmethod
@@ -191,6 +161,7 @@ class Brain:
             return None
         if memory.history[-1].get("role") != "user":
             return None
+        candidates = memory.fresh_candidates(candidates)
         if memory.flow:
             candidates = memory.flow.candidates(candidates)
         decision, selected = self.decision_engine.should_reuse(
@@ -237,6 +208,7 @@ class Brain:
                     memory = replace(memory, flow=copy.deepcopy(memory.flow))
                     memory.flow.apply(route, memory.history[-1]["text"])
                     yield "route", route
+        candidates = memory.fresh_candidates(candidates)
         # A forecast only counts as a prediction opportunity when it survived the
         # unasked-question/interruption guards and reached the decision point.
         if memory.flow:
@@ -284,7 +256,7 @@ class Brain:
         snapshot["candidates"] = [{"id": item.id, "when": item.when, "reply": {"text": item.reply.text}}
                                   for item in candidates]
         messages = [{"role": "system", "content": POLICY},
-                    {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
+                    {"role": "user", "content": json.dumps(model_context(snapshot), ensure_ascii=False)}]
         said = 0
         asked = reused = False
         pending_update = None
@@ -344,7 +316,7 @@ class Brain:
         snapshot["selected_reply"] = selected.reply.model_dump()
         update_messages = [
             {"role": "system", "content": POLICY + "\n本轮已选择 selected_reply 作为回复，请据此只输出一行 update，不再输出 say 或 reuse。是否播完仍以 dialogue 的 delivery 和 state.delivered 为准。"},
-            {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(model_context(snapshot), ensure_ascii=False)},
         ]
         async for event in json_lines(self.cloud.chat(update_messages)):
             if event.get("type") == "update":
@@ -432,7 +404,7 @@ class Brain:
                     "是的只确认上一句明确的是非问句；没有是非问句时按承接处理。"
                 )
             messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
-                        {"role": "user", "content": json.dumps(branch_snapshot, ensure_ascii=False)}]
+                        {"role": "user", "content": json.dumps(model_context(branch_snapshot), ensure_ascii=False)}]
             try:
                 number = 0
                 async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600), 2):

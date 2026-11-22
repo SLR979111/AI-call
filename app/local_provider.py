@@ -12,6 +12,7 @@ import soxr
 
 from .forecast import match_example
 from .local_asr import install_model, model_dir
+from .phone_file import model_context
 from .models import Say, Update
 from .providers import Cloud, ProviderError, Settings
 from .speech_start import first_sound
@@ -104,19 +105,9 @@ class LocalProvider(Cloud):
         if model is Say:
             # Keep task instructions out of the caller's role. A small local
             # model must distinguish actual statements from conditional examples.
-            task = context["task"]
-            facts = task["facts"]
-            sections = [instruction, "围绕会话进度中 flow.need 的诉求和 flow.goal 的小目标，直接回答对方最后问的事情。若有 flow.repair 则先按该提示解释。连续追问时换个角度，省去客套开头。", "任务：" + task["goal"],
-                        "检查项：" + json.dumps(task["checkpoints"], ensure_ascii=False),
-                        "会话进度：" + json.dumps(context["state"], ensure_ascii=False),
-                        "任务原文：\n" + facts,
-                        "请按已知记录回答。除非用户明确变更情况，否则沿用记录中已经发生的情况。"]
-            # Some cards explicitly label their current facts alongside hypothetical guidance.
-            # Keep that source visible near the caller's turn without assuming a card format.
-            current = [line for line in facts.splitlines()
-                       if line.lstrip().startswith(("【这次", "【已知", "【当前", "【目前", "【现状", "【已有", "【现有", "【本次"))]
-            if current:
-                sections.append("对方尚未报告变更时，采用以下现状作为起点：\n" + "\n".join(current))
+            materials = {k: context[k] for k in ("basic_response", "background", "graph", "state")}
+            sections = [instruction, "按当前小目标和对方最新诉求回复，事实以背景资料和实际通话为准。",
+                        json.dumps(materials, ensure_ascii=False)]
             cutoffs = [e for e in context["dialogue"][-8:] if "remaining_text" in e]
             if cutoffs:
                 sections.append("打断记录：" + json.dumps(cutoffs, ensure_ascii=False))
@@ -126,7 +117,7 @@ class LocalProvider(Cloud):
                     continue
                 if entry.get("text"):
                     messages.append({"role": entry["role"], "content": entry["text"]})
-            points = [p["id"] for p in context["task"]["checkpoints"]]
+            points = sorted({p for n in context["graph"]["nodes"] for p in n["checkpoints"]})
             del schema["properties"]["question"]
             schema["properties"]["covers"]["items"] = {"type": "string", "enum": points}
             schema["properties"]["text"]["maxLength"] = 100
@@ -155,6 +146,7 @@ class LocalProvider(Cloud):
         return model.model_validate_json(raw)
 
     async def respond_local(self, snapshot, candidates, on_first_clause=None, *, semantic_engine=None):
+        snapshot = model_context(snapshot)
         latest = snapshot["dialogue"][-1]["text"]
         previous = next((e for e in reversed(snapshot["dialogue"][:-1]) if e["role"] == "assistant"), {})
         anchor = previous.get("text", "") if previous.get("delivery") == "complete" else ""
@@ -184,7 +176,7 @@ class LocalProvider(Cloud):
                 if end >= 5:
                     line.text = line.text[:end + 1]
                     line.covers = []
-            valid = {p["id"] for p in snapshot["task"]["checkpoints"]}
+            valid = {p for n in snapshot["graph"]["nodes"] for p in n["checkpoints"]}
             line.covers = [point for point in line.covers if point in valid]
             question = re.search(r"[^。！？?]*[？?]$", line.text.strip())
             line.question = question[0] if question else ""

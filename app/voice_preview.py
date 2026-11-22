@@ -9,6 +9,7 @@ from contextlib import AsyncExitStack, aclosing
 
 from pydantic import ValidationError
 
+from .phone_file import model_context
 from .models import Candidate, Say
 from .speech_start import spoken_prefix
 
@@ -61,8 +62,7 @@ class PredictedLead:
         self.task = None
 
     async def prepare(self, cloud, snapshot, partial):
-        context = {"task": snapshot["task"], "state": snapshot["state"], "recent": snapshot["dialogue"][-4:],
-                   "partial": partial}
+        context = model_context({**snapshot, "dialogue": snapshot["dialogue"][-4:], "partial": partial})
         messages = [{"role": "system", "content":
                      "根据电话任务、前文和未说完的一句话，预判对方最可能需要知道的具体事实或操作。"
                      "只输出一句约8至22字、可直接对对方说的中文答复。用任务中给出的名称、条件和已知事实。"
