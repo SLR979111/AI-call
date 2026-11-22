@@ -145,7 +145,12 @@ def test_portable_graph_drives_websocket_reply(monkeypatch):
                     events.append(event)
                     if event["type"] == "reply_done":
                         return events
-            turn()
+            opening = turn()
+            assert [e["text"] for e in opening if e["type"] == "utterance"] == [doc["basic_response"]["opening"]]
+            states = [e["flow"] for e in opening if e.get("flow")]
+            assert states[0]["current"] == "greeting" and states[0]["completed"] == ["call_start"]
+            delivered = ws.receive_json()
+            assert delivered["type"] == "state" and "greeting" in delivered["flow"]["completed"]
             ws.send_json({"type":"text","text":"哪张截图？"})
             events = turn()
             assert any(e.get("flow",{}).get("current") == "step_reason" for e in events)
@@ -230,3 +235,39 @@ async def test_candidate_pie_settles_after_requested_audio_only(monkeypatch):
     finally:
         release.set()
         await session.close()
+
+def test_old_files_gain_one_entry_on_all_paths_without_overwriting_business_ids():
+    doc = compile_phone(DEFAULT_CARD).model_dump()
+    doc["graph"]["nodes"] = [
+        {"id":"call_start","goal":"确认现状","done_when":"用户确认","checkpoints":[p.id for p in DEFAULT_CARD.checkpoints]},
+        {"id":"greeting","goal":"已提交","done_when":"确认已提交"},
+        {"id":"pending","goal":"未提交","done_when":"知道如何办理","requires":["call_start"]},
+    ]
+    doc["graph"]["default_leaf"] = "pending"
+    doc["basic_response"]["opening"] = "您好，我是工单客服。现在方便吗？"
+    file = PhoneFile.model_validate(doc)
+    root, opening, *business = file.graph.nodes
+    assert root.id != "call_start" and opening.id != "greeting"
+    assert [n.id for n in file.graph.nodes if not n.requires] == [root.id]
+    assert opening.requires == [root.id] and opening.action == file.basic_response.opening
+    assert [n.requires for n in business] == [[opening.id], [opening.id], ["call_start"]]
+    flow = Flow(file)
+    for leaf in file.graph.leaves():
+        assert flow.path(leaf)[:2] == [root.id, opening.id]
+    assert flow.context()["current"] == root.id
+    assert PhoneFile.model_validate_json(file.model_dump_json()) == file
+    doc = file.model_dump()
+    doc["basic_response"]["opening"] = "您好，我是新的联系人。"
+    assert PhoneFile.model_validate(doc).graph.nodes[1].action == doc["basic_response"]["opening"]
+
+
+def test_interrupted_greeting_releases_business_path_without_fabricated_delivery():
+    flow = Flow(compile_phone(DEFAULT_CARD))
+    flow.opening_status = "playing"
+    user = "我已经提交了。"
+    flow.accept(user)
+    flow.apply(Route(leaf="goal_all", completed=[Credit(id="greeting",quote=user)],
+                     reopen=[Credit(id="call_start",quote=user)]), user)
+    state = flow.context()
+    assert state["completed"] == ["call_start"] and state["skipped"] == ["greeting"]
+    assert state["current"] == "purpose"

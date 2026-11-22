@@ -10,7 +10,7 @@ const graphViews = new WeakMap();
 
 export function showGraph(container, file, progress, onEdit = null) {
   const old = graphViews.get(container);
-  const key = JSON.stringify([progress?.leaf, progress?.current, progress?.completed, !!onEdit]);
+  const key = JSON.stringify([progress?.leaf, progress?.current, progress?.completed, progress?.skipped, !!onEdit]);
   if (old?.file === file && old.key === key && container.contains(old.path)) return;
   old?.observer.disconnect();
   const {nodes} = file.graph;
@@ -68,8 +68,8 @@ export function showGraph(container, file, progress, onEdit = null) {
       for (const n of ready) {
         const li = document.createElement('div'), detail = document.createElement('details');
         const summary = document.createElement('summary');
-        li.dataset.node = n.id;
-        const status = progress?.completed?.includes(n.id) ? '✓ ' : n.id === progress?.current ? '当前 · ' : '';
+        li.dataset.node = n.id; li.dataset.kind = n.kind || 'business';
+        const status = progress?.completed?.includes(n.id) ? '已完成 · ' : progress?.skipped?.includes(n.id) ? '已打断 · ' : n.id === progress?.current ? '当前 · ' : '';
         if (n.id === progress?.current) li.setAttribute('aria-current', 'step');
         const title = document.createElement('span');
         title.textContent = status + n.goal; summary.append(title); detail.append(summary);
@@ -83,9 +83,9 @@ export function showGraph(container, file, progress, onEdit = null) {
           detail.append(deps);
         }
         li.append(detail);
-        if (onEdit) {
+        if (onEdit && n.kind !== 'root') {
           const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'node-edit';
-          edit.textContent = '编辑'; edit.setAttribute('aria-label', '编辑节点 ' + n.goal);
+          edit.textContent = n.kind === 'greeting' ? '编辑开场白' : '编辑'; edit.setAttribute('aria-label', '编辑节点 ' + n.goal);
           edit.onclick = () => onEdit(n.id); li.append(edit);
         }
         rank.append(li); shown.add(n.id); boxes.set(n.id, li);

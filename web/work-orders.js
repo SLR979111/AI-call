@@ -10,6 +10,7 @@ function cardFromFile(file) {
   return {title: file.title, opening: file.basic_response.opening, facts: file.background,
     checkpoints: file.checkpoints, goal: file.graph.nodes.find(n => n.id === file.graph.default_leaf).goal};
 }
+const businessNode = n => !n.kind || n.kind === 'business';
 function leaves(file) {
   const parents = new Set(file.graph.nodes.flatMap(n => n.requires));
   return file.graph.nodes.filter(n => !parents.has(n.id));
@@ -116,8 +117,9 @@ export function workOrders({mode, locked, activate, progress}) {
   }
   function editNode(id) {
     if (!inReview() || locked()) return;
-    nodeId = id || 'node_' + crypto.randomUUID().replaceAll('-','');
     const n = file.graph.nodes.find(n => n.id === id);
+    if (n?.kind === 'greeting') { graphTab(true); $('basicOpening').focus(); return; }
+    nodeId = id || 'node_' + crypto.randomUUID().replaceAll('-','');
     $('nodeGoal').value = n?.goal || ''; $('nodeAction').value = n?.action || ''; $('nodeDone').value = n?.done_when || '';
     const blocked = new Set([nodeId]); // Descendants would create a cycle.
     for (let count = 0; count < file.graph.nodes.length; count++) {
@@ -125,12 +127,14 @@ export function workOrders({mode, locked, activate, progress}) {
       for (const v of file.graph.nodes) if (v.requires.some(p => blocked.has(p))) blocked.add(v.id);
       if (before === blocked.size) break;
     }
-    checks($('nodeDeps'), file.graph.nodes.filter(v => v.id !== nodeId).map(v => [v.id,v.goal]), n?.requires || [], blocked);
+    checks($('nodeDeps'), file.graph.nodes.filter(v => businessNode(v) && v.id !== nodeId).map(v => [v.id,v.goal]), n?.requires || [], blocked);
     checks($('nodePoints'), file.checkpoints.map(p => [p.id,p.description]), n?.checkpoints || []);
-    $('removeNode').hidden = !n; $('removeNode').disabled = file.graph.nodes.length <= 2;
+    $('removeNode').hidden = !n; $('removeNode').disabled = file.graph.nodes.filter(businessNode).length <= 2;
     controls(); $('nodeGoal').focus();
   }
   function updateNodes(nodes) {
+    const greeting = nodes.find(n => n.kind === 'greeting');
+    nodes = nodes.map(n => businessNode(n) && !n.requires.length ? {...n, requires:[greeting.id]} : n);
     file = {...file, graph: {...file.graph,nodes}};
     const goals = leaves(file);
     if (!goals.some(n => n.id === file.graph.default_leaf)) file.graph.default_leaf = goals[0].id;
@@ -146,11 +150,20 @@ export function workOrders({mode, locked, activate, progress}) {
   };
   $('cancelNode').onclick = () => { nodeId = null; draw(); };
   $('removeNode').onclick = () => updateNodes(file.graph.nodes.filter(n => n.id !== nodeId).map(n => ({...n,requires:n.requires.filter(p => p !== nodeId)})));
-  $('addNode').onclick = () => file.graph.nodes.length < 28 ? editNode(null) : message('每张图最多 28 个节点。');
+  $('addNode').onclick = () => file.graph.nodes.filter(businessNode).length < 28 ? editNode(null) : message('每张图最多 28 个业务节点。');
   $('defaultGoal').onchange = e => { file.graph.default_leaf = e.target.value; };
-  $('graphTab').onclick = () => graphTab(); $('materialsTab').onclick = () => graphTab(true);
+  $('graphTab').onclick = () => { graphTab(); draw(); }; $('materialsTab').onclick = () => graphTab(true);
   for (const [id, key] of [['basicOpening','opening'],['basicGuide','guide'],['backgroundText','background']]) {
-    $(id).oninput = () => { if (inReview()) { if (key === 'background') file.background = $(id).value; else file.basic_response[key] = $(id).value; } };
+    $(id).oninput = () => {
+      if (!inReview()) return;
+      const value = $(id).value;
+      if (key === 'background') file.background = value;
+      else file.basic_response[key] = value;
+      if (key === 'opening') {
+        const nodes = file.graph.nodes.map(n => n.kind === 'greeting' ? {...n, action:value} : n);
+        file = {...file, graph:{...file.graph, nodes}};
+      }
+    };
   }
   $('editGraph').onclick = () => { if (file && !locked()) review(file); };
   $('taskPack').onchange = e => view(e.target.value, true);

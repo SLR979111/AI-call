@@ -1,8 +1,12 @@
-// The server owns the single round, including when several pages request it.
+import {readPhone} from './phone-file.js';
+
+// A raw work order also needs its phone file. Compile it in parallel so a cold
+// graph does not delay connection after the opening audio becomes ready.
 export async function prepareTask(task, {wait = true, retry = false, phoneFile} = {}) {
   try {
-    const response = await fetch('/api/warm', {method: 'POST',
+    const audio = fetch('/api/warm', {method: 'POST',
       headers: {'content-type': 'application/json'}, body: JSON.stringify({...(phoneFile ? {phone_file: phoneFile} : {task}), wait, retry})});
+    const [response] = await Promise.all([audio, phoneFile ? null : readPhone(task)]);
     if (response.ok) {
       const {status} = await response.json();
       if (['preparing', 'ready', 'disabled', 'unconfigured'].includes(status)) return status;

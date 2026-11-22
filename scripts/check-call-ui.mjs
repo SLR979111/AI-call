@@ -62,6 +62,10 @@ try {
   report.unmodified_legacy_default_migrates = true;
   assert.equal(await page.locator('.ring, #scenes, #sceneLabel').count(), 0);
   assert.ok((await page.locator('footer button:not(#editTask)').allTextContents()).every(text => !text.trim()));
+  const chevron = page.locator('#editTask svg use[href="/static/icons.svg#chevron"]');
+  assert.equal(await chevron.count(),1);
+  assert.ok(await chevron.evaluate(el => el.getBBox().width > 0));
+  assert.ok(!(await page.locator('#editTask').textContent()).includes('⌄'));
   report.compact_call_controls = true;
 
   emit({type: 'transcript', text: '公司明称', final: false});
@@ -174,7 +178,12 @@ try {
   await page.locator('#saveTask:enabled').waitFor();
   assert.equal(await page.locator('#selectedTitle').textContent(),config.default_task.title);
   assert.equal(preparations.length,beforeDraft);
-  await page.locator('.node-edit').first().click();
+  assert.equal(await page.locator('.phone-rank').first().locator('[data-node]').count(),1);
+  assert.equal(await page.locator('.phone-rank').first().locator('summary').innerText(),'通话开始');
+  await page.getByRole('button',{name:'编辑节点 问候与自我介绍'}).click();
+  await page.locator('#basicOpening').fill('您好，我是图书室客服。现在方便吗？');
+  await page.locator('#graphTab').click();
+  await page.locator('[data-node="purpose"] .node-edit').click();
   await page.locator('#nodeGoal').fill('说明来电和图书室的关系');
   await page.locator('#nodeAction').fill('先回答读者问的时间。');
   await page.getByRole('button',{name:'应用到草稿'}).click();
@@ -187,7 +196,8 @@ try {
   const artifact = await download;
   const file = JSON.parse(await fs.readFile(await artifact.path(),'utf8'));
   assert.equal(file.title,created); assert.equal(file.format,'ai-call.phone.dag.v2'); assert.ok(!('task' in file));
-  assert.equal(file.graph.nodes[0].action,'先回答读者问的时间。');
+  assert.equal(file.graph.nodes.find(n => n.id === 'purpose').action,'先回答读者问的时间。');
+  assert.equal(file.graph.nodes.find(n => n.kind === 'greeting').action,'您好，我是图书室客服。现在方便吗？');
   assert.equal(file.basic_response.guide,'用一句话直接回答读者。');
   assert.equal(file.background,'图书室本周六九点开门。');
   const initialId = await page.locator('#taskPack').inputValue();
@@ -236,7 +246,7 @@ try {
   failPreparation = true;
   const priorStarts = sent.filter(event => event.type === 'start').length;
   await page.reload();
-  await page.getByText('工单准备失败，点击开始可重试').waitFor();
+  await page.getByText('通话准备失败，点击开始可重试').waitFor();
   await page.locator('#startText').click();
   await page.locator('#error:visible').waitFor();
   assert.equal(sent.filter(event => event.type === 'start').length, priorStarts);

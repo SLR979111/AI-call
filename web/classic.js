@@ -17,6 +17,7 @@ function renderTask() {
   for (const point of task.checkpoints) {
     const li = document.createElement('li'); li.dataset.point = point.id;
     const icon = document.createElement('span'); icon.className = 'check';
+    icon.innerHTML = '<svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#check"/></svg>'; icon.hidden = true;
     const text = document.createElement('span'); text.textContent = point.description;
     li.append(icon, text); $('checkpoints').append(li);
   }
@@ -125,7 +126,8 @@ function onMessage({data}) {
       $('outcomeText').textContent = status[event.status] || '等待开始';
       for (const li of $('checkpoints').children) {
         const done = event.delivered.includes(li.dataset.point);
-        li.classList.toggle('done',done); li.querySelector('.check').textContent = done ? '✓' : '';
+        li.classList.toggle('done',done); li.querySelector('.check').hidden = !done;
+        li.setAttribute('aria-label', (done ? '已完成 · ' : '') + li.textContent);
       }
       break;
     }

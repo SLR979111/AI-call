@@ -29,3 +29,9 @@ def reusable_clause(text):
         if len(re.sub(r"[\W_]", "", content)) >= 5:
             return clause
     return None
+
+
+def first_sentence(opening: str) -> str:
+    text = opening.strip()
+    end = re.search(r"""(?:[。！？!?]+|\.(?=\s|$))[”’」』"']*""", text)
+    return text[:end.end()] if end else text

@@ -1,4 +1,4 @@
-"""Work-order DAGs. Only a grounded model decision can credit a node."""
+"""Work-order DAGs with transport-driven entry and model-judged business goals."""
 from __future__ import annotations
 
 import hashlib
@@ -19,6 +19,7 @@ ShortText = Annotated[str, Field(min_length=1, max_length=320)]
 class Node(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: NodeId
+    kind: Literal["business", "root", "greeting"] = "business"
     goal: ShortText
     done_when: ShortText
     action: str = Field(default="", max_length=320)
@@ -28,8 +29,39 @@ class Node(BaseModel):
 
 class Graph(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    nodes: list[Node] = Field(min_length=2, max_length=28)
+    nodes: list[Node] = Field(min_length=2, max_length=30)
     default_leaf: NodeId
+
+    def with_entry(self, opening: str) -> Graph:
+        business = [n for n in self.nodes if n.kind == "business"]
+        if not 2 <= len(business) <= 28:
+            raise ValueError("工单需要 2 到 28 个业务节点")
+        entry = {n.kind: n for n in self.nodes if n.kind != "business"}
+        if entry and (set(entry) != {"root", "greeting"} or len(self.nodes) != len(business) + 2
+                      or entry["root"].requires or entry["greeting"].requires != [entry["root"].id]
+                      or any(n.checkpoints for n in entry.values())):
+            raise ValueError("通话入口需要一个根节点和一个问候节点")
+        used = {n.id for n in self.nodes}
+
+        def entry_id(kind, name):
+            if kind in entry:
+                return entry[kind].id
+            candidate = name
+            index = 1
+            while candidate in used:
+                candidate = f"{name}_{index}"
+                index += 1
+            return candidate
+
+        root = Node(id=entry_id("root", "call_start"), kind="root", goal="通话开始",
+                    action="接通后进入开场。", done_when="通话已接通。")
+        greeting = Node(id=entry_id("greeting", "greeting"), kind="greeting", goal="问候与自我介绍",
+                        action=opening, done_when="开场白已播完，或已在文字通话中完整显示。", requires=[root.id])
+        nodes = [root, greeting]
+        for node in business:
+            parents = [p for p in node.requires if p not in {root.id, greeting.id}]
+            nodes.append(node.model_copy(update={"requires": parents or [greeting.id]}))
+        return Graph(nodes=nodes, default_leaf=self.default_leaf)
 
     def dependencies(self):
         return {n.id: tuple(n.requires) for n in self.nodes}
@@ -106,6 +138,7 @@ class PhoneFile(BaseModel):
 
     @model_validator(mode="after")
     def valid_points(self):
+        self.graph = self.graph.with_entry(self.basic_response.opening)
         ids = {p.id for p in self.checkpoints}
         if len(ids) != len(self.checkpoints) or {p for n in self.graph.nodes for p in n.checkpoints} != ids:
             raise ValueError("图中必须包含全部工单要点，且只能引用本工单")
@@ -148,7 +181,7 @@ def compile_phone(task: TaskCard) -> PhoneFile:
 
 PLAN_PROMPT = """把原始工单编译成独立可执行的电话资料。回复客服永远看不到原工单。只返回 JSON，三个字段为 guide（用约百字说明客服身份、应答方式和能力边界）、background（保留名称、数字、实际记录、条件及例外，区分真实现状与假设；提炼业务依据，删除原稿的流程和话术指令）、graph。graph 格式如下。
 {"nodes":[{"id":"英文id","goal":"这一步让对方弄明白的具体事情","done_when":"通话中可观察的完成证据","action":"本节点具体怎样解释、问什么或提供什么行动，不写空泛建议","requires":["必要前置id"],"checkpoints":["涉及的原工单要点id"]}],"default_leaf":"一个叶子id"}
-图本身必须能带人办完事情。每个节点写清业务条件、一个明确动作和完成依据。保留真正的分支及依赖；不要将分支收缩成一句宽泛总结。覆盖所有工单要点。用约5至12个短节点。终点是业务情境下不同的实际沟通结果，例如尚未处理与已经办理的人各自需要知道什么。用户可以从业务中途进入。已完成办理、只等结果的分支仅依赖确认对方现状，不依赖讲解怎么办理。已明确的身份可以用直接回答身份问题来确认。叶子 goal 必须描述对方最后弄明白的事。将可并行的小目标并列，只连接真实依赖，勿把互斥情形设为同一节点的共同前提。不要把识别意图、暂停通话或说再见当作所有分支的共同目标。不要虚构事实、操作能力或承诺。"""
+只生成业务节点。系统按已确认的开场白统一添加通话开始和问候介绍节点。图本身必须能带人办完事情。每个节点写清业务条件、一个明确动作和完成依据。保留真正的分支及依赖；不要将分支收缩成一句宽泛总结。覆盖所有工单要点。用约5至12个短节点。终点是业务情境下不同的实际沟通结果，例如尚未处理与已经办理的人各自需要知道什么。用户可以从业务中途进入。已完成办理、只等结果的分支仅依赖确认对方现状，不依赖讲解怎么办理。已明确的身份可以用直接回答身份问题来确认。叶子 goal 必须描述对方最后弄明白的事。将可并行的小目标并列，只连接真实依赖，勿把互斥情形设为同一节点的共同前提。不要把识别意图、暂停通话或说再见当作所有分支的共同目标。不要虚构事实、操作能力或承诺。"""
 
 
 class Prerequisites(BaseModel):
@@ -178,7 +211,7 @@ class Route(BaseModel):
 
 ROUTE_PROMPT = """你为正在进行的电话选择任务图的终点并评估节点。只输出JSON
 {"leaf":"有效的叶子id","completed":[{"id":"节点id","quote":"从最新用户原话逐字摘出的依据"}],"reopen":[{"id":"节点id","quote":"原话"}],"need":"用户这轮具体需要什么，一句话","next_node":"用户最需要且前置已满足的节点id"}。
-先选叶子，再按 paths[所选叶子] 的顺序判断该路径所有尚未完成的前置节点，特别检查新选路径的前置。若用户说“全部改好并重新提交了”，直接引用原话完成“确认目前是否已提交”这个节点。不要根据旧路径选择节点。只返回有本轮原话证据的新增完成或撤销，之前完成的不用重报。选择能解决当前诉求的叶子；用户改变情况时可以改选。仅当对方原话结合已听到的话满足节点的 done_when 才标记完成。只说嗯、好或听过一次不足以确认理解。未听懂、纠正或提出新限制时保留当前节点，必要时撤销此前误判。要求解释全貌时先说来意，连续追问时换个角度。不要用客服本轮准备说的话作完成依据。"""
+通话开始和开场问候由系统按接通与播放状态记录，只判断业务节点。先选叶子，再按 paths[所选叶子] 的顺序判断该路径所有尚未完成的前置节点，特别检查新选路径的前置。若用户说“全部改好并重新提交了”，直接引用原话完成“确认目前是否已提交”这个节点。不要根据旧路径选择节点。只返回有本轮原话证据的新增完成或撤销，之前完成的不用重报。选择能解决当前诉求的叶子；用户改变情况时可以改选。仅当对方原话结合已听到的话满足节点的 done_when 才标记完成。只说嗯、好或听过一次不足以确认理解。未听懂、纠正或提出新限制时保留当前节点，必要时撤销此前误判。要求解释全貌时先说来意，连续追问时换个角度。不要用客服本轮准备说的话作完成依据。"""
 
 
 @dataclass
@@ -192,11 +225,14 @@ class Flow:
     preferred: str | None = None
     previous_question: str = ""
     judged: bool = False
+    opening_status: Literal["pending", "playing", "delivered", "interrupted"] = "pending"
 
     def __post_init__(self):
         self.leaf = self.leaf or self.file.graph.default_leaf
 
     def accept(self, user: str, previous_question: str = ""):
+        if self.opening_status != "delivered":
+            self.opening_status = "interrupted"
         self.previous_question = previous_question
         self.need = user
         if re.search(r"整个事情|到底.{0,9}(?:讲|说)|什么事[啊呀]|来意", user):
@@ -219,7 +255,10 @@ class Flow:
         deps = graph.dependencies()
         revoked = {v.id for v in route.reopen if v.quote.strip() and v.quote in user}
         path = self.path()
-        current = next((k for k in path if k not in self.done), self.leaf)
+        root, greeting = (n.id for n in graph.nodes[:2])
+        entry = {root, greeting}
+        passed = set(self.done) | (entry if self.opening_status in {"delivered", "interrupted"} else set())
+        current = next((k for k in path if k not in passed), self.leaf)
         approvals = {}
         for credit in route.completed:
             if credit.id not in path or not credit.quote.strip() or credit.quote not in user:
@@ -232,10 +271,14 @@ class Flow:
                     continue
             approvals[credit.id] = credit.quote
         for key in TopologicalSorter(deps).static_order():
-            if key in revoked or not all(p in self.done for p in deps[key]):
+            if key in entry:
+                continue
+            if key in revoked or not all(p in passed for p in deps[key]):
+                passed.discard(key)
                 self.done.pop(key, None)
             elif key in approvals and self.event not in {"没听懂", "需要全貌"}:
                 self.done[key] = approvals[key]
+                passed.add(key)
 
     def path(self, leaf=None):
         deps = self.file.graph.dependencies()
@@ -250,12 +293,19 @@ class Flow:
         graph = self.file.graph
         path = self.path()
         nodes = {n.id: n for n in graph.nodes}
-        ready = [key for key in path if key not in self.done and all(p in self.done for p in nodes[key].requires)]
+        root, greeting = (n.id for n in graph.nodes[:2])
+        completed = ([root] if self.opening_status != "pending" else [])
+        if self.opening_status == "delivered":
+            completed.append(greeting)
+        completed.extend(self.done)
+        skipped = [greeting] if self.opening_status == "interrupted" else []
+        passed = set(completed + skipped)
+        ready = [key for key in path if key not in passed and all(p in passed for p in nodes[key].requires)]
         current = self.preferred if self.preferred in ready else next(iter(ready), self.leaf)
         node = nodes[current]
         return {"file": self.file.fingerprint(), "leaf": self.leaf, "final_goal": nodes[self.leaf].goal,
                 "current": current, "goal": node.goal, "action": node.action or node.goal, "done_when": node.done_when, "available": ready,
-                "checkpoints": node.checkpoints, "completed": list(self.done), "path": path,
+                "checkpoints": node.checkpoints, "completed": completed, "skipped": skipped, "path": path,
                 "need": self.need, "event": self.event,
                 **({"repair": "先用一两句交代为什么打来、这件事与对方有什么关系以及对方要做什么。对方此刻在问来意，避免重复上一轮的文件清单和公司名。"} if self.event == "需要全貌" else
                    {"repair": "用白话换一个例子解释卡住的概念。对方听懂前保留这个节点。"} if self.event == "没听懂" else {}), "finished": self.leaf in self.done,

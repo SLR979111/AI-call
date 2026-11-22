@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .models import Say
 from .providers import ProviderError
+from .speech_start import first_sentence
 
 PCM_HEADER = struct.Struct("<III")
 PLAYBACK_WINDOW = 12000  # 500 ms of 24 kHz mono PCM across all units.
@@ -28,6 +29,7 @@ class Unit:
     finished: asyncio.Event = field(default_factory=asyncio.Event)
 
     prepared_clause: tuple[str, bytes] | None = None
+    is_opening: bool = False
 
     def record_cutoff(self):
         """Keep the estimated spoken prefix and the intended continuation apart."""
@@ -48,7 +50,12 @@ class Unit:
 
     async def synthesize(self, cloud, pcm: bytes | None, preview, monitor, turn):
         started = time.perf_counter()
-        cached = pcm if pcm is not None else getattr(cloud, "cached", lambda _: None)(self.say.text)
+        lookup = getattr(cloud, "cached", lambda _: None)
+        cached = pcm if pcm is not None else lookup(self.say.text)
+        if self.is_opening and cached is None:
+            prefix = first_sentence(self.say.text)
+            if prefix != self.say.text and self.say.text.startswith(prefix) and (clip := lookup(prefix)):
+                self.prepared_clause = (prefix, clip)
         if self.prepared_clause and pcm is None:
             cached = None
         if cached:

@@ -30,7 +30,7 @@
     <div class="toolbar">
       <button id="editTask" class="order-picker" aria-label="选择工单" aria-haspopup="dialog" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM9 10h6m-6 4h6"/></svg>
-        <span id="selectedTitle">选择工单</span><span aria-hidden="true">⌄</span>
+        <span id="selectedTitle">选择工单</span><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#chevron"/></svg>
       </button>
       <div id="startControls" class="button-group">
         <button id="startVoice" class="primary" aria-label="开始通话" title="开始通话" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button>
@@ -47,10 +47,10 @@
     </div>
   </footer>
   <dialog id="taskDialog" aria-labelledby="orderHeading">
-    <div class="order-heading"><h1 id="orderHeading">工单流程</h1><button id="closeDialog" type="button" aria-label="关闭">×</button></div>
+    <div class="order-heading"><h1 id="orderHeading">工单流程</h1><button id="closeDialog" type="button" aria-label="关闭"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#close"/></svg></button></div>
     <div class="order-toolbar">
       <select id="taskPack" aria-label="选择工单"></select>
-      <button id="addOrder" class="action" type="button">＋ 添加工单</button>
+      <button id="addOrder" class="action" type="button"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#plus"/></svg> 添加工单</button>
     </div>
     <p id="orderMessage" role="status" hidden></p>
     <section id="graphView">
@@ -73,7 +73,7 @@
         <fieldset><legend>涉及的工单要点</legend><div id="nodePoints"></div></fieldset>
         <div class="action-row"><button class="action" type="submit">应用到草稿</button><button class="action" type="button" id="cancelNode">返回流程图</button><button class="action" type="button" id="removeNode">删除节点</button></div>
       </form>
-      <div class="action-row" id="graphActions"><button type="button" class="action" id="editGraph">编辑电话文件</button><button type="button" class="action" id="addNode" hidden>＋ 添加节点</button>
+      <div class="action-row" id="graphActions"><button type="button" class="action" id="editGraph">编辑电话文件</button><button type="button" class="action" id="addNode" hidden><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#plus"/></svg> 添加节点</button>
         <button type="button" class="action" id="editSource">编辑工单</button><button type="button" class="action" id="downloadPhone">下载电话文件</button></div>
       <label id="defaultGoalField" hidden>默认通话目标<select id="defaultGoal"></select></label>
     </section>
@@ -90,7 +90,7 @@
       <label>通话模式<select id="callMode"><option value="cloud">云端语音 · 当前音色</option><option value="local">纯本地 · MeloTTS 普通话女声</option></select></label>
       <label class="prediction-option"><input id="prediction" type="checkbox" checked>提前准备可能的回复</label>
       <div class="session-details"><span id="outcomeText">等待开始</span><span id="latency"></span><span id="duration"></span><span id="cacheStat"></span><ul id="checkpoints"></ul></div>
-      <div class="action-row"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 ↗</a><button class="action" id="export" type="button">导出对话</button><button class="action" id="restoreTask" type="button">使用默认工单</button></div>
+      <div class="action-row"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#external"/></svg></a><button class="action" id="export" type="button">导出对话</button><button class="action" id="restoreTask" type="button">使用默认工单</button></div>
     </details>
     <div class="import-row"><button type="button" class="action" id="importPhone">载入电话文件</button><input id="phoneInput" type="file" accept=".json" hidden></div>
   </dialog>

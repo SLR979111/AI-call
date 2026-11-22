@@ -409,7 +409,7 @@ class Cloud:
                 nodes = [node.model_copy(update={"requires": changes[node.id]}) if node.id in changes
                          else node for node in graph.nodes]
                 revised = Graph(nodes=nodes, default_leaf=graph.default_leaf)
-                return file.model_copy(update={"graph": revised})
+                return PhoneFile.model_validate({**file.model_dump(), "graph": revised})
         except (ValueError, ProviderError, httpx.HTTPError, OSError):
             pass  # The original graph already passed structural validation.
         return file
@@ -453,38 +453,6 @@ class Cloud:
             raise
         except Exception:  # noqa: BLE001 - provider errors are not fatal here
             return None
-
-    async def prewarm(self) -> bool:
-        """Open the TLS connection every request will reuse.
-
-        A cold pool costs ~220 ms on TTS first chunk and ~310 ms on LLM TTFT,
-        which is over half a second of the first turn if nobody has called the
-        provider yet.  Both endpoints share one httpx pool, so warming TTS also
-        warms the chat connection.  The body must be read to the end: httpx
-        discards a connection whose response was abandoned mid-stream instead
-        of returning it to the pool, which would make the warm-up useless.
-        Failures stay silent so an unreachable provider still reports its real
-        error on the first turn.
-        """
-        if not self.settings.api_key:
-            return False
-        try:
-            async with self.client.stream(
-                "POST", self.settings.base_url + "/v1/tools/tts",
-                headers=self.headers,
-                json={"text": "预热", "voice_id": self.settings.voice,
-                      "format": "pcm"},
-            ) as response:
-                if response.status_code >= 400:
-                    return False
-                received = False
-                async for _ in response.aiter_bytes():
-                    received = True
-                return received
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - prewarming is best effort
-            return False
 
     async def close(self):
         if self.warm_tasks:

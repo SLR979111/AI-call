@@ -209,6 +209,7 @@ class Session:
                          **self.memory.view()}, epoch=self.epoch)
 
     async def start(self):
+        self.memory.flow.opening_status = "playing"
         self.epoch += 1
         self.log("started", task=self.memory.card.model_dump(), voice=self.voice,
                  predictions=self.predictions)
@@ -413,7 +414,7 @@ class Session:
             self.resume_task.cancel()
             self.resume_task = None
 
-    async def _resume_after_pause(self, epoch: int, lines: list[Say], hangup: bool, user: str = ""):
+    async def _resume_after_pause(self, epoch: int, lines: list[Say], hangup: bool, user: str = "", *, opening: bool = False):
         first = Unit(1, lines[0], {}) if lines else None
         preview = None
         # The bounded synthesis queue fills during the pause, then feeds the
@@ -442,7 +443,7 @@ class Session:
             self.playback = Playback()
             self._begin_turn("continuation")
             self.response = asyncio.current_task()
-            await self._run(self.epoch, continuation=lines, prepared=first, resume_hangup=hangup,
+            await self._run(self.epoch, opening=opening, continuation=lines, prepared=first, resume_hangup=hangup,
                             user=user, preview=preview)
         finally:
             render.cancel()
@@ -500,7 +501,7 @@ class Session:
                 self.resume_question = heard_question(first.say, heard) or bool(
                     not heard and self.memory.last_question)
                 self.resume_task = self.spawn(self._resume_after_pause(
-                    self.epoch, lines, self.closing_epoch == old_epoch))
+                    self.epoch, lines, self.closing_epoch == old_epoch, opening=first.is_opening))
                 self.log("continuation_scheduled", interrupted_epoch=old_epoch, unit=first.number,
                          spoken=heard, remaining=first.entry["remaining_text"], pickup=lines[0].text)
             elif self.units and all(u.entry.get("bridge") for u in self.units.values()):
@@ -539,6 +540,8 @@ class Session:
         if unit.delivered:
             return
         unit.delivered = True
+        if unit.is_opening:
+            self.memory.flow.opening_status = "delivered"
         unit.entry["delivery"] = "complete"
         unit.entry.pop("played_ms", None)
         unit.say.covers = self.memory.delivered_covers(unit.say)
@@ -656,6 +659,7 @@ class Session:
             self.memory.history.append(entry)
             use_prepared = prepared is not None and not current_units
             unit = prepared if use_prepared else Unit(len(current_units) + 1, line, entry)
+            unit.is_opening = opening
             unit.entry = entry
             current_units.append(unit)
             self.units[unit.number] = unit
@@ -948,6 +952,9 @@ class Session:
                 merged = True
         if not self.is_current(epoch):
             return
+        if opening:
+            # This speculative turn is eligible only after the opening is heard.
+            base.flow.opening_status = "delivered"
         snapshot = copy.deepcopy(self.brain.snapshot(base))
         snapshot["opening"] = opening
         snapshot["pending_reply"] = pending_reply

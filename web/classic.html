@@ -10,21 +10,21 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="AI Call G2 首页"><span class="brandmark" aria-hidden="true">⌁</span>AI CALL <b>G2</b></a>
+    <a class="brand" href="/" aria-label="AI Call G2 首页"><span class="brandmark" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 13h4l2-6 4 12 4-15 2 9h4"/></svg></span>AI CALL <b>G2</b></a>
     <span class="topnote">一个目标，一段自然的对话。</span>
     <span id="connection" class="connection">准备连接</span>
   </header>
   <main class="layout">
     <aside class="sidebar">
       <div class="eyebrow">THIS CONVERSATION</div>
-      <div class="task-title"><h1 id="taskTitle">资料补正沟通</h1><button id="editTask" class="text-button">编辑任务 ↗</button></div>
+      <div class="task-title"><h1 id="taskTitle">资料补正沟通</h1><button id="editTask" class="text-button">编辑任务 <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#external"/></svg></button></div>
       <p id="taskGoal" class="goal"></p>
       <div class="divider"></div>
       <div class="section-label">这次要说清楚</div>
       <ul id="checkpoints" class="checkpoints"></ul>
       <div id="outcome" class="outcome"><span class="dot"></span><span id="outcomeText">等待开始</span></div>
       <details class="facts"><summary>已知信息</summary><p id="taskFacts"></p></details>
-      <div class="sidebar-bottom"><span class="tiny-spark">✳</span><p>可以追问、改口，也可以随时打断。<br>有问题时，先把问题说清楚。</p></div>
+      <div class="sidebar-bottom"><span class="tiny-spark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20M5 5l14 14M5 19 19 5"/></svg></span><p>可以追问、改口，也可以随时打断。<br>有问题时，先把问题说清楚。</p></div>
     </aside>
 
     <section class="conversation" aria-label="对话区域">
@@ -54,7 +54,7 @@
         <form id="textForm" class="text-form hidden">
           <label class="sr-only" for="textInput">输入一句话</label>
           <input id="textInput" maxlength="2000" autocomplete="off" placeholder="也可以在这里输入一句话…">
-          <button id="sendText" aria-label="发送消息" type="submit">↑</button>
+          <button id="sendText" aria-label="发送消息" type="submit"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#send"/></svg></button>
         </form>
       </div>
     </section>
@@ -63,7 +63,7 @@
 
   <dialog id="taskDialog">
     <form id="taskForm">
-      <div class="dialog-heading"><h2>这次想聊什么？</h2><button id="closeDialog" type="button" aria-label="关闭" class="text-button">✕</button></div>
+      <div class="dialog-heading"><h2>这次想聊什么？</h2><button id="closeDialog" type="button" aria-label="关闭" class="text-button"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#close"/></svg></button></div>
       <p class="dialog-note">给它一个具体目标，和这次对话可以依据的信息。</p>
       <label>任务名称<input id="editTitle" required maxlength="80"></label>
       <label>对话目标<textarea id="editGoal" required maxlength="1000" rows="2"></textarea></label>

@@ -134,10 +134,8 @@ def test_voice_websocket_uses_transcriber_for_selected_mode(mode, tmp_path, monk
     monkeypatch.setattr(main.LocalProvider, "ready", AsyncMock())
     local_asr = AsyncMock(return_value="local")
     cloud_asr = AsyncMock(return_value="cloud")
-    prewarm = AsyncMock()
     monkeypatch.setattr(main.LocalProvider, "transcribe", local_asr)
     monkeypatch.setattr(main.Cloud, "transcribe", cloud_asr)
-    monkeypatch.setattr(main.Cloud, "prewarm", prewarm)
     monkeypatch.setattr(main.Session, "start", AsyncMock())
 
     async def decode(hearing, pcm):
@@ -153,10 +151,8 @@ def test_voice_websocket_uses_transcriber_for_selected_mode(mode, tmp_path, monk
             ws.send_json({"type": "stop"})
     if mode == "local":
         cloud_asr.assert_not_called()
-        prewarm.assert_not_called()
     else:
         local_asr.assert_not_called()
-        prewarm.assert_awaited_once()
 
 def test_invalid_interrupt_applies_no_receipts_and_socket_recovers(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock, Mock

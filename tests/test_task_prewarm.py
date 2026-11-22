@@ -1,229 +1,122 @@
-from __future__ import annotations
-
 import asyncio
-import json
-from pathlib import Path
+from unittest.mock import AsyncMock
 
-from app import task_prewarm
-from app.models import DEFAULT_CARD, TaskCard
-from app.providers import Settings
-from test_core import Cloud, TestBrain
-from app.task_prewarm import ADVERSARIAL_TURNS, OFFICIAL_TURNS, preset_dialogues
+import pytest
+from fastapi.testclient import TestClient
 
-ROOT = Path(__file__).resolve().parents[1]
+from app import main
+from app.models import DEFAULT_CARD, Say
+from app.playback import Unit
+from app.speech_start import first_sentence
+from app.task_prewarm import TaskPrewarmer
 
 
-def test_preset_dialogues_cover_card_official_and_adversarial():
-    card = TaskCard.model_validate_json(
-        (ROOT / "tasks/jd-qualification.json").read_text(encoding="utf-8")
-    )
-    dialogues = dict(preset_dialogues(card))
-    assert {"official", "official_status", "adversarial", "adversarial_2",
-            "short", "english"} <= set(dialogues)
-    assert dialogues["official"] == list(OFFICIAL_TURNS)
-    assert dialogues["adversarial"] == list(ADVERSARIAL_TURNS)
-    assert any(name.startswith("card_") for name in dialogues)
-    assert any(turns for name, turns in dialogues.items() if name.startswith("card_"))
-    assert len(dialogues) >= 8
+@pytest.mark.parametrize("opening, first", [
+    ("您好，我是工单客服。请问现在方便吗？", "您好，我是工单客服。"),
+    ("您好！", "您好！"), ("现在方便吗", "现在方便吗"),
+    ("“您好！”然后呢？", "“您好！”"), ("Hello. Can we talk?", "Hello."),
+    ("版本 1.5 可以使用。需要说明吗？", "版本 1.5 可以使用。"),
+])
+def test_only_first_sentence_is_prepared(opening, first):
+    assert first_sentence(opening) == first
 
-async def test_synthetic_player_finishes_long_opening_and_followup(monkeypatch, tmp_path):
-    class LongVoice(Cloud):
-        settings = Settings(api_key="")
+
+async def test_shared_opening_audio_survives_abandoned_wait_and_plays_with_live_suffix(monkeypatch):
+    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
+    started, release = asyncio.Event(), asyncio.Event()
+    first, suffix = "您好，我是图书室客服。", "您想了解开放时间吗？"
+    audio, warmed, live = {}, [], []
+
+    class Voice:
+        cached = staticmethod(audio.get)
+
+        async def warm(self, text):
+            warmed.append(text)
+            started.set()
+            await release.wait()
+            audio[text] = text.encode("utf-16-le")
+            return audio[text]
 
         async def speech(self, text):
-            for _ in range(20):
-                yield bytes(1920)
+            live.append(text)
+            yield text.encode("utf-16-le")
 
-    def brain(*args, forecast_branches):
-        assert forecast_branches == LongVoice.settings.forecast_branches
-        instance = TestBrain()
-        instance.forecast_release.set()
-        return instance
-
-    monkeypatch.setattr(task_prewarm, "Brain", brain)
-    log = tmp_path / "warm.jsonl"
-    group = task_prewarm.PrewarmGroup(DEFAULT_CARD, log)
-    await asyncio.wait_for(task_prewarm._run_one(
-        group, LongVoice(), None, "case", ["具体缺什么？"]), timeout=2)
-    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert [e["epoch"] for e in events if e["event"] == "reply_done"] == [1, 2]
-    assert events[-1]["event"] == "scenario_done"
-    assert events[-1]["turns"] == 1
-    assert events[-1]["audio_bytes"] >= 2 * 38400
-
-async def test_full_round_waits_for_candidate_audio_and_stays_ready(monkeypatch, tmp_path):
-    class Voice(Cloud):
-        settings = Settings(api_key="")
-        async def warm(self, text):
-            warming.set()
-            await release.wait()
-            return await self.prefetch(text)
-
-    def brain(*args, **kwargs):
-        instance = TestBrain()
-        instance.forecast_release.set()
-        return instance
-
-    warming, release = asyncio.Event(), asyncio.Event()
-    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
-    monkeypatch.delenv("PREDICTION_AUDIO_LIMIT", raising=False)
-    monkeypatch.setattr(task_prewarm, "Brain", brain)
-    card = TaskCard.model_validate_json((ROOT / "tasks/jd-qualification.json").read_text(encoding="utf-8"))
-    owner = task_prewarm.TaskPrewarmer()
-    args = (card, Voice(), None, tmp_path)
-    request = asyncio.create_task(owner.prepare(*args, wait=True))
-    await asyncio.wait_for(warming.wait(), 5)
-    assert not request.done()
+    owner, voice = TaskPrewarmer(), Voice()
+    opening = first + suffix
+    assert (await owner.prepare(opening, voice))["status"] == "preparing"
+    await asyncio.wait_for(started.wait(), 2)
+    waiter = asyncio.create_task(owner.prepare(opening, voice, wait=True))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    await asyncio.gather(waiter, return_exceptions=True)
+    assert (await owner.prepare(first + "另一个问题。", voice))["status"] == "preparing"
     release.set()
-    assert (await asyncio.wait_for(request, 12))["status"] == "ready"
-    assert not (await owner.prepare(*args))["started"]
-    log, = (tmp_path / "task-prewarm").glob("*.jsonl")
-    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    finished = [event["scenario"] for event in events if event["event"] == "scenario_done"]
-    assert sorted(finished) == sorted(dict(preset_dialogues(card)))
-    assert sum(event["event"] == "round_start" for event in events) == 1
+    assert (await owner.prepare(opening, voice, wait=True))["status"] == "ready"
+    assert await owner.prepare(opening, voice) == {"started": False, "status": "ready"}
+    assert warmed == [first]
+    assert not live
+
+    unit = Unit(1, Say(text=opening), {}, is_opening=True)
+    await unit.synthesize(voice, None, None, None, None)
+    pcm = bytearray()
+    while (chunk := await unit.queue.get()) is not None:
+        pcm.extend(chunk)
+    assert pcm.decode("utf-16-le") == opening
+    assert live == [suffix]
     await owner.close()
 
 
-async def test_one_round_is_shared_while_running_and_after_completion(monkeypatch, tmp_path):
-    owner = task_prewarm.TaskPrewarmer()
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    runs = []
-    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
-    monkeypatch.setenv("TASK_PREWARM_MAX_ROUNDS", "0")  # older installations
-    monkeypatch.setattr(task_prewarm, "preset_dialogues", lambda card: [("a", ["1"]), ("b", ["2"])])
-
-    async def scenario(group, cloud, forecasts, name, turns):
-        runs.append(name)
-        entered.set()
-        await release.wait()
-        return True
-
-    monkeypatch.setattr(task_prewarm, "_run_one", scenario)
-
-    def prepare(card=DEFAULT_CARD, **kwargs):
-        return owner.prepare(card, None, None, tmp_path, **kwargs)
-
-    assert (await prepare())["status"] == "preparing"
-    await entered.wait()
-    abandoned = asyncio.create_task(prepare(wait=True))
-    await asyncio.sleep(0)
-    abandoned.cancel()
-    await asyncio.gather(abandoned, return_exceptions=True)
-    waiting = asyncio.create_task(prepare(wait=True))
-    await asyncio.sleep(0)
-    assert not waiting.done()
-    release.set()
-    assert (await waiting)["status"] == "ready"
-    assert not (await prepare(retry=True))["started"]
-    assert sorted(runs) == ["a", "b"]
-    changed = DEFAULT_CARD.model_copy(update={"goal": "另一个目标"})
-    assert (await prepare(changed, wait=True))["status"] == "ready"
-    assert sorted(runs) == ["a", "a", "b", "b"]
-    await owner.close()
-
-
-async def test_failed_round_only_retries_on_request(monkeypatch, tmp_path):
-    from unittest.mock import AsyncMock
-    owner = task_prewarm.TaskPrewarmer()
-    scenario = AsyncMock(side_effect=[False, True])
-    monkeypatch.setattr(task_prewarm, "_run_one", scenario)
-    monkeypatch.setattr(task_prewarm, "preset_dialogues", lambda card: [("one", ["1"])])
-    args = (DEFAULT_CARD, None, None, tmp_path)
+async def test_disabled_failed_and_explicit_retry(monkeypatch):
+    class Voice:
+        cached = staticmethod(lambda _: None)
+        warm = AsyncMock(side_effect=[None, b"pcm"])
+    owner = TaskPrewarmer()
     monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "0")
-    assert (await owner.prepare(*args, wait=True))["status"] == "disabled"
+    assert (await owner.prepare("您好", Voice()))["status"] == "disabled"
     monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
-    assert (await owner.prepare(*args, wait=True))["status"] == "failed"
-    assert not (await owner.prepare(*args))["started"]
-    assert (await owner.prepare(*args, wait=True, retry=True))["status"] == "ready"
-    assert scenario.await_count == 2
-
-
-async def test_shutdown_drains_inflight_scenarios(monkeypatch, tmp_path):
-    entered = asyncio.Event()
-    stopped = asyncio.Event()
-
-    async def scenario(*args):
-        entered.set()
-        try:
-            await asyncio.Future()
-        finally:
-            stopped.set()
-
-    owner = task_prewarm.TaskPrewarmer()
-    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
-    monkeypatch.setattr(task_prewarm, "_run_one", scenario)
-    await owner.prepare(DEFAULT_CARD, None, None, tmp_path)
-    await entered.wait()
+    for retry, status in [(False, "failed"), (False, "failed"), (True, "ready")]:
+        assert (await owner.prepare("您好", Voice(), wait=True, retry=retry))["status"] == status
+    assert Voice.warm.await_count == 2
     await owner.close()
-    assert stopped.is_set()
-    assert not owner.active
 
 
-def test_cloud_socket_waits_for_round_started_by_http(monkeypatch, tmp_path):
-    import threading
-    from unittest.mock import AsyncMock
-    from fastapi.testclient import TestClient
-    from app import main
-    entered, waiting, release = threading.Event(), threading.Event(), threading.Event()
-    calls = []
-
-    async def simulate(*args):
-        calls.append(1)
-        entered.set()
-        return await asyncio.to_thread(release.wait, 5)
-
-    prepare = main.prepare_cloud_task
-    async def observed(card, **options):
-        if options["wait"]:
-            waiting.set()
-        return await prepare(card, **options)
-
-    async def start(session):
-        await session.send({"type": "ready"})
-
+async def test_shutdown_cancels_opening_job(monkeypatch):
     monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
+    entered, stopped = asyncio.Event(), asyncio.Event()
+
+    class Voice:
+        cached = staticmethod(lambda _: None)
+        async def warm(self, text):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                stopped.set()
+
+    owner = TaskPrewarmer()
+    await owner.prepare("您好。", Voice())
+    await asyncio.wait_for(entered.wait(), 2)
+    await owner.close()
+    assert stopped.is_set() and not owner.active
+
+
+def test_http_prepare_only_synthesizes_confirmed_first_sentence(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-test")
+    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
     monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite"))
-    monkeypatch.setattr(task_prewarm, "_run_round", simulate)
-    monkeypatch.setattr(main, "prepare_cloud_task", observed)
-    monkeypatch.setattr(main, "generate_phone_file", AsyncMock(side_effect=lambda card, mode="cloud": main.compile_phone(card)))
-    monkeypatch.setattr(main.Cloud, "prewarm", AsyncMock())
-    monkeypatch.setattr(main.Session, "start", start)
     monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
     monkeypatch.setattr(main, "load_from_env", lambda: None)
+    plan = AsyncMock(side_effect=AssertionError("preparation ran a planner"))
+    session = AsyncMock(side_effect=AssertionError("preparation started a dialogue"))
+    monkeypatch.setattr(main, "generate_phone_file", plan)
+    monkeypatch.setattr(main.Session, "start", session)
+    warm = AsyncMock(return_value=b"pcm")
+    monkeypatch.setattr(main.Cloud, "warm", warm)
     with TestClient(main.app) as client:
-        assert client.post("/api/warm", json={}).json()["status"] == "preparing"
-        assert entered.wait(2)
-        with client.websocket_connect("/ws") as ws:
-            ws.send_json({"type": "start", "mode": "cloud", "voice": False})
-            try:
-                assert waiting.wait(2)
-                assert client.get("/healthz").json()["sessions"] == 0
-            finally:
-                release.set()
-            assert ws.receive_json()["type"] == "ready"
-            ws.send_json({"type": "stop"})
-        assert client.post("/api/warm", json={"wait": True}).json() == {"started": False, "status": "ready"}
-        assert calls == [1]
-
-
-async def test_unwritable_log_directory_still_prepares_once(monkeypatch, tmp_path):
-    calls = []
-    async def round_(group, cloud, forecasts):
-        calls.append(group.card)
-        assert group.path is None
-        return True
-
-    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
-    monkeypatch.setattr(task_prewarm, "_run_round", round_)
-    (tmp_path / "task-prewarm").write_text("occupied")
-    owner = task_prewarm.TaskPrewarmer()
-    try:
-        for _ in range(2):
-            status = await owner.prepare(DEFAULT_CARD, None, None, tmp_path, wait=True)
-            assert status["status"] == "ready"
-        assert calls == [DEFAULT_CARD]
-    finally:
-        await owner.close()
+        doc = main.compile_phone(DEFAULT_CARD).model_dump()
+        doc["basic_response"]["opening"] = "您好，新版工单客服。您现在方便吗？"
+        resp = client.post("/api/warm", json={"phone_file": doc, "wait": True})
+        assert resp.json()["status"] == "ready"
+        warm.assert_awaited_once_with("您好，新版工单客服。")
+        plan.assert_not_called()
+        session.assert_not_called()

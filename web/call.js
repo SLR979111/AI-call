@@ -33,12 +33,12 @@ function warmTask(card, retry = false) {
   if (sameTask(preparation?.card, card) && preparation.file === activePhone && (!retry || ['preparing', 'ready', 'disabled'].includes(preparation.status))) return preparation;
   const job = {card, file: activePhone, status: 'preparing'};
   preparation = job;
-  notice('正在准备工单：' + card.title);
+  notice((job.file ? '正在准备开场首句 · ' : '正在准备电话流程和开场首句 · ') + card.title);
   job.done = prepareTask(card, {retry, phoneFile: activePhone})
     .then(status => {
       job.status = status;
       if (preparation === job && !connected && !inputInFlight) {
-        if (status === 'failed' || status === 'unconfigured') notice('工单准备失败，点击开始可重试');
+        if (status === 'failed' || status === 'unconfigured') notice('通话准备失败，点击开始可重试');
         else notice((status === 'ready' ? '工单已就绪：' : '当前工单：') + card.title);
       }
       return status;
@@ -47,7 +47,7 @@ function warmTask(card, retry = false) {
 }
 
 async function waitToDial(job) {
-  notice('工单正在模拟，完成这一轮后自动接通');
+  notice(job.file ? '正在准备开场第一句，准备好后自动接通' : '正在准备电话流程和开场首句，准备好后自动接通');
   const cancel = $('cancelDial');
   cancel.hidden = false;
   try {
@@ -94,6 +94,7 @@ function renderTask() {
   for (const point of task.checkpoints) {
     const li = document.createElement('li'); li.dataset.point = point.id;
     const icon = document.createElement('span'); icon.className = 'check';
+    icon.innerHTML = '<svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#check"/></svg>'; icon.hidden = true;
     const text = document.createElement('span'); text.textContent = point.description;
     li.append(icon, text); $('checkpoints').append(li);
   }
@@ -214,7 +215,8 @@ function onMessage({data}) {
       $('outcomeText').textContent = status[event.status] || '等待开始';
       for (const li of $('checkpoints').children) {
         const done = event.delivered.includes(li.dataset.point);
-        li.classList.toggle('done', done); li.querySelector('.check').textContent = done ? '✓' : '';
+        li.classList.toggle('done', done); li.querySelector('.check').hidden = !done;
+        li.setAttribute('aria-label', (done ? '已完成 · ' : '') + li.textContent);
       }
       break;
     }

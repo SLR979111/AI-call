@@ -279,27 +279,27 @@ function addDataCard(title, content, options = {}) {
   // Card icon and color based on type
   const icon = document.createElement('div');
   icon.className = 'card-icon';
-  let iconEmoji = '📝';
+  let iconName = 'document';
   let accentColor = '#1E40AF';
   
   if (title.includes('User') || title.includes('用户') || title.includes('说')) {
-    iconEmoji = '👤';
+    iconName = 'person';
     accentColor = '#D97706';
   } else if (title.includes('AI') || title.includes('Response') || title.includes('回复')) {
-    iconEmoji = '🤖';
+    iconName = 'reply';
     accentColor = '#0F766E';
   } else if (title.includes('完成') || title.includes('Complete')) {
-    iconEmoji = '✅';
+    iconName = 'check';
     accentColor = '#16A34A';
   } else if (title.includes('提取') || title.includes('Extract')) {
-    iconEmoji = '🔍';
+    iconName = 'search';
     accentColor = '#9333EA';
   } else if (title.includes('Error') || title.includes('错误')) {
-    iconEmoji = '⚠️';
+    iconName = 'warning';
     accentColor = '#DC2626';
   }
   
-  icon.innerHTML = iconEmoji;
+  icon.innerHTML = `<svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#${iconName}"/></svg>`;
   card.style.setProperty('--card-accent', accentColor);
   
   const textContainer = document.createElement('div');

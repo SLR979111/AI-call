@@ -317,8 +317,11 @@ a {
 }
 
 .facts summary:before {
-  content: "▸";
-  font-size: 10px;
+  content: "";
+  width: 0;
+  height: 0;
+  border-block: 4px solid transparent;
+  border-left: 6px solid currentColor;
   transition: transform 0.2s;
 }
 
