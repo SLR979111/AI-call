@@ -94,18 +94,6 @@ def task_key(card: TaskCard) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _log_path(root: Path, key: str) -> Path:
-    folder = root / "task-prewarm"
-    folder.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return folder / f"{stamp}-{key}.jsonl"
-
-
-def _write(path: Path, event: dict) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-
 def _chunks(items: list[str], size: int) -> list[list[str]]:
     return [items[i:i + size] for i in range(0, len(items), size) if items[i:i + size]]
 
@@ -150,8 +138,29 @@ def preset_dialogues(card: TaskCard) -> list[tuple[str, list[str]]]:
 @dataclass
 class PrewarmGroup:
     card: TaskCard
-    path: Path
+    path: Path | None
     round: int = 1
+
+    @classmethod
+    def create(cls, card: TaskCard, root: Path, key: str):
+        folder = root / "task-prewarm"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Preparation log unavailable: %s", exc)
+            return cls(card, None)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        return cls(card, folder / f"{stamp}-{key}.jsonl")
+
+    def log(self, event: dict):
+        if self.path is None:
+            return
+        try:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Preparation log unavailable: %s", exc)
+            self.path = None
 
 
 class _Sink:
@@ -204,11 +213,11 @@ async def _run_one(group: PrewarmGroup, cloud: Cloud,
         group.card, cloud, brain, sink,
         voice=True,
         predictions=True,
-        log_dir=group.path.parent / "sessions",
+        log_dir=group.path.parent / "sessions" if group.path else None,
     )
-    _write(group.path, {"event": "scenario_start", "scenario": scenario,
-                        "round": group.round, "turns": len(turns),
-                        "task": group.card.title})
+    group.log({"event": "scenario_start", "scenario": scenario,
+               "round": group.round, "turns": len(turns),
+               "task": group.card.title})
     started = time.perf_counter()
     try:
         await session.start()
@@ -219,27 +228,27 @@ async def _run_one(group: PrewarmGroup, cloud: Cloud,
                     break
                 text = turns[index - 1]
                 await session.user_text(text, source="prewarm")
-                _write(group.path, {"event": "turn", "scenario": scenario,
-                                    "round": group.round, "turn": index, "input": text})
+                group.log({"event": "turn", "scenario": scenario,
+                           "round": group.round, "turn": index, "input": text})
             stage = f"turn_{index}" if index else "opening"
             try:
                 reply = await sink.wait_reply(session)
             except TimeoutError:
-                _write(group.path, {"event": "scenario_timeout", "scenario": scenario,
-                                    "round": group.round, "stage": stage})
+                group.log({"event": "scenario_timeout", "scenario": scenario,
+                           "round": group.round, "stage": stage})
                 return False
             if reply["type"] == "error":
-                _write(group.path, {"event": "session_error", "scenario": scenario, "round": group.round,
-                                    "stage": stage, "message": str(reply.get("message", ""))[:200]})
+                group.log({"event": "session_error", "scenario": scenario, "round": group.round,
+                           "stage": stage, "message": str(reply.get("message", ""))[:200]})
                 return False
-            _write(group.path, {"event": "reply_done", "scenario": scenario, "round": group.round,
-                                "epoch": reply["epoch"], "reused": reply.get("reused", False)})
+            group.log({"event": "reply_done", "scenario": scenario, "round": group.round,
+                       "epoch": reply["epoch"], "reused": reply.get("reused", False)})
             completed = index
-        _write(group.path, {"event": "scenario_done", "scenario": scenario,
-                            "round": group.round, "turns": completed,
-                            "elapsed_ms": round((time.perf_counter() - started) * 1000),
-                            "frames": sink.frames,
-                            "audio_bytes": sink.audio_bytes})
+        group.log({"event": "scenario_done", "scenario": scenario,
+                   "round": group.round, "turns": completed,
+                   "elapsed_ms": round((time.perf_counter() - started) * 1000),
+                   "frames": sink.frames,
+                   "audio_bytes": sink.audio_bytes})
         return True
     finally:
         await session.close()
@@ -251,8 +260,8 @@ async def _run_round(group: PrewarmGroup, cloud: Cloud,
     concurrency = min(_int_env(CONCURRENCY_ENV, DEFAULT_CONCURRENCY),
                       max(1, len(dialogues)))
     semaphore = asyncio.Semaphore(concurrency)
-    _write(group.path, {"event": "round_start", "round": group.round,
-                        "scenarios": len(dialogues), "concurrency": concurrency})
+    group.log({"event": "round_start", "round": group.round,
+               "scenarios": len(dialogues), "concurrency": concurrency})
 
     async def one(name: str, turns: list[str]) -> bool:
         async with semaphore:
@@ -264,15 +273,15 @@ async def _run_round(group: PrewarmGroup, cloud: Cloud,
                                        return_exceptions=True)
         for (name, _), result in zip(dialogues, results):
             if isinstance(result, Exception):
-                _write(group.path, {"event": "scenario_error", "scenario": name,
-                                    "round": group.round, "error": type(result).__name__})
+                group.log({"event": "scenario_error", "scenario": name,
+                           "round": group.round, "error": type(result).__name__})
         return all(result is True for result in results)
     except asyncio.CancelledError:
         cancelled = True
         raise
     finally:
-        _write(group.path, {"event": "round_done", "round": group.round,
-                            "cancelled": cancelled})
+        group.log({"event": "round_done", "round": group.round,
+                   "cancelled": cancelled})
 
 
 class TaskPrewarmer:
@@ -301,14 +310,13 @@ class TaskPrewarmer:
 
     async def _prepare(self, key, card, cloud, forecasts, log_root) -> str:
         try:
-            path = _log_path(log_root, key)
-            group = PrewarmGroup(card, path)
-            _write(path, {"event": "prewarm_start", "task": card.title, "task_key": key,
-                          "ts": datetime.now(timezone.utc).isoformat()})
+            group = PrewarmGroup.create(card, log_root, key)
+            group.log({"event": "prewarm_start", "task": card.title, "task_key": key,
+                       "ts": datetime.now(timezone.utc).isoformat()})
             complete = await _run_round(group, cloud, forecasts)
             status = "ready" if complete else "failed"
-            _write(path, {"event": "prewarm_summary", "task": card.title, "rounds": 1,
-                          "status": status})
+            group.log({"event": "prewarm_summary", "task": card.title, "rounds": 1,
+                       "status": status})
         except Exception:
             logging.getLogger(__name__).exception("Task preparation failed")
             status = "failed"

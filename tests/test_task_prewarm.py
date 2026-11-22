@@ -206,3 +206,23 @@ def test_cloud_socket_waits_for_round_started_by_http(monkeypatch, tmp_path):
             ws.send_json({"type": "stop"})
         assert client.post("/api/warm", json={"wait": True}).json() == {"started": False, "status": "ready"}
         assert calls == [1]
+
+
+async def test_unwritable_log_directory_still_prepares_once(monkeypatch, tmp_path):
+    calls = []
+    async def round_(group, cloud, forecasts):
+        calls.append(group.card)
+        assert group.path is None
+        return True
+
+    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "1")
+    monkeypatch.setattr(task_prewarm, "_run_round", round_)
+    (tmp_path / "task-prewarm").write_text("occupied")
+    owner = task_prewarm.TaskPrewarmer()
+    try:
+        for _ in range(2):
+            status = await owner.prepare(DEFAULT_CARD, None, None, tmp_path, wait=True)
+            assert status["status"] == "ready"
+        assert calls == [DEFAULT_CARD]
+    finally:
+        await owner.close()

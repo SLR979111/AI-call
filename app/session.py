@@ -564,6 +564,8 @@ class Session:
         playback = self.playback
         while self.is_current(epoch):
             unit = await queue.get()
+            if not self.is_current(epoch):
+                return
             if unit is None:
                 if self.voice:
                     await playback.wait_until_delivered()

@@ -36,13 +36,15 @@ class PersistentCache:
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        # A live lookup runs on the audio event loop. Under write contention
+        # it can use RAM immediately and retry disk on the next operation.
+        timeout = 0.05 if best_effort else 3.0
         self._connection = sqlite3.connect(
-            str(self.path), check_same_thread=False, timeout=3.0,
+            str(self.path), check_same_thread=False, timeout=timeout,
         )
         try:
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA synchronous=NORMAL")
-            self._connection.execute("PRAGMA busy_timeout=3000")
             self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS cache_entries (
@@ -160,8 +162,9 @@ class PersistentCache:
         with self._operation():
             rows = self._connection.execute(
                 "SELECT key, value, size, created_at, accessed_at, access_count "
-                "FROM cache_entries WHERE namespace = ? ORDER BY accessed_at DESC, rowid DESC",
-                (namespace,),
+                "FROM cache_entries WHERE namespace = ? AND (? IS NULL OR size <= ?) "
+                "ORDER BY accessed_at DESC, rowid DESC",
+                (namespace, max_bytes, max_bytes),
             )
             records = []
             total = 0

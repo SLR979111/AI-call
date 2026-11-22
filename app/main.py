@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     async with AsyncExitStack() as cleanup:
         app.state.first_pass = FirstPassASR.load()
         if app.state.first_pass:
-            cleanup.callback(app.state.first_pass.close)
+            cleanup.push_async_callback(asyncio.to_thread, app.state.first_pass.close)
         app.state.local = LocalProvider(app.state.first_pass)
         cleanup.push_async_callback(app.state.local.close)
         app.state.local_forecasts = OpeningForecastCache()
