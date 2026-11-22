@@ -131,3 +131,28 @@ async def _wait_for(predicate, timeout: float) -> None:
 async def _drain_until(predicate) -> None:
     while not predicate():
         await asyncio.sleep(0.01)
+
+
+async def test_current_turn_can_claim_previous_turns_inflight_audio():
+    release = asyncio.Event()
+
+    class GatedCloud:
+        calls = 0
+        async def prefetch(self, text):
+            self.calls += 1
+            await release.wait()
+            return PCM
+
+    cloud = GatedCloud()
+    session = Session(DEFAULT_CARD, cloud, Forecast(), _send, voice=True)
+    try:
+        await session._predict(0, {})
+        await _wait_for(lambda: cloud.calls == 1, 1)
+        session.epoch += 1
+        await session._predict(1, {})
+        release.set()
+        await session.settle_audio()
+        assert session.prediction_audio == {TEXT: PCM}
+        assert cloud.calls == 1
+    finally:
+        await session.close()
