@@ -123,6 +123,8 @@ try {
   report.server_hangup_restores_start_controls = true;
 
   await page.getByRole('button', {name: '文字试聊', exact: true}).click();
+  // A previous call can still display reply-1 while the new dial waits.
+  await page.locator('#callControls:visible').waitFor();
   await page.locator('[data-id="reply-1"] .copy').waitFor();
   assert.equal(await page.locator('.message').count(), 1);
   assert.equal(await page.locator('.candidate').count(), 0);

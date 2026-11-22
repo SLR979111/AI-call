@@ -19,6 +19,41 @@ test('canceled audio and a late cancel cannot affect the new response',()=>{
   p.begin(2);p.unit({epoch:2,unit:1});p.packet(packet(2,1,0));p.cancel(1);
   assert.equal(p.units.get(1).received,960);p.close();
 });
+test('an interrupt fades the active utterance and drops its queued packets', () => {
+  const ctx = context(), gains = [], sources = [];
+  ctx.createGain = () => {
+    const gain = {connect(){}, disconnect(){}, events:[], gain:{
+      setValueAtTime(value, time) { gain.events.push([value, time]); },
+      linearRampToValueAtTime(value, time) { gain.events.push([value, time]); }
+    }};
+    gains.push(gain);
+    return gain;
+  };
+  ctx.createBufferSource = () => {
+    const node = {connect(){}, disconnect(){}, start(time) { node.startAt=time; },
+      stop(time) { node.stopAt=time ?? 0; }};
+    sources.push(node);
+    return node;
+  };
+  const player = new Player(ctx, () => {});
+  try {
+    player.begin(1); player.unit({epoch:1, unit:1});
+    for (let i=0;i<6;i++) player.packet(packet(1,1,i));
+    ctx.currentTime = .08;
+    const [receipt] = player.stop(true);
+    assert.equal(receipt.samples, 1320);
+    assert.deepEqual(gains[1].events, [[1,.08],[0,.16]]);
+    assert.equal(sources[3].stopAt,.16);
+    assert.equal(sources[4].stopAt,0);
+    player.packet(packet(1,1,6));
+    assert.equal(sources.length,6);
+    player.begin(2); player.unit({epoch:2,unit:1}); player.packet(packet(2,1,0));
+    assert.ok(sources[6].startAt >= .16);
+    player.cancel(1);
+    assert.deepEqual(gains[2].events,[]);
+  } finally { player.close(); }
+});
+
 test('a network gap is not counted as played audio',()=>{
   const ctx=context(), events=[], p=new Player(ctx,e=>events.push(e));
   p.begin(1);p.unit({epoch:1,unit:1});p.packet(packet(1,1,0));

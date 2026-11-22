@@ -191,6 +191,11 @@ async def websocket(ws: WebSocket):
         else:
             await send({"type": "error", "message": message})
 
+    async def hearing_error(message):
+        # A lost or undecodable utterance may have contained a real question.
+        session.cancel_continuation()
+        await error(message)
+
     try:
         while True:
             incoming = await ws.receive()
@@ -254,10 +259,11 @@ async def websocket(ws: WebSocket):
                             min_silence_ms=680 if local else 0,
                             discard_draft=session.discard_voice,
                             on_lead=session.prepare_lead if session.predictions and not local else None,
-                            on_error=error,
+                            on_error=hearing_error, ignores_hesitation=session.ignores_hesitation,
                             is_playing=lambda: session.phase == "speaking",
                             transcriber=cloud.transcribe if local else app.state.transcriber,
                             performance_monitor=app.state.performance_monitor)
+                        session.wait_for_input_end = hearing.wait_for_input_end
                     await session.start()
                 elif session:
                     if kind == "text":
@@ -303,6 +309,8 @@ async def websocket(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        if session:
+            session.cancel_continuation()
         if hearing:
             await hearing.close()
         if session:

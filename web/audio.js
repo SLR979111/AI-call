@@ -1,4 +1,5 @@
 let acousticModule;
+const INTERRUPTION_FADE_SECONDS = 0.08;
 
 export class Player {
   constructor(context, send, onDone = () => {}) {
@@ -7,6 +8,8 @@ export class Player {
     this.onDone = onDone;
     this.output = context.createGain();
     this.output.connect(context.destination);
+    this.voiceGain = null;
+    this.fading = new Set();
     this.epoch = 0;
     this.blocked = new Set();
     this.units = new Map();
@@ -17,6 +20,9 @@ export class Player {
     if (epoch < this.epoch || this.blocked.has(epoch)) return;
     this.stop();
     this.epoch = epoch;
+    for (const tail of this.fading) this.nextAt = Math.max(this.nextAt, tail.end);
+    this.voiceGain = this.context.createGain();
+    this.voiceGain.connect(this.output);
   }
   unit(event) {
     if (event.epoch !== this.epoch || this.blocked.has(event.epoch)) return;
@@ -36,7 +42,7 @@ export class Player {
     for (let i=0; i<count; i++) data[i] = view.getInt16(12 + i*2, true) / 32768;
     const source = this.context.createBufferSource();
     source.buffer = audio;
-    source.connect(this.output);
+    source.connect(this.voiceGain);
     const start = Math.max(this.context.currentTime + .025, this.nextAt);
     const end = start + count / 24000;
     unit.segments.push({source, start, end, count});
@@ -62,7 +68,7 @@ export class Player {
   isPlaying() {
     const now = this.context.currentTime;
     // Include a short acoustic tail after scheduled playback ends.
-    return [...this.units.values()].some(u => u.segments.some(s =>
+    return [...this.fading].some(tail => now < tail.end) || [...this.units.values()].some(u => u.segments.some(s =>
       now >= s.start - .03 && now < s.end + .15));
   }
   report() {
@@ -84,18 +90,50 @@ export class Player {
       if (done) { unit.done = true; this.onDone(this.epoch, unit.id); }
     }
   }
-  stop(block = false) {
+  stop(block = false, fade = block) {
     const progress = this.progress();
     if (block && this.epoch) this.blocked.add(this.epoch);
-    for (const unit of this.units.values()) for (const s of unit.segments) {
-      try { s.source.stop(); s.source.disconnect(); } catch {}
+    const gain = this.voiceGain;
+    const now = this.context.currentTime;
+    const segments = [...this.units.values()].flatMap(unit => unit.segments);
+    const end = now + INTERRUPTION_FADE_SECONDS;
+    const audible = fade && segments.some(s => s.start <= now && now < s.end);
+    const tail = {gain, end, sources: new Set()};
+    if (audible) {
+      gain.gain.setValueAtTime(1, now);
+      gain.gain.linearRampToValueAtTime(0, end);
+      this.fading.add(tail);
     }
+    for (const {source, start, end: segmentEnd} of segments) {
+      if (audible && segmentEnd > now && start < end) {
+        tail.sources.add(source);
+        source.onended = () => {
+          source.disconnect();
+          tail.sources.delete(source);
+          if (!tail.sources.size) { gain.disconnect(); this.fading.delete(tail); }
+        };
+        source.stop(Math.min(end, segmentEnd));
+      } else {
+        try { source.stop(); source.disconnect(); } catch {}
+      }
+    }
+    if (!audible) gain?.disconnect();
+    this.voiceGain = null;
     this.units.clear();
     this.nextAt = 0;
     return progress;
   }
   cancel(epoch) { if (epoch === this.epoch) this.stop(true); else this.blocked.add(epoch); }
-  close() { clearInterval(this.timer); this.stop(true); this.output.disconnect(); }
+  close() {
+    clearInterval(this.timer);
+    this.stop(true, false);
+    for (const {gain, sources} of this.fading) {
+      for (const source of sources) { source.stop(); source.disconnect(); }
+      gain.disconnect();
+    }
+    this.fading.clear();
+    this.output.disconnect();
+  }
 }
 
 export class Microphone {

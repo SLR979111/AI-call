@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
+from .continuation import heard_question, hesitation, pickup
 from .brain import Brain
 from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
@@ -27,6 +28,7 @@ PREDICTION_AUDIO_LIMIT_ENV = "PREDICTION_AUDIO_LIMIT"
 # synthesized. At 24 kHz mono PCM16 this is one second, which covers the
 # LLM-to-first-audio gap without talking over an answer that has arrived.
 BRIDGE_MAX_BYTES = 48000
+RESUME_DELAY = 4.0
 
 
 def prediction_audio_limit_from_env() -> int | None:
@@ -96,7 +98,8 @@ class Session:
     def __init__(self, card: TaskCard, cloud: Cloud, brain: Brain,
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
                  predictions: bool = True, log_dir: Path | None = None,
-                 decision_tracker=None, performance_monitor=None, on_hangup=None):
+                 decision_tracker=None, performance_monitor=None, on_hangup=None,
+                 wait_for_input_end: Callable[[], Awaitable] | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.memory = Memory(card)
         self.cloud, self.brain, self.transport = cloud, brain, send
@@ -108,6 +111,10 @@ class Session:
         self.phase = "ready"
         self.units: dict[int, Unit] = {}
         self.jobs: set[asyncio.Task] = set()
+        self.wait_for_input_end = wait_for_input_end
+        self.resume_task: asyncio.Task | None = None
+        self.resume_question = False
+        self.closing_epoch = -1
         self.response: asyncio.Task | None = None
         self.forecast: asyncio.Task | None = None
         self.pending_update: asyncio.Task | None = None
@@ -246,6 +253,8 @@ class Session:
 
     def prepare_lead(self, partial):
         key = transcript_key(partial)
+        if self.ignores_hesitation(partial):
+            return False
         if self.closed or self.ended or not self.predictions or len(self.leads) >= 2:
             return True
         if len(key) >= 5 and (not self.leads or len(key) >= len(self.leads[-1].prefix) + 5):
@@ -266,8 +275,12 @@ class Session:
             lead.task.cancel()
         self.leads = []
 
+    def ignores_hesitation(self, text: str) -> bool:
+        return self.resume_task is not None and hesitation(text, answering_question=self.resume_question)
+
     def prepare_voice(self, text, origin="local"):
-        if not text or self.closed or self.ended or not self.voice:
+        if (not text or self.closed or self.ended or not self.voice
+                or self.ignores_hesitation(text)):
             return
         state = self.brain.snapshot(self.memory)
         if self.preview and same_transcript(self.preview.text, text) and self.preview.state == state:
@@ -348,6 +361,10 @@ class Session:
         text = text.strip()
         if not text or self.closed or self.ended:
             return
+        if source == "voice" and self.ignores_hesitation(text):
+            self.discard_voice()
+            return
+        self.cancel_continuation()
         text = text[:2000]
         preview = self.take_preview(text if source == "voice" else "")
 
@@ -407,12 +424,56 @@ class Session:
             self.starting = False
             self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio, preview=preview, leads=leads))
 
+    def cancel_continuation(self):
+        if self.resume_task is not None:
+            self.resume_task.cancel()
+            self.resume_task = None
+
+    async def _resume_after_pause(self, epoch: int, lines: list[Say], hangup: bool, user: str = ""):
+        first = Unit(1, lines[0], {}) if lines else None
+        preview = None
+        # The bounded synthesis queue fills during the pause, then feeds the
+        # standard output path. It is private until this turn wins the floor.
+        if first is not None:
+            render = self.spawn(self._synthesize(first))
+        else:
+            # Only a bridge was audible. Prepare the answer to the actual
+            # question again, without adding another user turn to history.
+            memory = copy.deepcopy(self.memory)
+            while memory.history and memory.history[-1].get("bridge"):
+                memory.history.pop()
+            preview = VoicePreview(user, self.brain.snapshot(memory), origin="continuation")
+            render = self.spawn(preview.prepare(self.brain, self.cloud, memory, []))
+            preview.task = render
+        try:
+            await asyncio.sleep(RESUME_DELAY)
+            if self.wait_for_input_end:
+                await self.wait_for_input_end()
+            if not self.is_current(epoch) or self.resume_task is not asyncio.current_task():
+                return
+            self.resume_task = None
+            self.discard_voice()
+            self._clear_staged()
+            self.epoch += 1
+            self.units = {}
+            self._begin_turn("continuation")
+            self.response = asyncio.current_task()
+            await self._run(self.epoch, continuation=lines, prepared=first, resume_hangup=hangup,
+                            user=user, preview=preview)
+        finally:
+            render.cancel()
+            await asyncio.gather(render, return_exceptions=True)
+            if self.resume_task is asyncio.current_task():
+                self.resume_task = None
+
     async def interrupt(self, reason: str, *, expected_epoch: int | None = None,
                         evidence: dict | None = None):
-        if self.ended:
+        if self.closed or self.ended:
             return
         if expected_epoch is not None and expected_epoch != self.epoch:
             return
+        if reason in {"new_input", "text_input"}:
+            self.cancel_continuation()
         self.discard_voice()
         if reason == "speech" and getattr(self.cloud, "is_local", False) and self.forecast:
             self.forecast.cancel()  # Reserve the local GPU for this caller's turn.
@@ -447,6 +508,23 @@ class Session:
         self.pending_update = None
         for unit in self.units.values():
             unit.record_cutoff()
+        if self.voice and self.phase == "speaking" and reason in {"speech", "manual"}:
+            unfinished = [u for u in self.units.values() if not u.delivered and not u.entry.get("bridge")]
+            if unfinished:
+                first, *rest = unfinished
+                heard = first.entry["text"]
+                lines = [pickup(first.say, heard), *(u.say for u in rest)]
+                self.resume_question = heard_question(first.say, heard) or bool(
+                    not heard and self.memory.last_question)
+                self.resume_task = self.spawn(self._resume_after_pause(
+                    self.epoch, lines, self.closing_epoch == old_epoch))
+                self.log("continuation_scheduled", interrupted_epoch=old_epoch, unit=first.number,
+                         spoken=heard, remaining=first.entry["remaining_text"], pickup=lines[0].text)
+            elif self.units and all(u.entry.get("bridge") for u in self.units.values()):
+                user = next((e["text"] for e in reversed(self.memory.history) if e["role"] == "user"), "")
+                if user:
+                    self.resume_question = False
+                    self.resume_task = self.spawn(self._resume_after_pause(self.epoch, [], False, user))
         self.candidates = []
         self.prediction_audio.clear()
         self.prediction_epoch = -1
@@ -618,7 +696,8 @@ class Session:
 
     async def _run(self, epoch: int, *, opening: bool = False, user: str = "",
                    candidates: list[Candidate] | None = None,
-                   audio: dict[str, bytes] | None = None, preview=None, leads=()):
+                   audio: dict[str, bytes] | None = None, preview=None, leads=(),
+                   continuation: list[Say] | None = None, prepared: Unit | None = None, resume_hangup=False):
         queue: asyncio.Queue = asyncio.Queue(maxsize=5)
         children: list[asyncio.Task] = [preview.task] if preview else []
         children.extend(lead.task for lead in leads)
@@ -654,10 +733,12 @@ class Session:
             if bridge_pcm is not None:
                 entry["bridge"] = True
             self.memory.history.append(entry)
-            unit = Unit(len(current_units) + 1, line, entry)
+            use_prepared = prepared is not None and not current_units
+            unit = prepared if use_prepared else Unit(len(current_units) + 1, line, entry)
+            unit.entry = entry
             current_units.append(unit)
             self.units[unit.number] = unit
-            if self.voice:
+            if self.voice and not use_prepared:
                 pcm = bridge_pcm if bridge_pcm is not None else (audio or {}).get(line.text)
                 source = "bridge_pcm" if bridge_pcm is not None else "prediction_pcm" if pcm else "tts"
                 if bridge_pcm is None and "prediction_audio_hit" not in self.turn_metrics:
@@ -670,10 +751,10 @@ class Session:
                             used_bytes=len(pcm))
                 self.log("audio_source", unit=unit.number, source=source,
                          audio_bytes=len(pcm) if pcm else 0)
-                prepared = preview if preview and not preview_audio_claimed and preview.first_text == line.text else None
-                if prepared:
+                prepared_preview = preview if preview and not preview_audio_claimed and preview.first_text == line.text else None
+                if prepared_preview:
                     preview_audio_claimed = True
-                children.append(self.spawn(self._synthesize(unit, pcm, preview=prepared, turn=turn)))
+                children.append(self.spawn(self._synthesize(unit, pcm, preview=prepared_preview, turn=turn)))
             await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
                              "text": line.text, "rate": 24000, "candidate_id": candidate_id,
                              "filler": bridge_pcm is not None})
@@ -683,7 +764,11 @@ class Session:
             self.phase = "thinking"
             await self.send({"type": "reply_start", "epoch": epoch})
             await self.state()
-            if opening:
+            if continuation:
+                hangup = resume_hangup
+                for line in continuation:
+                    await say(line)
+            elif opening:
                 opening_text = self.memory.card.opening
                 question = opening_text.split("。")[-1] if opening_text.endswith(("？", "?")) else ""
                 await say(Say(text=opening_text, question=question))
@@ -693,7 +778,7 @@ class Session:
                 hangup = True
                 await say(Say(text="好，再见。"))
             else:
-                if self.voice and self.bridge_audio:
+                if self.voice and self.bridge_audio and not (preview and preview.origin == "continuation"):
                     children.append(self.spawn(bridge()))
                 if self.performance_monitor and turn:
                     self.performance_monitor.mark_llm_start(turn)
@@ -795,6 +880,8 @@ class Session:
                           or self.memory.status in {"paused", "declined"})
                 if hangup and not ends_with_goodbye(last_reply.text):
                     await say(Say(text="再见。"))
+            if hangup:
+                self.closing_epoch = epoch
             await queue.put(None)
             # Forecast the next user reply while this response is playing. The
             # reuse path's state update is still in flight, so the forecast
@@ -1063,6 +1150,7 @@ class Session:
         if self.closed:
             return
         self.closed = True
+        self.cancel_continuation()
         self.epoch += 1
         for job in list(self.jobs):
             job.cancel()

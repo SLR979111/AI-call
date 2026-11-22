@@ -26,7 +26,8 @@ class Hearing:
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
                  detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None,
-                 min_silence_ms=0, transcriber=None, performance_monitor=None):
+                 min_silence_ms=0, transcriber=None, performance_monitor=None,
+                 ignores_hesitation: Callable[[str], bool] = lambda text: False):
         self.cloud = cloud
         self.first_pass, self.on_draft = first_pass, on_draft
         self.min_silence_ms = min_silence_ms
@@ -41,6 +42,7 @@ class Hearing:
         self.on_partial, self.on_error = on_partial, on_error
         self.is_playing = is_playing
         self.transcriber = transcriber
+        self.ignores_hesitation = ignores_hesitation
         self.defer_base = int(os.getenv("HEARING_DEFER_MS", "480"))
         self.defer_short = int(os.getenv("HEARING_DEFER_SHORT_MS", "260"))
         self.defer_question = int(os.getenv("HEARING_DEFER_QUESTION_MS", "340"))
@@ -51,6 +53,8 @@ class Hearing:
         self.onset_window = deque(maxlen=16)
         self.buffer = bytearray()
         self.active = False
+        self.idle = asyncio.Event()
+        self.idle.set()
         self.attack = 0
         self.quiet = 0
         self.floor = .001
@@ -135,10 +139,15 @@ class Hearing:
             # speech in a bounded 320 ms window instead of resetting on each
             # unvoiced consonant or momentary residual-echo veto.
             self.onset_window.append(voiced)
+            if voiced:
+                self.idle.clear()
+            elif not any(self.onset_window):
+                self.idle.set()
             self.attack = sum(self.onset_window) * 20
             if not voiced or self.attack < (160 if playback else 120):
                 return
             self.active = True
+            self.idle.clear()
             self.buffer = bytearray(b"".join(self.preroll))
             self.preroll.clear()
             self.quiet = 0
@@ -247,7 +256,8 @@ class Hearing:
                     self.on_draft(text, origin="local" if local else "cloud")
                 if text.strip() and changed:
                     self.partial_text = text
-                    await self.on_partial(text)
+                    if not self.ignores_hesitation(text):
+                        await self.on_partial(text)
             return text
         self.decode = self.spawn(decode())
 
@@ -275,7 +285,7 @@ class Hearing:
             self.reset(discard_draft=not bool(text.strip()))
             if text.strip():
                 await self.on_text(text, client_ms)
-            else:
+            elif not self.ignores_hesitation(""):
                 await self.on_error("没有听清，请再说一次。")
         except asyncio.CancelledError:
             raise
@@ -296,6 +306,7 @@ class Hearing:
         self.local_final = None
         self.lead_started = False
         self.active = False
+        self.idle.set()
         self.buffer.clear()
         self.preroll.clear()
         self.onset_window.clear()
@@ -306,8 +317,15 @@ class Hearing:
         self.partial_at = -1
         self.partial_text = ""
 
+    async def wait_for_input_end(self):
+        # A recognized endpoint can still be waiting on final ASR. Let that
+        # turn commit before a speculative continuation is allowed to speak.
+        while not self.closed and (self.active or any(self.onset_window)):
+            await self.idle.wait()
+
     async def close(self):
         self.closed = True
+        self.idle.set()
         for job in list(self.jobs):
             job.cancel()
         if self.jobs:
