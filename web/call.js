@@ -1,3 +1,4 @@
+import {prepareTask, checkPreparation} from './preparation.js';
 import {Player, Microphone} from './audio.js';
 import {LiveConversation} from './conversation.js';
 
@@ -8,7 +9,7 @@ let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight
 let composing = false, editorTask, savedCustom;
 const packs = new Map();
 let mode = localStorage.getItem('g2-call-mode') === 'local' ? 'local' : 'cloud';
-let cloudConfigured = true;
+let cloudConfigured = false, preparation = null;
 $('callMode').value = mode;
 $('callMode').onchange = () => {
   if (connected || inputInFlight) { $('callMode').value = mode; return; }
@@ -20,10 +21,39 @@ $('callMode').onchange = () => {
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
 function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
-function warmTask(card) {
-  if (mode !== 'cloud') return;
-  fetch('/api/warm', {method: 'POST', headers: {'content-type': 'application/json'},
-    body: JSON.stringify({task: card})}).catch(() => {});
+function warmTask(card, retry = false) {
+  if (mode !== 'cloud' || !cloudConfigured) {
+    preparation = null;
+    notice('当前工单：' + card.title);
+    return null;
+  }
+  if (sameTask(preparation?.card, card) && (!retry || preparation.status === 'preparing')) return preparation;
+  const job = {card, status: 'preparing'};
+  preparation = job;
+  notice('正在准备工单：' + card.title);
+  job.done = prepareTask(card, {retry})
+    .then(status => {
+      job.status = status;
+      if (preparation === job && !connected && !inputInFlight) {
+        if (status === 'failed' || status === 'unconfigured') notice('工单准备失败，点击开始可重试');
+        else notice((status === 'ready' ? '工单已就绪：' : '当前工单：') + card.title);
+      }
+      return status;
+    });
+  return job;
+}
+
+async function waitToDial(job) {
+  notice('工单正在模拟，完成这一轮后自动接通');
+  const cancel = $('cancelDial');
+  cancel.hidden = false;
+  try {
+    const cancelled = new Promise(resolve => { cancel.onclick = () => resolve('cancelled'); });
+    return await Promise.race([job.done, cancelled]);
+  } finally {
+    cancel.onclick = null;
+    cancel.hidden = true;
+  }
 }
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
@@ -95,11 +125,18 @@ async function start(useVoice) {
     showError('云端模式需要 API 凭据。可在任务设置中切换到纯本地。'); return;
   }
   inputInFlight = true; clearError();
-  notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
+  $('editTask').disabled = true;
   $('startVoice').disabled = $('startText').disabled = true;
   try {
     voice = useVoice;
     if (voice) { context = new AudioContext(); await context.resume(); }
+    const job = warmTask(task, true);
+    if (job?.status === 'preparing') {
+      const status = await waitToDial(job);
+      if (status === 'cancelled') { await cleanup('已取消拨打，工单继续准备'); return; }
+      checkPreparation(status);
+    }
+    notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
     socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     const activeSocket = socket;
     socket.binaryType = 'arraybuffer';
@@ -141,7 +178,7 @@ async function start(useVoice) {
     notice('未能开始，可以重试');
     showError(error.name === 'NotAllowedError' ? '没有获得麦克风权限。允许后可重试，也可以先用文字试聊。' : error.message);
   } finally {
-    inputInFlight = false; $('startVoice').disabled = $('startText').disabled = false;
+    inputInFlight = false; $('editTask').disabled = false; $('startVoice').disabled = $('startText').disabled = false;
   }
 }
 function onMessage({data}) {
@@ -255,7 +292,7 @@ $('taskForm').onsubmit = event => {
   const card = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
     opening: $('editOpening').value.trim(), checkpoints: samePoints ? editorTask.checkpoints
       : descriptions.map((description, i) => ({id: 'point_' + (i + 1), description}))};
-  rememberTask(card); renderTask(); warmTask(task); $('taskDialog').close(); notice('当前工单：' + task.title);
+  rememberTask(card); renderTask(); $('taskDialog').close(); warmTask(task);
 };
 $('editPoints').oninput = () => $('editPoints').setCustomValidity('');
 $('export').onclick = () => {
@@ -300,8 +337,7 @@ try {
     url.searchParams.delete('pack');
     history.replaceState(null, '', url);
   }
-  if (packs.size) notice('当前工单：' + task.title);
+  cloudConfigured = config.configured;
   $('prediction').checked = config.predictions; renderTask(); warmTask(task);
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
-  cloudConfigured = config.configured;
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }

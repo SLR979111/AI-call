@@ -126,6 +126,7 @@ def test_voice_websocket_uses_transcriber_for_selected_mode(mode, tmp_path, monk
     from fastapi.testclient import TestClient
     from app import main
 
+    monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "0")
     monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite3"))
     monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
     monkeypatch.setattr(main, "load_from_env", lambda: None)

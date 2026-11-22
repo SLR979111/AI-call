@@ -131,6 +131,13 @@ def warm_cloud_connection():
         app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
 
 
+async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False) -> dict:
+    if not app.state.settings.api_key:
+        return {"started": False, "status": "unconfigured"}
+    return await app.state.task_prewarmer.prepare(
+        card, app.state.cloud, app.state.opening_forecasts, ROOT / "runtime", wait=wait, retry=retry)
+
+
 @app.post("/api/warm")
 async def warm(payload: dict):
     """Start background synthetic conversations for a loaded task card."""
@@ -138,10 +145,8 @@ async def warm(payload: dict):
         card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
     except (ValidationError, TypeError, ValueError):
         return {"started": False, "error": "invalid_task"}
-    warm_cloud_connection()
-    task = app.state.task_prewarmer.start(card, app.state.cloud, app.state.opening_forecasts,
-                                        ROOT / "runtime")
-    return {"started": task is not None}
+    return await prepare_cloud_task(card, wait=payload.get("wait") is True,
+                                    retry=payload.get("retry") is True)
 
 
 @app.get("/api/prediction/stats")
@@ -223,11 +228,13 @@ async def websocket(ws: WebSocket):
                             await ws.close(code=1011)
                             break
                     else:
+                        result = await prepare_cloud_task(card, wait=True, retry=True)
+                        if result["status"] == "failed":
+                            await error("工单模拟未完成，请重新开始以重试。")
+                            await ws.close(code=1011)
+                            break
                         warm_cloud_connection()
                     forecasts = app.state.local_forecasts if local else app.state.opening_forecasts
-                    # A real call wins immediately; prewarm cache entries already
-                    # written before this point remain valid.
-                    app.state.task_prewarmer.cancel(card)
                     session = Session(card, cloud, Brain(
                         cloud, forecasts,
                         forecast_branches=app.state.settings.forecast_branches), send,

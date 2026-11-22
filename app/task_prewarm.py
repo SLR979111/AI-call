@@ -4,8 +4,8 @@ After a task is loaded, synthetic Sessions run the normal Brain/Cloud path
 against several preset scenarios.  All transport frames and PCM go to a sink;
 only model/TTS caches and a separate JSONL audit log are kept.
 
-Scenarios run in parallel and repeat until a real call starts.  The real start
-cancels the whole group immediately; cache entries already written remain.
+Scenarios run in parallel once per task card. Callers share the round and
+can wait for its result before starting a live cloud call.
 
 This module is intentionally standalone: it does not depend on prediction
 candidate generation or the rule engine.
@@ -17,7 +17,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import math
 import os
 import struct
 import time
@@ -33,10 +32,7 @@ from .session import Session
 
 ENABLED_ENV = "TASK_PREWARM_ON_LOAD"
 CONCURRENCY_ENV = "TASK_PREWARM_CONCURRENCY"
-LOOP_DELAY_ENV = "TASK_PREWARM_LOOP_DELAY"
-MAX_ROUNDS_ENV = "TASK_PREWARM_MAX_ROUNDS"
 DEFAULT_CONCURRENCY = 4
-DEFAULT_LOOP_DELAY = 1.0
 
 OFFICIAL_TURNS = (
     "工单到哪一步了？",
@@ -91,14 +87,6 @@ def _int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
-
-
-def _float_env(name: str, default: float) -> float:
-    try:
-        value = float(os.getenv(name, "").strip() or default)
-    except ValueError:
-        return default
-    return value if math.isfinite(value) and value >= 0 else default
 
 
 def task_key(card: TaskCard) -> str:
@@ -163,7 +151,7 @@ def preset_dialogues(card: TaskCard) -> list[tuple[str, list[str]]]:
 class PrewarmGroup:
     card: TaskCard
     path: Path
-    round: int = 0
+    round: int = 1
 
 
 class _Sink:
@@ -192,6 +180,11 @@ class _Sink:
                 if frame["type"] in ("reply_done", "error"):
                     if session.response is not None:
                         await asyncio.shield(session.response)
+                    if frame["type"] == "reply_done" and session.forecast is not None:
+                        # A synthetic player is faster than a human. Let candidate
+                        # publication and its audio finish before the next script line.
+                        await session.forecast
+                        await session.settle_audio()
                     return frame
                 unit = frame["unit"]
                 done = frame["type"] == "utterance_end"
@@ -202,11 +195,11 @@ class _Sink:
 
 async def _run_one(group: PrewarmGroup, cloud: Cloud,
                    opening_forecasts: OpeningForecastCache | None,
-                   scenario: str, turns: list[str]) -> None:
+                   scenario: str, turns: list[str]) -> bool:
     if not turns:
-        return
+        return True
     sink = _Sink()
-    brain = Brain(cloud, opening_forecasts)
+    brain = Brain(cloud, opening_forecasts, forecast_branches=cloud.settings.forecast_branches)
     session = Session(
         group.card, cloud, brain, sink,
         voice=True,
@@ -234,11 +227,11 @@ async def _run_one(group: PrewarmGroup, cloud: Cloud,
             except TimeoutError:
                 _write(group.path, {"event": "scenario_timeout", "scenario": scenario,
                                     "round": group.round, "stage": stage})
-                return
+                return False
             if reply["type"] == "error":
                 _write(group.path, {"event": "session_error", "scenario": scenario, "round": group.round,
                                     "stage": stage, "message": str(reply.get("message", ""))[:200]})
-                return
+                return False
             _write(group.path, {"event": "reply_done", "scenario": scenario, "round": group.round,
                                 "epoch": reply["epoch"], "reused": reply.get("reused", False)})
             completed = index
@@ -247,13 +240,13 @@ async def _run_one(group: PrewarmGroup, cloud: Cloud,
                             "elapsed_ms": round((time.perf_counter() - started) * 1000),
                             "frames": sink.frames,
                             "audio_bytes": sink.audio_bytes})
+        return True
     finally:
         await session.close()
 
 
 async def _run_round(group: PrewarmGroup, cloud: Cloud,
-                     opening_forecasts: OpeningForecastCache | None) -> None:
-    group.round += 1
+                     opening_forecasts: OpeningForecastCache | None) -> bool:
     dialogues = preset_dialogues(group.card)
     concurrency = min(_int_env(CONCURRENCY_ENV, DEFAULT_CONCURRENCY),
                       max(1, len(dialogues)))
@@ -261,9 +254,9 @@ async def _run_round(group: PrewarmGroup, cloud: Cloud,
     _write(group.path, {"event": "round_start", "round": group.round,
                         "scenarios": len(dialogues), "concurrency": concurrency})
 
-    async def one(name: str, turns: list[str]) -> None:
+    async def one(name: str, turns: list[str]) -> bool:
         async with semaphore:
-            await _run_one(group, cloud, opening_forecasts, name, turns)
+            return await _run_one(group, cloud, opening_forecasts, name, turns)
 
     cancelled = False
     try:
@@ -273,6 +266,7 @@ async def _run_round(group: PrewarmGroup, cloud: Cloud,
             if isinstance(result, Exception):
                 _write(group.path, {"event": "scenario_error", "scenario": name,
                                     "round": group.round, "error": type(result).__name__})
+        return all(result is True for result in results)
     except asyncio.CancelledError:
         cancelled = True
         raise
@@ -281,72 +275,52 @@ async def _run_round(group: PrewarmGroup, cloud: Cloud,
                             "cancelled": cancelled})
 
 
-async def _loop(group: PrewarmGroup, cloud: Cloud,
-                opening_forecasts: OpeningForecastCache | None) -> None:
-    max_rounds = _int_env(MAX_ROUNDS_ENV, 0) if os.getenv(MAX_ROUNDS_ENV, "").strip() else 0
-    delay = _float_env(LOOP_DELAY_ENV, DEFAULT_LOOP_DELAY)
-    try:
-        while True:
-            await _run_round(group, cloud, opening_forecasts)
-            if max_rounds and group.round >= max_rounds:
-                break
-            if delay:
-                await asyncio.sleep(delay)
-    except asyncio.CancelledError:
-        _write(group.path, {"event": "prewarm_cancelled", "task": group.card.title,
-                            "round": group.round})
-        raise
-    finally:
-        _write(group.path, {"event": "prewarm_summary", "task": group.card.title,
-                            "rounds": group.round})
-
-
 class TaskPrewarmer:
-    """Own background scenarios and their cooldowns for one service lifetime."""
+    """Share an in-flight round and remember its outcome for this service lifetime."""
 
     def __init__(self):
         self.active: dict[str, asyncio.Task] = {}
-        self.pending: set[asyncio.Task] = set()
-        self.blocked_until: dict[str, float] = {}
+        self.outcomes: dict[str, str] = {}
 
-    def start(self, card: TaskCard, cloud: Cloud, forecasts: OpeningForecastCache | None,
-              log_root: Path) -> asyncio.Task | None:
+    async def prepare(self, card: TaskCard, cloud: Cloud, forecasts: OpeningForecastCache | None,
+                      log_root: Path, *, wait: bool = False, retry: bool = False) -> dict:
+        if not enabled():
+            return {"started": False, "status": "disabled"}
         key = task_key(card)
-        if not enabled() or time.monotonic() < self.blocked_until.get(key, 0):
-            return None
-        existing = self.active.get(key)
-        if existing is not None and not existing.done():
-            return existing
-        path = _log_path(log_root, key)
-        group = PrewarmGroup(card=card, path=path)
-        _write(path, {"event": "prewarm_start", "task": card.title, "task_key": key,
-                      "ts": datetime.now(timezone.utc).isoformat()})
-        task = asyncio.create_task(_loop(group, cloud, forecasts))
-        self.active[key] = task
-        self.pending.add(task)
+        outcome = self.outcomes.get(key)
+        if outcome is not None and not (outcome == "failed" and retry):
+            return {"started": False, "status": outcome}
 
-        def finished(task):
-            self.pending.discard(task)
-            if self.active.get(key) is task:
-                self.active.pop(key)
-            if not task.cancelled() and (error := task.exception()) is not None:
-                logging.getLogger(__name__).warning("Task prewarm failed", exc_info=error)
+        task = self.active.get(key)
+        if task is None:
+            self.outcomes.pop(key, None)
+            task = asyncio.create_task(self._prepare(key, card, cloud, forecasts, log_root))
+            self.active[key] = task
+        status = await asyncio.shield(task) if wait else "preparing"
+        return {"started": True, "status": status}
 
-        task.add_done_callback(finished)
-        return task
-
-    def cancel(self, card: TaskCard) -> None:
-        now = time.monotonic()
-        self.blocked_until = {key: end for key, end in self.blocked_until.items() if end > now}
-        key = task_key(card)
-        self.blocked_until[key] = now + 5
-        task = self.active.pop(key, None)
-        if task is not None:
-            task.cancel()
+    async def _prepare(self, key, card, cloud, forecasts, log_root) -> str:
+        try:
+            path = _log_path(log_root, key)
+            group = PrewarmGroup(card, path)
+            _write(path, {"event": "prewarm_start", "task": card.title, "task_key": key,
+                          "ts": datetime.now(timezone.utc).isoformat()})
+            complete = await _run_round(group, cloud, forecasts)
+            status = "ready" if complete else "failed"
+            _write(path, {"event": "prewarm_summary", "task": card.title, "rounds": 1,
+                          "status": status})
+        except Exception:
+            logging.getLogger(__name__).exception("Task preparation failed")
+            status = "failed"
+        finally:
+            self.active.pop(key, None)
+        self.outcomes[key] = status
+        return status
 
     async def close(self) -> None:
-        pending = list(self.pending)
+        pending = list(self.active.values())
         for task in pending:
-            if not task.cancelling():
-                task.cancel()
+            task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+        self.active.clear()
+        self.outcomes.clear()

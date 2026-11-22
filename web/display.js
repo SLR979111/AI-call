@@ -14,6 +14,7 @@
  * 复用 audio.js 的 Player / Microphone：AEC3 + 回声参考 + 每 70ms 的 played 回执
  * 驱动服务端 checkpoint，这部分一行都不能省。
  */
+import {prepareTask, checkPreparation} from './preparation.js';
 import { Player, Microphone } from './audio.js';
 import { SCRIPT } from './display-script.js';
 
@@ -206,7 +207,10 @@ function showError(text) {
 }
 function clearError() { $('err').classList.add('hidden'); }
 
+let dialAttempt = 0;
+
 async function start(useVoice) {
+  const attempt = ++dialAttempt;
   hideHint();
   clearError();
   // 先切到通话界面再等授权：否则浏览器弹麦克风权限时用户会觉得"点了没反应"
@@ -221,6 +225,11 @@ async function start(useVoice) {
       context = new AudioContext();
       await context.resume();
     }
+    if (attempt !== dialAttempt) return;
+    $('phase').textContent = '正在准备工单';
+    const status = await prepareTask(task, {retry: true});
+    if (attempt !== dialAttempt) return;
+    checkPreparation(status);
     socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     socket.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => {
@@ -270,6 +279,7 @@ function showCallView() {
 }
 
 async function finish(label = '') {
+  dialAttempt++;
   connected = false;
   clearInterval(timer);
   mic?.close(); mic = null;
@@ -367,7 +377,6 @@ function interrupt(source = 'manual') {
   interrupted = true;
 }
 
-$('callBtn').addEventListener('click', () => start(true));
 
 $('stopBtn').addEventListener('click', async (ev) => {
   ev.stopPropagation();
@@ -400,6 +409,8 @@ if (DEMO) {
   try {
     const config = await (await fetch('/api/config')).json();
     task = config.default_task;
+    if (config.configured) void prepareTask(task, {wait: false});
+    $('callBtn').addEventListener('click', () => start(true));
     $('incomingSub').textContent = config.configured
       ? '点击接听'
       : '服务未配置 API 凭据（.env）';

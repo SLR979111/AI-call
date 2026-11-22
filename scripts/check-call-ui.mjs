@@ -8,11 +8,22 @@ import path from 'node:path';
 const base = process.env.CALL_URL || 'http://127.0.0.1:8088';
 const out = path.resolve('runtime/validation');
 await fs.mkdir(out, {recursive: true});
-const browser = await chromium.launch({channel: 'msedge', headless: true});
+const browser = await chromium.launch({channel: 'msedge', headless: true,
+  args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']});
 const report = {}, errors = [], sent = [];
 try {
   const page = await browser.newPage({viewport: {width: 1100, height: 800}});
   const config = await (await page.request.get(base + "/api/config")).json();
+  await page.route('**/api/config', route => route.fulfill({json: {...config, configured: true}}));
+  let releaseFirstRound;
+  let preparationGate = new Promise(resolve => { releaseFirstRound = resolve; });
+  const preparations = [];
+  let failPreparation = false;
+  await page.route('**/api/warm', async route => {
+    preparations.push(route.request().postDataJSON());
+    await preparationGate;
+    await route.fulfill({json: {started: true, status: failPreparation ? 'failed' : 'ready'}});
+  });
   await page.addInitScript(legacy => {
     if (!sessionStorage.getItem('migration-seeded')) {
       localStorage.setItem('g2-task', JSON.stringify(legacy));
@@ -25,6 +36,7 @@ try {
   await page.routeWebSocket('**/ws', ws => {
     peer = ws;
     ws.onMessage(raw => {
+      if (typeof raw !== 'string') return;
       const event = JSON.parse(raw); sent.push(event);
       if (event.type === 'start') {
         emit({type: 'reply_start', epoch: 1});
@@ -36,6 +48,15 @@ try {
   });
   await page.goto(base);
   await page.getByRole('button', {name: '文字试聊', exact: true}).click();
+  await page.locator('#cancelDial:visible').waitFor();
+  await page.locator('#cancelDial').click();
+  await page.locator('#startText:enabled').waitFor();
+  assert.equal(sent.length, 0);
+  await page.locator('#startText').click();
+  await page.locator('#cancelDial:visible').waitFor();
+  assert.equal(preparations.length, 1);
+  assert.equal(sent.length, 0);
+  releaseFirstRound();
   await page.locator('[data-id="reply-1"] .copy').waitFor();
   assert.equal(sent.find(event => event.type === 'start').task.title, config.default_task.title);
   report.unmodified_legacy_default_migrates = true;
@@ -164,6 +185,40 @@ try {
   await page.locator('#startText:enabled').waitFor();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('g2-task')).opening), config.task_packs['jd-long-call'].opening);
   report.interactive_work_orders = true;
+  failPreparation = true;
+  const priorStarts = sent.filter(event => event.type === 'start').length;
+  await page.reload();
+  await page.getByText('工单准备失败，点击开始可重试').waitFor();
+  await page.locator('#startText').click();
+  await page.locator('#error:visible').waitFor();
+  assert.equal(sent.filter(event => event.type === 'start').length, priorStarts);
+  assert.equal(preparations.at(-1).retry, true);
+  failPreparation = false;
+  await page.locator('#startText').click();
+  await page.locator('[data-id="reply-1"] .copy').waitFor();
+  assert.equal(sent.filter(event => event.type === 'start').length, priorStarts + 1);
+  report.preparation_wait_cancel_ready_and_retry = true;
+  await page.locator('#stop').click();
+  let releaseVoice;
+  preparationGate = new Promise(resolve => { releaseVoice = resolve; });
+  await page.addInitScript(() => {
+    window.micRequests = 0;
+    const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = constraints => {
+      window.micRequests++;
+      return getMedia(constraints);
+    };
+  });
+  await page.reload();
+  await page.locator('#startVoice').click();
+  await page.locator('#cancelDial:visible').waitFor();
+  assert.equal(await page.evaluate(() => window.micRequests), 0);
+  releaseVoice();
+  await page.locator('[data-id="reply-1"] .copy').waitFor();
+  assert.equal(await page.evaluate(() => window.micRequests), 1);
+  assert.equal(sent.filter(event => event.type === 'start').at(-1).voice, true);
+  report.microphone_opens_after_preparation = true;
+
   assert.deepEqual(errors, []); report.errors = errors; report.passed = true;
 } finally {
   await fs.writeFile(path.join(out, 'call-ui-check.json'), JSON.stringify(report, null, 2));

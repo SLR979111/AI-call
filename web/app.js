@@ -1,3 +1,4 @@
+import {prepareTask, checkPreparation} from './preparation.js';
 import {Player, Microphone} from './audio.js';
 
 const $ = id => document.getElementById(id);
@@ -501,6 +502,8 @@ async function start(useVoice) {
       }
     }
     
+    $('connection').textContent = '正在准备工单';
+    checkPreparation(await prepareTask(task, {retry: true}));
     socket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
     socket.binaryType = 'arraybuffer';
     
@@ -636,6 +639,7 @@ function closeTaskDialog() {
 }
 
 function saveTask(formData) {
+  if (connected || inputInFlight) return;
   const points = formData.get('points').split('\n').filter(l => l.trim());
   
   task = {
@@ -650,6 +654,7 @@ function saveTask(formData) {
   };
   
   renderPipeline();
+  void prepareTask(task, {wait: false});
   closeTaskDialog();
 }
 
@@ -661,6 +666,7 @@ async function init() {
     
     if (config.default_task) {
       task = config.default_task;
+      if (config.configured) void prepareTask(task, {wait: false});
       renderPipeline();
     }
     
