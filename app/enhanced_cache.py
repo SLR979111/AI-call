@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
 
 from .persistent_cache import PersistentCache
 
@@ -15,7 +13,7 @@ from .persistent_cache import PersistentCache
 @dataclass
 class CacheEntry:
     """Cache entry with frequency and recency tracking."""
-    value: Any
+    value: str
     size: int
     created_at: float
     last_accessed: float
@@ -30,42 +28,88 @@ class CacheEntry:
         return self.access_count * decay_factor
 
 
-class EnhancedLLMCache:
-    """LLM response cache with LFU eviction and optional disk backing."""
+class _TextCache:
+    """Frequency-weighted RAM cache backed by an independently bounded SQLite LRU."""
 
+    namespace: str
+
+    def __init__(self, max_entries: int, max_size_mb: float, store: PersistentCache | None):
+        self.max_entries = max_entries
+        self.max_size_bytes = int(max_size_mb * 1024 * 1024)
+        self.store = store
+        self.cache: dict[str, CacheEntry] = {}
+        self.hits = self.misses = self.evictions = 0
+        if store is not None:
+            for record in store.load(self.namespace, max_entries=max_entries,
+                                     max_bytes=self.max_size_bytes):
+                self._restore(record)
+
+    def _restore(self, record) -> CacheEntry | None:
+        try:
+            value = record.value.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        entry = CacheEntry(value, record.size, record.created_at,
+                           record.accessed_at, record.access_count)
+        self._retain(record.key, entry)
+        return entry
+
+    def _retain(self, key, entry):
+        self.cache.pop(key, None)
+        if self.max_entries < 1 or entry.size > self.max_size_bytes:
+            return
+        size = sum(item.size for item in self.cache.values()) + entry.size
+        while len(self.cache) >= self.max_entries or size > self.max_size_bytes:
+            victim = min(self.cache, key=lambda k: self.cache[k].lfu_score)
+            size -= self.cache.pop(victim).size
+            self.evictions += 1
+        self.cache[key] = entry
+
+    def _read(self, key):
+        entry = self.cache.get(key)
+        if entry is not None:
+            entry.last_accessed = time.time()
+            entry.access_count += 1
+            if self.store is not None:
+                self.store.touch(self.namespace, key)
+        elif self.store is not None:
+            record = self.store.get(self.namespace, key)
+            if record is not None:
+                entry = self._restore(record)
+        if entry is None:
+            self.misses += 1
+            return None
+        self.hits += 1
+        return entry.value
+
+    def _write(self, key, value):
+        encoded = value.encode("utf-8")
+        now = time.time()
+        self._retain(key, CacheEntry(value, len(encoded), now, now, 1))
+        if self.store is not None:
+            self.store.put(self.namespace, key, encoded, max_entries=self.max_entries,
+                           max_bytes=self.max_size_bytes)
+
+    def stats(self) -> dict:
+        total = self.hits + self.misses
+        size = sum(item.size for item in self.cache.values())
+        report = {"hits": self.hits, "misses": self.misses, "evictions": self.evictions,
+                  "hit_rate": round(self.hits / total, 3) if total else 0.0,
+                  "entries": len(self.cache), "size_mb": round(size / (1024 * 1024), 2),
+                  "persistent": self.store is not None}
+        if self.store is not None:
+            report["disk"] = self.store.stats(self.namespace)
+        return report
+
+
+class EnhancedLLMCache(_TextCache):
     namespace = "llm"
 
     def __init__(self, max_entries: int = 500, max_size_mb: float = 10.0,
                  store: PersistentCache | None = None):
-        self.max_entries = max_entries
-        self.max_size_bytes = int(max_size_mb * 1024 * 1024)
-        self.cache: dict[str, CacheEntry] = {}
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
+        super().__init__(max_entries, max_size_mb, store)
         self.prefetch_hits = 0
-        self.store = store
-        self._load()
 
-    def _load(self):
-        if self.store is None:
-            return
-        for record in self.store.load(
-            self.namespace, max_entries=self.max_entries,
-            max_bytes=self.max_size_bytes,
-        ):
-            try:
-                value = record.value.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            self.cache[record.key] = CacheEntry(
-                value=value,
-                size=record.size,
-                created_at=record.created_at,
-                last_accessed=record.accessed_at,
-                access_count=record.access_count,
-            )
-    
     def _make_key(self, messages: list[dict], model: str, temperature: float,
                   max_tokens: int | None = None) -> str:
         """Create a key over the full conversation, not just the last turn."""
@@ -77,77 +121,15 @@ class EnhancedLLMCache:
         }
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()[:32]
-    
+
     def get(self, messages: list[dict], model: str, temperature: float,
             *, max_tokens: int | None = None) -> str | None:
-        """Get a cached response, promoting disk entries on demand."""
-        key = self._make_key(messages, model, temperature, max_tokens)
-        entry = self.cache.get(key)
+        return self._read(self._make_key(messages, model, temperature, max_tokens))
 
-        if entry is None and self.store is not None:
-            record = self.store.get(self.namespace, key)
-            if record is not None:
-                try:
-                    value = record.value.decode("utf-8")
-                except UnicodeDecodeError:
-                    value = None
-                if value is not None:
-                    while (len(self.cache) >= self.max_entries or
-                           self._total_size() + record.size > self.max_size_bytes):
-                        if not self.cache:
-                            break
-                        self._evict_lfu()
-                    entry = CacheEntry(
-                        value=value,
-                        size=record.size,
-                        created_at=record.created_at,
-                        last_accessed=record.accessed_at,
-                        access_count=record.access_count,
-                    )
-                    self.cache[key] = entry
-
-        if entry is None:
-            self.misses += 1
-            return None
-
-        # Update access stats
-        entry.last_accessed = time.time()
-        entry.access_count += 1
-        self.hits += 1
-        if self.store is not None:
-            self.store.touch(self.namespace, key)
-
-        return entry.value
-    
     def put(self, messages: list[dict], model: str, temperature: float, response: str,
             *, max_tokens: int | None = None):
-        """Cache a response with LFU tracking and write-through persistence."""
-        key = self._make_key(messages, model, temperature, max_tokens)
-        encoded = response.encode('utf-8')
-        size = len(encoded)
-        
-        # Evict if necessary
-        while (len(self.cache) >= self.max_entries or 
-               self._total_size() + size > self.max_size_bytes):
-            if not self.cache:
-                break
-            self._evict_lfu()
-        
-        # Store entry
-        now = time.time()
-        self.cache[key] = CacheEntry(
-            value=response,
-            size=size,
-            created_at=now,
-            last_accessed=now,
-            access_count=1,
-        )
-        if self.store is not None:
-            self.store.put(
-                self.namespace, key, encoded,
-                max_entries=self.max_entries, max_bytes=self.max_size_bytes,
-            )
-    
+        self._write(self._make_key(messages, model, temperature, max_tokens), response)
+
     def prefetch(self, predictions: list[dict]):
         """Mark predicted responses for priority retention."""
         for pred in predictions:
@@ -162,189 +144,30 @@ class EnhancedLLMCache:
                 self.prefetch_hits += 1
                 if self.store is not None:
                     self.store.touch(self.namespace, key)
-    
-    def _evict_lfu(self):
-        """Evict entry with lowest LFU score."""
-        if not self.cache:
-            return
-        
-        # Find entry with lowest score
-        victim_key = min(self.cache.keys(), 
-                        key=lambda k: self.cache[k].lfu_score)
-        del self.cache[victim_key]
-        if self.store is not None:
-            self.store.delete(self.namespace, victim_key)
-        self.evictions += 1
-    
-    def _total_size(self) -> int:
-        """Calculate total cache size in bytes."""
-        return sum(entry.size for entry in self.cache.values())
-    
-    def stats(self) -> dict:
-        """Return cache statistics."""
-        total = self.hits + self.misses
-        hit_rate = self.hits / total if total > 0 else 0.0
-        report = {
-            "hits": self.hits,
-            "misses": self.misses,
-            "evictions": self.evictions,
-            "prefetch_hits": self.prefetch_hits,
-            "hit_rate": round(hit_rate, 3),
-            "entries": len(self.cache),
-            "size_mb": round(self._total_size() / (1024 * 1024), 2),
-            "persistent": self.store is not None,
-        }
-        if self.store is not None:
-            report["disk"] = self.store.stats(self.namespace)
-        return report
-    
+
+    def stats(self):
+        return {**super().stats(), "prefetch_hits": self.prefetch_hits}
+
     def clear_stats(self):
-        """Reset statistics."""
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-        self.prefetch_hits = 0
+        self.hits = self.misses = self.evictions = self.prefetch_hits = 0
 
 
-class EnhancedASRCache:
-    """ASR cache with full-audio fingerprinting and LFU eviction."""
-
+class EnhancedASRCache(_TextCache):
     namespace = "asr"
 
     def __init__(self, max_entries: int = 200, max_size_mb: float = 20.0,
                  store: PersistentCache | None = None):
-        self.max_entries = max_entries
-        self.max_size_bytes = int(max_size_mb * 1024 * 1024)
-        self.cache: dict[str, CacheEntry] = {}
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-        self.store = store
-        self._load()
+        super().__init__(max_entries, max_size_mb, store)
 
-    def _load(self):
-        if self.store is None:
-            return
-        for record in self.store.load(
-            self.namespace, max_entries=self.max_entries,
-            max_bytes=self.max_size_bytes,
-        ):
-            try:
-                value = record.value.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            self.cache[record.key] = CacheEntry(
-                value=value,
-                size=record.size,
-                created_at=record.created_at,
-                last_accessed=record.accessed_at,
-                access_count=record.access_count,
-            )
-    
     def _make_key(self, pcm: bytes) -> str:
         """Hash the complete PCM; a prefix/suffix fingerprint can collide."""
         return hashlib.sha256(pcm).hexdigest()[:32]
-    
+
     def get(self, pcm: bytes) -> str | None:
-        """Get a cached transcription, promoting disk entries on demand."""
-        key = self._make_key(pcm)
-        entry = self.cache.get(key)
+        return self._read(self._make_key(pcm))
 
-        if entry is None and self.store is not None:
-            record = self.store.get(self.namespace, key)
-            if record is not None:
-                try:
-                    value = record.value.decode("utf-8")
-                except UnicodeDecodeError:
-                    value = None
-                if value is not None:
-                    while (len(self.cache) >= self.max_entries or
-                           self._total_size() + record.size > self.max_size_bytes):
-                        if not self.cache:
-                            break
-                        self._evict_lfu()
-                    entry = CacheEntry(
-                        value=value,
-                        size=record.size,
-                        created_at=record.created_at,
-                        last_accessed=record.accessed_at,
-                        access_count=record.access_count,
-                    )
-                    self.cache[key] = entry
-
-        if entry is None:
-            self.misses += 1
-            return None
-        
-        # Update access stats
-        entry.last_accessed = time.time()
-        entry.access_count += 1
-        self.hits += 1
-        if self.store is not None:
-            self.store.touch(self.namespace, key)
-        
-        return entry.value
-    
     def put(self, pcm: bytes, text: str):
-        """Cache a transcription with LFU tracking and write-through persistence."""
-        key = self._make_key(pcm)
-        size = len(pcm)
-        encoded = text.encode("utf-8")
-        
-        # Evict if necessary
-        while (len(self.cache) >= self.max_entries or 
-               self._total_size() + size > self.max_size_bytes):
-            if not self.cache:
-                break
-            self._evict_lfu()
-        
-        # Store entry
-        now = time.time()
-        self.cache[key] = CacheEntry(
-            value=text,
-            size=size,
-            created_at=now,
-            last_accessed=now,
-            access_count=1,
-        )
-        if self.store is not None:
-            self.store.put(
-                self.namespace, key, encoded,
-                max_entries=self.max_entries, max_bytes=self.max_size_bytes,
-            )
-    
-    def _evict_lfu(self):
-        """Evict entry with lowest LFU score."""
-        if not self.cache:
-            return
-        
-        victim_key = min(self.cache.keys(), 
-                        key=lambda k: self.cache[k].lfu_score)
-        del self.cache[victim_key]
-        if self.store is not None:
-            self.store.delete(self.namespace, victim_key)
-        self.evictions += 1
-    
-    def _total_size(self) -> int:
-        """Calculate total cache size in bytes."""
-        return sum(entry.size for entry in self.cache.values())
-    
-    def stats(self) -> dict:
-        """Return cache statistics."""
-        total = self.hits + self.misses
-        hit_rate = self.hits / total if total > 0 else 0.0
-        report = {
-            "hits": self.hits,
-            "misses": self.misses,
-            "evictions": self.evictions,
-            "hit_rate": round(hit_rate, 3),
-            "entries": len(self.cache),
-            "size_mb": round(self._total_size() / (1024 * 1024), 2),
-            "persistent": self.store is not None,
-        }
-        if self.store is not None:
-            report["disk"] = self.store.stats(self.namespace)
-        return report
+        self._write(self._make_key(pcm), text)
 
 
 class EnhancedCacheManager:

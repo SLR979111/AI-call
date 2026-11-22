@@ -144,9 +144,7 @@ class OpeningForecastCache:
                 max_entries=16, max_bytes=2_000_000,
             )
         if len(self.entries) > 16:
-            evicted, _ = self.entries.popitem(last=False)
-            if self.disk is not None:
-                self.disk.delete(self.namespace, evicted)
+            self.entries.popitem(last=False)
 
 
 async def stream_candidates(chunks, limit):

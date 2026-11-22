@@ -57,6 +57,7 @@ class LocalProvider(Cloud):
         client = httpx.AsyncClient(base_url="http://127.0.0.1:11434", trust_env=False,
                                    follow_redirects=False, timeout=httpx.Timeout(75, connect=2))
         super().__init__(Settings(api_key="", base_url="http://127.0.0.1:11434", model=MODEL, voice=VOICE), client)
+        self.owns_client = True
         self.recognizer = recognizer
         self.engine = None
         self.ready_lock = asyncio.Lock()
@@ -216,9 +217,10 @@ class LocalProvider(Cloud):
             yield pcm[offset:offset + 1920]
 
     async def close(self):
-        await super().close()
-        await self.client.aclose()
-        self.worker.shutdown(wait=True, cancel_futures=True)
+        try:
+            await super().close()
+        finally:
+            await asyncio.to_thread(self.worker.shutdown, wait=True, cancel_futures=True)
 
 
 if __name__ == "__main__":

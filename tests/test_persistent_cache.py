@@ -1,6 +1,7 @@
 """Cross-restart persistence and key-correctness for the shared cache."""
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,79 @@ def test_opening_forecast_cache_survives_reopen(tmp_path):
     assert complete is True
     assert [entry.model_dump() for entry in items] == [item.model_dump()]
     disk.close()
+
+
+def test_failed_trim_rolls_back_write_for_other_connections(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    disk = PersistentCache(path)
+    try:
+        disk.put("tts", "old", b"A", max_entries=1, max_bytes=20)
+        with sqlite3.connect(path) as other:
+            other.execute("CREATE TRIGGER reject_trim BEFORE DELETE ON cache_entries "
+                          "BEGIN SELECT RAISE(ABORT, 'disk failure'); END")
+            with pytest.raises(sqlite3.IntegrityError, match="disk failure"):
+                disk.put("tts", "new", b"B", max_entries=1, max_bytes=20)
+            assert other.execute("SELECT key FROM cache_entries").fetchall() == [("old",)]
+    finally:
+        disk.close()
+
+
+def test_replacing_full_text_cache_preserves_other_entries():
+    cache = EnhancedASRCache(max_entries=2, max_size_mb=8 / (1024 * 1024))
+    cache.put(b"a" * 100, "aa")
+    cache.put(b"b" * 100, "bb")
+    cache.put(b"b" * 100, "ccc")
+    assert cache.get(b"a" * 100) == "aa"
+    assert cache.stats()["evictions"] == 0
+    assert cache.get(b"b" * 100) == "ccc"
+
+
+async def test_tts_disk_survives_ram_eviction_and_counts_each_hit_once(tmp_path, monkeypatch):
+    from app import providers
+    monkeypatch.setattr(providers, "TTS_MEMORY_ENTRIES", 1)
+    monkeypatch.setattr(providers, "TTS_MEMORY_BYTES", 4)
+    path = tmp_path / "cache.sqlite3"
+    cloud = Cloud(Settings(api_key="test"), cache_path=path)
+    try:
+        cloud.remember("one", b"12")
+        cloud.remember("two", b"34")
+        cloud.remember("long", b"123456")
+        assert cloud.cached("one") == b"12"
+        assert cloud.cached("long") == b"123456"
+        assert list(cloud.cache.values()) == [b"12"]
+        records = cloud.persistent.load("tts", max_entries=3)
+        assert {r.value: r.access_count for r in records} == {b"12": 2, b"34": 1, b"123456": 2}
+    finally:
+        await cloud.close()
+    reopened = Cloud(Settings(api_key="test"), cache_path=path)
+    try:
+        assert len(reopened.cache) == 1 and reopened.cache_bytes <= 4
+        assert reopened.cached("two") == b"34"
+    finally:
+        await reopened.close()
+
+
+async def test_live_cache_write_failure_preserves_ram_and_recovers(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    cloud = Cloud(Settings(api_key="test"), cache_path=path)
+    try:
+        with sqlite3.connect(path) as other:
+            other.execute("CREATE TRIGGER no_write BEFORE INSERT ON cache_entries "
+                          "BEGIN SELECT RAISE(ABORT, 'disk failure'); END")
+        cloud.remember("one", b"12")
+        assert cloud.cached("one") == b"12"
+        with sqlite3.connect(path) as other:
+            other.execute("DROP TRIGGER no_write")
+        cloud.remember("two", b"34")
+        assert cloud.persistent.stats("tts")["entries"] == 1
+    finally:
+        await cloud.close()
+
+
+async def test_unusable_cache_path_still_allows_calls(tmp_path):
+    cloud = Cloud(Settings(api_key="test"), cache_path=tmp_path)
+    try:
+        cloud.remember("one", b"12")
+        assert cloud.persistent is None and cloud.cached("one") == b"12"
+    finally:
+        await cloud.close()

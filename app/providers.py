@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 import time
 import wave
@@ -40,13 +41,18 @@ class Settings:
     def load(cls):
         # Keep this implementation independent from the parent app's .env.
         load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+        try:
+            branches = int(os.getenv("PREDICTION_BRANCHES", "5"))
+        except ValueError:
+            logging.getLogger(__name__).warning("Invalid PREDICTION_BRANCHES; using 5")
+            branches = 5
         return cls(
             api_key=os.getenv("DEEPSEEK_API_KEY", "").strip(),
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
             model=os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-flash"),
             voice=os.getenv("DEEPSEEK_TTS_VOICE", "stella"),
             predictions=os.getenv("PREDICTION_ENABLED", "1") == "1",
-            forecast_branches=max(1, min(int(os.getenv("PREDICTION_BRANCHES", "5")), 5)),
+            forecast_branches=max(1, min(branches, 5)),
         )
 
 
@@ -83,7 +89,7 @@ class Cloud:
         self.owns_client = client is None
         self.on_cache_event = on_cache_event
         self.audit = CacheAudit(cache_audit_path or os.getenv("CACHE_AUDIT_PATH", "").strip())
-        self.persistent = PersistentCache(cache_path) if cache_path else None
+        self.persistent = PersistentCache.for_live_calls(cache_path)
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         # One synthesis per text: a forecast batch often repeats a sentence.
         self.warm_tasks: dict[str, asyncio.Task] = {}
@@ -95,7 +101,7 @@ class Cloud:
         self.last_tts_cache_hit: bool | None = None
         if self.persistent is not None:
             for record in reversed(self.persistent.load(
-                "tts", max_entries=TTS_DISK_ENTRIES, max_bytes=TTS_DISK_BYTES,
+                "tts", max_entries=TTS_MEMORY_ENTRIES, max_bytes=TTS_MEMORY_BYTES,
             )):
                 self.cache[record.key] = record.value
                 self.cache_bytes += len(record.value)
@@ -237,28 +243,28 @@ class Cloud:
         # Voice is part of the identity: a cached PCM must match its speaker.
         return f"{self.settings.voice}\0{text}"
 
-    def _trim_tts(self):
-        while (len(self.cache) > TTS_MEMORY_ENTRIES
-               or self.cache_bytes > TTS_MEMORY_BYTES):
-            key, removed = self.cache.popitem(last=False)
+    def _retain_tts(self, key: str, pcm: bytes):
+        self.cache_bytes -= len(self.cache.pop(key, b""))
+        if len(pcm) > TTS_MEMORY_BYTES or TTS_MEMORY_ENTRIES < 1:
+            return
+        self.cache[key] = pcm
+        self.cache_bytes += len(pcm)
+        while len(self.cache) > TTS_MEMORY_ENTRIES or self.cache_bytes > TTS_MEMORY_BYTES:
+            _, removed = self.cache.popitem(last=False)
             self.cache_bytes -= len(removed)
-            if self.persistent is not None:
-                self.persistent.delete("tts", key)
 
     def cached(self, text: str) -> bytes | None:
         key = self._tts_key(text)
         pcm = self.cache.get(key)
-        if pcm is None and self.persistent is not None:
-            record = self.persistent.get("tts", key)
-            if record is not None:
-                pcm = record.value
-                self.cache[key] = pcm
-                self.cache_bytes += len(pcm)
-                self._trim_tts()
         if pcm is not None:
             self.cache.move_to_end(key)
             if self.persistent is not None:
                 self.persistent.touch("tts", key)
+        elif self.persistent is not None:
+            record = self.persistent.get("tts", key)
+            if record is not None:
+                pcm = record.value
+                self._retain_tts(key, pcm)
         self.last_tts_cache_hit = pcm is not None
         return pcm
 
@@ -266,15 +272,12 @@ class Cloud:
         if len(pcm) > 2_000_000:
             return
         key = self._tts_key(text)
-        previous = self.cache.pop(key, b"")
-        self.cache_bytes += len(pcm) - len(previous)
-        self.cache[key] = pcm
+        self._retain_tts(key, pcm)
         if self.persistent is not None:
             self.persistent.put(
                 "tts", key, pcm,
                 max_entries=TTS_DISK_ENTRIES, max_bytes=TTS_DISK_BYTES,
             )
-        self._trim_tts()
 
     def cache_report(self) -> dict:
         report = self.cache_manager.report()
@@ -437,7 +440,9 @@ class Cloud:
                 task.cancel()
             await asyncio.gather(*self.warm_tasks.values(), return_exceptions=True)
             self.warm_tasks.clear()
-        if self.owns_client:
-            await self.client.aclose()
-        if self.persistent is not None:
-            self.persistent.close()
+        try:
+            if self.owns_client:
+                await self.client.aclose()
+        finally:
+            if self.persistent is not None:
+                self.persistent.close()
