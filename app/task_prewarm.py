@@ -18,7 +18,6 @@ import hashlib
 import json
 import logging
 import os
-import struct
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,6 +27,7 @@ from .brain import Brain
 from .forecast import OpeningForecastCache
 from .models import TaskCard
 from .providers import Cloud
+from .playback import PCM_HEADER
 from .session import Session
 
 ENABLED_ENV = "TASK_PREWARM_ON_LOAD"
@@ -165,8 +165,8 @@ class _Sink:
     async def __call__(self, payload: dict | bytes) -> None:
         self.frames += 1
         if isinstance(payload, bytes):
-            epoch, unit, _ = struct.unpack_from("<III", payload)
-            size = len(payload) - 12
+            epoch, unit, _ = PCM_HEADER.unpack_from(payload)
+            size = len(payload) - PCM_HEADER.size
             self.audio_bytes += size
             self.receipts.put_nowait({"type": "pcm", "epoch": epoch, "unit": unit, "samples": size // 2})
         elif payload["type"] in ("utterance_end", "reply_done", "error"):

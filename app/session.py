@@ -7,10 +7,8 @@ import copy
 import json
 import math
 import os
-import struct
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -19,6 +17,7 @@ from .continuation import heard_question, hesitation, pickup
 from .brain import Brain
 from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
+from .playback import Playback, Unit, enqueue_for_playback
 from .silent_logger import silent_log
 
 
@@ -49,38 +48,6 @@ def prediction_audio_limit_from_env() -> int | None:
     return value if value >= 0 else None
 
 
-@dataclass
-class Unit:
-    number: int
-    say: Say
-    entry: dict
-    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=32))
-    sent: int = 0
-    played: int = 0
-    total: int = 0
-    duration_samples: int = 0
-    source_done: bool = False
-    delivered: bool = False
-    finished: asyncio.Event = field(default_factory=asyncio.Event)
-
-    def record_cutoff(self):
-        """Keep the estimated spoken prefix and the intended continuation apart."""
-        if self.delivered:
-            return
-        text = self.say.text
-        duration = self.total if self.source_done else self.duration_samples
-        if duration:
-            cutoff = len(text) * self.played // duration
-        else:
-            # A partially synthesized buffer is only a lower bound on duration.
-            # Use roughly four Chinese characters per second until EOF is known.
-            estimated_samples = max(self.total + 1, len(text) * 6000)
-            cutoff = len(text) * self.played // estimated_samples
-        self.entry.update(text=text[:cutoff], remaining_text=text[cutoff:],
-                          played_ms=round(self.played / 24),
-                          delivery="partial" if self.played else "unplayed")
-
-
 PREDICTION_FORBIDDEN = (
     "保证通过", "包过", "百分百", "一定通过", "必过",
     "今天一定", "明天一定", "加急一定", "加急保证",
@@ -109,7 +76,7 @@ class Session:
         self.ended = False
         self.on_hangup = on_hangup
         self.phase = "ready"
-        self.units: dict[int, Unit] = {}
+        self.playback = Playback()
         self.jobs: set[asyncio.Task] = set()
         self.wait_for_input_end = wait_for_input_end
         self.resume_task: asyncio.Task | None = None
@@ -141,7 +108,6 @@ class Session:
         self.prediction_epoch = -1
         self.reply_completed = False
         self.starting = False
-        self.progress = asyncio.Event()
         self.send_lock = asyncio.Lock()
         self.turn_metrics: dict = {}
         self.turn = None  # LatencyBreakdown for the current turn
@@ -221,16 +187,16 @@ class Session:
         task.add_done_callback(done)
         return task
 
-    async def send(self, payload: dict | bytes):
+    async def send(self, payload: dict | bytes, *, epoch: int | None = None):
         if self.closed:
             return
         async with self.send_lock:
-            if not self.closed:
+            if not self.closed and (epoch is None or epoch == self.epoch):
                 await self.transport(payload)
 
     async def state(self):
         await self.send({"type": "state", "epoch": self.epoch, "phase": self.phase,
-                         **self.memory.view()})
+                         **self.memory.view()}, epoch=self.epoch)
 
     async def start(self):
         self.epoch += 1
@@ -390,7 +356,7 @@ class Session:
         self.epoch += 1
         epoch = self.epoch
         self.starting = True
-        self.units = {}
+        self.playback = Playback()
         self.reply_completed = False
         self.memory.history.append({"role": "user", "text": text})
         staged_reuse = False
@@ -455,7 +421,7 @@ class Session:
             self.discard_voice()
             self._clear_staged()
             self.epoch += 1
-            self.units = {}
+            self.playback = Playback()
             self._begin_turn("continuation")
             self.response = asyncio.current_task()
             await self._run(self.epoch, continuation=lines, prepared=first, resume_hangup=hangup,
@@ -506,8 +472,7 @@ class Session:
             self.log("reuse_update_cancelled", reason=reason)
             self.pending_update.cancel()
         self.pending_update = None
-        for unit in self.units.values():
-            unit.record_cutoff()
+        self.playback.interrupt()
         if self.voice and self.phase == "speaking" and reason in {"speech", "manual"}:
             unfinished = [u for u in self.units.values() if not u.delivered and not u.entry.get("bridge")]
             if unfinished:
@@ -529,7 +494,6 @@ class Session:
         self.prediction_audio.clear()
         self.prediction_epoch = -1
         self.reply_completed = False
-        self.progress.set()
         self.phase = "listening"
         self.turn_metrics["interrupted"] = True
         self.log("interrupted", cancelled_epoch=old_epoch, reason=reason,
@@ -542,20 +506,16 @@ class Session:
         await self.send({"type": "cancel", "epoch": old_epoch, "reason": reason})
         await self.state()
 
+    @property
+    def units(self) -> dict[int, Unit]:
+        return self.playback.units
+
     async def playback_progress(self, epoch: int, unit_id: int, samples: int, *, done: bool = False):
-        if not self.is_current(epoch):
-            return
-        unit = self.units.get(unit_id)
-        if not unit or "remaining_text" in unit.entry or samples < unit.played or samples > unit.sent:
-            return
-        unit.played = samples
-        self.progress.set()
-        if samples and not unit.delivered:
-            unit.entry["delivery"] = "partial"
-            unit.entry["played_ms"] = round(samples / 24)
-        if done and unit.source_done and samples == unit.total and unit.total > 0:
-            self._delivered(unit)
-            await self.state()
+        if self.is_current(epoch):
+            completed = self.playback.acknowledge(unit_id, samples, done)
+            if completed is not None:
+                self._delivered(completed)
+                await self.state()
 
     def _delivered(self, unit: Unit):
         if unit.delivered:
@@ -590,92 +550,32 @@ class Session:
         await self.send({"type": "latency", "epoch": epoch,
                          "voice_to_playback_ms": self.turn_metrics.get("voice_to_playback_ms"),
                          "voice_to_answer_ms": self.turn_metrics.get("voice_to_answer_ms"),
-                         "input_source": self.turn_metrics.get("input_source", "opening")})
+                         "input_source": self.turn_metrics.get("input_source", "opening")}, epoch=epoch)
 
     async def _synthesize(self, unit: Unit, pcm: bytes | None = None, *,
                           preview=None, turn=None):
-        turn = turn if turn is not None else self.turn
-        started = time.perf_counter()
-        cached = pcm if pcm is not None else getattr(self.cloud, "cached", lambda _: None)(unit.say.text)
-        if cached:
-            unit.duration_samples = len(cached) // 2
-        if cached is not None and pcm is None:
-            # The utterance is served from the TTS cache without a synthesis
-            # request; the speech() path records its own miss/hit otherwise.
-            emit = getattr(self.cloud, "emit_cache_event", None)
-            if emit is not None:
-                emit("tts", True, started)
-
-        async def chunks():
-            if cached is not None:
-                for offset in range(0, len(cached), 1920):
-                    yield cached[offset:offset + 1920]
-            else:
-                source = preview.audio(lambda: self.cloud.speech(unit.say.text)) if preview else self.cloud.speech(unit.say.text)
-                async for chunk in source:
-                    yield chunk
-
-        first = True
-        if self.performance_monitor and turn:
-            self.performance_monitor.mark_tts_start(turn)
-        try:
-            async for chunk in chunks():
-                if first:
-                    first = False
-                    if self.performance_monitor and turn:
-                        self.performance_monitor.mark_tts_first_chunk(
-                            cached is not None, turn)
-                unit.total += len(chunk) // 2
-                await unit.queue.put(chunk)
-            unit.source_done = True
-            await unit.queue.put(None)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            await unit.queue.put(exc)
-        finally:
-            if self.performance_monitor and turn:
-                self.performance_monitor.mark_tts_end(turn)
+        await unit.synthesize(self.cloud, pcm, preview, self.performance_monitor,
+                              turn if turn is not None else self.turn)
 
     async def _output(self, epoch: int, queue: asyncio.Queue):
+        playback = self.playback
         while self.is_current(epoch):
             unit = await queue.get()
             if unit is None:
                 if self.voice:
-                    try:
-                        async with asyncio.timeout(6):
-                            for pending in self.units.values():
-                                await pending.finished.wait()
-                    except TimeoutError as exc:
-                        raise ProviderError("未收到播放完成回执，请重新开始通话") from exc
+                    await playback.wait_until_delivered()
                 return
             self.phase = "speaking"
             await self.state()
             if not self.voice:
                 self._delivered(unit)
                 continue
-            seq = 0
-            while self.is_current(epoch):
-                packet = await unit.queue.get()
-                if isinstance(packet, Exception):
-                    raise packet
-                if packet is None:
-                    break
-                # At most ~500 ms of unplayed sound in flight. Control input is
-                # processed by the independent websocket reader throughout.
-                while sum(item.sent - item.played for item in self.units.values()) >= 12000:
-                    self.progress.clear()
-                    try:
-                        await asyncio.wait_for(self.progress.wait(), 5)
-                    except TimeoutError as exc:
-                        raise ProviderError("播放器没有回应，请重新开始通话") from exc
-                    if not self.is_current(epoch):
-                        return
+            async for packet in playback.packets(epoch, unit):
                 if not self.is_current(epoch):
                     return
-                await self.send(struct.pack("<III", epoch, unit.number, seq) + packet)
-                seq += 1
-                unit.sent += len(packet) // 2
+                await self.send(packet, epoch=epoch)
+                if not self.is_current(epoch):
+                    return
                 if (not unit.entry.get("bridge")
                         and "answer_first_packet_ms" not in self.turn_metrics
                         and "started" in self.turn_metrics
@@ -690,7 +590,7 @@ class Session:
             if not self.is_current(epoch):
                 return
             await self.send({"type": "utterance_end", "epoch": epoch,
-                             "unit": unit.number, "samples": unit.total})
+                             "unit": unit.number, "samples": unit.total}, epoch=epoch)
             # The player schedules the next unit behind this one. Overlap its
             # transfer with playback while keeping one shared 500 ms window.
 
@@ -757,12 +657,12 @@ class Session:
                 children.append(self.spawn(self._synthesize(unit, pcm, preview=prepared_preview, turn=turn)))
             await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
                              "text": line.text, "rate": 24000, "candidate_id": candidate_id,
-                             "filler": bridge_pcm is not None})
-            await queue.put(unit)
+                             "filler": bridge_pcm is not None}, epoch=epoch)
+            await enqueue_for_playback(queue, unit, output)
 
         try:
             self.phase = "thinking"
-            await self.send({"type": "reply_start", "epoch": epoch})
+            await self.send({"type": "reply_start", "epoch": epoch}, epoch=epoch)
             await self.state()
             if continuation:
                 hangup = resume_hangup
@@ -849,7 +749,7 @@ class Session:
                                 self.turn_metrics["first_text_ms"] = round(
                                     (time.perf_counter() - self.turn_metrics["started"]) * 1000)
                                 await self.send({"type": "response_source", "epoch": epoch,
-                                                 "source": "prediction" if kind == "reuse" else "direct"})
+                                                 "source": "prediction" if kind == "reuse" else "direct"}, epoch=epoch)
                             candidate_id = (decision.get("candidate_id")
                                             if kind == "reuse" else None)
                             if candidate_id is None and kind == "reuse":
@@ -882,7 +782,7 @@ class Session:
                     await say(Say(text="再见。"))
             if hangup:
                 self.closing_epoch = epoch
-            await queue.put(None)
+            await enqueue_for_playback(queue, None, output)
             # Forecast the next user reply while this response is playing. The
             # reuse path's state update is still in flight, so the forecast
             # gets a private copy and merges that update before snapshotting;
@@ -905,7 +805,7 @@ class Session:
                     self.performance_monitor.record_task_completion(success=True)
                 
                 await self.send({"type": "reply_done", "epoch": epoch,
-                                 "reused": self.turn_metrics.get("reused", False)})
+                                 "reused": self.turn_metrics.get("reused", False)}, epoch=epoch)
                 await self.state()
                 if pending_update is not None:
                     try:
@@ -936,8 +836,7 @@ class Session:
             raise
         except Exception as exc:
             if self.is_current(epoch):
-                for unit in current_units:
-                    unit.record_cutoff()
+                self.playback.interrupt()
                 # Track error in performance monitor
                 if self.performance_monitor:
                     self.performance_monitor.record_error(type(exc).__name__)

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.brain import Brain
@@ -171,3 +173,41 @@ def test_final_acknowledgement_only_closes_after_complete_instructions():
     memory.questions.clear()
     last["delivery"] = "partial"
     assert not memory.closing_reason(user)
+
+
+async def test_stale_send_waiting_for_transport_is_dropped():
+    events = []
+    async def send(event):
+        events.append(event)
+
+    session = Session(DEFAULT_CARD, Cloud(), TestBrain(), send, voice=True)
+    try:
+        async with session.send_lock:
+            queued = asyncio.create_task(session.send(b"old PCM", epoch=session.epoch))
+            await asyncio.sleep(0)
+            session.epoch += 1
+        await queued
+        assert events == []
+    finally:
+        await session.close()
+
+
+async def test_full_queue_releases_producer_when_player_fails():
+    from app.playback import enqueue_for_playback
+    from app.providers import ProviderError
+
+    failed = asyncio.Event()
+    async def output():
+        await failed.wait()
+        raise ProviderError("TTS failed")
+
+    queue = asyncio.Queue(maxsize=1)
+    queue.put_nowait(object())
+    consumer = asyncio.create_task(output())
+    producer = asyncio.create_task(enqueue_for_playback(queue, None, consumer))
+    await asyncio.sleep(0)
+    failed.set()
+    with pytest.raises(ProviderError, match="TTS failed"):
+        await asyncio.wait_for(producer, 1)
+    queue.get_nowait()
+    assert queue.empty()
