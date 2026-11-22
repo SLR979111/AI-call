@@ -5,7 +5,8 @@ import {readPhone} from './phone-file.js';
 export async function prepareTask(task, {wait = true, retry = false, phoneFile} = {}) {
   try {
     const audio = fetch('/api/warm', {method: 'POST',
-      headers: {'content-type': 'application/json'}, body: JSON.stringify({...(phoneFile ? {phone_file: phoneFile} : {task}), wait, retry})});
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({...(phoneFile ? {phone_file: phoneFile, analysis_task: task} : {task}), wait, retry})});
     const [response] = await Promise.all([audio, phoneFile ? null : readPhone(task)]);
     if (response.ok) {
       const {status} = await response.json();

@@ -50,7 +50,7 @@ try {
   await page.reload();
   await page.getByText('服务就绪',{exact:true}).waitFor();
   await page.getByRole('button',{name:'选择工单',exact:true}).click();
-  await page.locator('#callOptions summary').click();
+  await page.getByRole('button', {name: '通话选项', exact: true}).click();
   await page.locator('#prediction').check();
   await page.getByRole('button',{name:'关闭',exact:true}).click();
   const voiceStart=frames.length;

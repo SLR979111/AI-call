@@ -2,12 +2,13 @@ import {Player, Microphone} from './audio.js';
 
 // One instance owns the transport and audio devices for one dial attempt.
 export class CallConnection {
-  constructor({onMessage, onClose, onError, onDone, onLevel}) {
+  constructor({onMessage, onClose, onError, onDone, onLevel, onStage}) {
     this.onMessage = onMessage;
     this.onClose = onClose;
     this.onError = onError;
     this.onDone = onDone;
     this.onLevel = onLevel;
+    this.onStage = onStage;
     this.closed = false;
   }
 
@@ -36,7 +37,7 @@ export class CallConnection {
       if (this.context) {
         this.player = new Player(this.context, event => this.send(event), this.onDone);
         this.mic = new Microphone(this.context, socket, this.onError, this.player.output, this.onLevel);
-        await Promise.race([this.mic.open(), cancelled]);
+        await Promise.race([this.mic.open(this.onStage), cancelled]);
       }
       if (this.closed || socket.readyState !== WebSocket.OPEN) throw new Error('连接已结束');
       socket.onmessage = event => { if (!this.closed) this.onMessage(event); };

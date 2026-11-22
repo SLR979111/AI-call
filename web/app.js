@@ -427,6 +427,7 @@ function onMessage({data}) {
     case 'utterance':
       if (event.epoch !== epoch || call?.player?.blocked.has(event.epoch)) break;
       call?.player?.unit(event);
+      if (event.audio_only) break;
       addDataCard('AI Response', event.text);
       records.push({role: 'assistant', text: event.text});
       if (event.text) {

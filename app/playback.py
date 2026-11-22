@@ -30,6 +30,7 @@ class Unit:
 
     prepared_clause: tuple[str, bytes] | None = None
     is_opening: bool = False
+    audio_only: bool = False
 
     def record_cutoff(self):
         """Keep the estimated spoken prefix and the intended continuation apart."""

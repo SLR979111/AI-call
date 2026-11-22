@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.brain import Brain
 from app.models import Candidate, DEFAULT_CARD, Memory, Say
-from app.phone_file import Credit, Flow, Graph, PhoneFile, Route, compile_phone
+from app.phone_file import CompiledMaterials, Credit, Flow, Graph, Node, PhoneFile, Route, compile_phone, model_json
 from app.providers import Cloud, ProviderError
 from app.session import Session
 
@@ -172,6 +172,173 @@ async def test_dependency_review_can_shorten_a_path_and_cannot_introduce_cycles(
     file = await Planner().plan_phone(DEFAULT_CARD)
     goal = next(n for n in file.graph.nodes if n.id == "goal_reason")
     assert goal.requires == expected
+
+
+async def test_dependency_review_removes_redundant_merge_but_preserves_checkpoint_coverage():
+    base = compile_phone(DEFAULT_CARD)
+    branches = ["goal_reason", "goal_all"]
+    merge = Node(id="shared_end", goal="确认下一步", done_when="知道接下来怎么做", requires=branches)
+    graph = Graph(nodes=[*base.graph.nodes, merge], default_leaf=merge.id)
+
+    class Planner:
+        plan_phone = Cloud.plan_phone
+
+        async def chat(self, messages, **kwargs):
+            assert kwargs.get("use_cache") is False
+            if "changes" in messages[0]["content"]:
+                yield json.dumps({"remove_merges": ["shared_end"], "default_leaf": "goal_all"})
+            else:
+                yield json.dumps({"guide": "直接回答", "background": "已有记录", "graph": graph.model_dump()})
+
+    file = await Planner().plan_phone(DEFAULT_CARD)
+    assert file.graph.leaves() == base.graph.leaves()
+    assert file.graph.default_leaf == "goal_all"
+    assert "step_next_step" not in Flow(file).path("goal_reason")
+
+    # The review may not delete the only node that covers a required point.
+    for node in graph.nodes:
+        node.checkpoints = [p for p in node.checkpoints if p != "reason"]
+    merge.checkpoints = ["reason"]
+    file = await Planner().plan_phone(DEFAULT_CARD)
+    assert file.graph.default_leaf == "shared_end"
+
+
+def test_only_generated_graph_can_recover_nonleaf_default():
+    graph = compile_phone(DEFAULT_CARD).graph.model_dump()
+    graph["default_leaf"] = "step_reason"
+    with pytest.raises(ValidationError):
+        Graph.model_validate(graph)
+    compiled = CompiledMaterials.model_validate({"guide": "直接回答", "background": "", "graph": graph})
+    assert compiled.graph.default_leaf == "goal_reason"
+    assert compiled.graph.dependencies() == compile_phone(DEFAULT_CARD).graph.dependencies()
+
+
+async def test_ollama_compatible_plan_schema_keeps_server_side_length_validation():
+    class LocalPlanner:
+        is_local = True
+
+        async def chat(self, messages, *, max_tokens, schema):
+            assert "maxLength" not in schema["properties"]["background"]
+            yield json.dumps({"guide": "直接回答", "background": "资" * 2401,
+                              "graph": compile_phone(DEFAULT_CARD).graph.model_dump()})
+
+    with pytest.raises(ValidationError, match="background"):
+        await model_json(LocalPlanner(), "生成任务图", {}, CompiledMaterials, 4400, cache=False)
+
+
+async def test_generated_graph_retries_once_with_checkpoint_feedback():
+    class Planner:
+        plan_phone = Cloud.plan_phone
+        compilations = 0
+
+        async def chat(self, messages, **kwargs):
+            instruction = messages[0]["content"]
+            if "remove_merges" in instruction:
+                yield '{"changes":[]}'
+                return
+            self.compilations += 1
+            graph = compile_phone(DEFAULT_CARD).graph.model_dump()
+            if self.compilations == 1:
+                graph["nodes"][3]["checkpoints"] = ["unknown"]
+            else:
+                assert "图中必须包含全部工单要点" in instruction
+            yield json.dumps({"guide": "直接回答", "background": "", "graph": graph})
+
+    planner = Planner()
+    assert (await planner.plan_phone(DEFAULT_CARD)).source == "model"
+    assert planner.compilations == 2
+
+
+@pytest.mark.parametrize("question", ["还要再交一次吗？", "还要再交一次吗"])
+def test_status_evidence_does_not_finish_a_leaf_while_user_is_asking(question):
+    flow = Flow(compile_phone(DEFAULT_CARD), opening_status="delivered")
+    user = "我已经提交了。" + question
+    flow.accept(user)
+    flow.apply(Route(leaf="goal_reason", completed=[
+        Credit(id=id, quote="我已经提交了") for id in ("purpose", "step_reason", "goal_reason")
+    ]), user)
+    assert set(flow.done) == {"purpose", "step_reason"}
+    assert flow.context()["current"] == "goal_reason"
+    assert not flow.context()["finished"]
+
+    user = "明白了，我会在原申请等反馈。"
+    flow.accept(user)
+    flow.apply(Route(leaf="goal_reason", completed=[Credit(id="goal_reason", quote=user)]), user)
+    assert flow.context()["current"] is None
+    assert flow.context()["finished"]
+
+
+def test_vague_affirmation_cannot_answer_an_open_question():
+    flow = Flow(compile_phone(DEFAULT_CARD), opening_status="delivered")
+    flow.accept("是的。", "您看到的是什么状态？")
+    flow.apply(Route(leaf="goal_reason", completed=[Credit(id="purpose", quote="是的")]), flow.need)
+    assert "purpose" not in flow.done
+
+
+def test_route_keeps_valid_branch_change_when_model_returns_unquoted_ids():
+    flow = Flow(compile_phone(DEFAULT_CARD), opening_status="delivered")
+    flow.done = {"purpose": "我负责", "step_reason": "我理解缺什么了"}
+    user = "我只想问怎么提交。之前说的原因我也没弄懂。"
+    flow.accept(user)
+    route = Route.model_validate({"leaf": "goal_next_step", "next_node": "step_next_step",
+                                  "reopen": ["purpose", {"id": "step_reason", "quote": "原因我也没弄懂"}]})
+    flow.apply(route, user)
+    assert flow.context()["current"] == "step_next_step"
+    assert flow.done == {"purpose": "我负责"}
+
+
+def test_new_path_can_use_earlier_facts_but_cannot_revive_revoked_evidence():
+    memory = Memory(DEFAULT_CARD, flow=Flow(compile_phone(DEFAULT_CARD), opening_status="delivered"))
+    flow = memory.flow
+
+    def relate(user, route):
+        memory.hear(user)
+        flow.apply(route, user, earlier_users=memory.user_evidence())
+
+    report = "我负责，第一项材料已经核对好了。"
+    earlier = Credit(id="step_reason", quote="第一项材料已经核对好了")
+    relate(report, Route(leaf="goal_reason", completed=[Credit(id="purpose", quote="我负责")]))
+    relate("另一项材料也核对好了。", Route(leaf="goal_all"))
+    relate("请问后面还要做什么？", Route(leaf="goal_all", completed=[
+        earlier, Credit(id="step_next_step", quote="另一项材料也核对好了"),
+        Credit(id="goal_all", quote=report),
+    ]))
+    assert {"step_reason", "step_next_step"} <= flow.done.keys()
+    assert flow.context()["current"] == "goal_all"
+
+    correction = "我刚才看错了，第一项还没核对。"
+    relate(correction, Route(leaf="goal_reason", reopen=[Credit(id="step_reason", quote=correction)]))
+    relate("两项分别应该怎么核对？", Route(leaf="goal_all", completed=[earlier]))
+    assert "step_reason" not in flow.done
+    assert flow.context()["current"] == "step_reason"
+
+
+async def test_temporary_generation_fallback_is_not_cached(monkeypatch, tmp_path):
+    from collections import OrderedDict
+    from types import SimpleNamespace
+    from app import main
+    from app.call_analysis import CallAnalysis
+
+    class Planner:
+        attempts = 0
+
+        async def plan_phone(self, card):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ProviderError("服务暂不可用")
+            return compile_phone(card).model_copy(update={"source": "model"})
+
+    planner = Planner()
+    state = SimpleNamespace(settings=SimpleNamespace(api_key="configured"), cloud=planner,
+                            call_analysis=CallAnalysis(tmp_path, {}), phone_files=OrderedDict(), phone_jobs={})
+    monkeypatch.setattr(main, "app", SimpleNamespace(state=state))
+    first = await main.generate_phone_file(DEFAULT_CARD)
+    assert first.source == "work_order" and first.background == DEFAULT_CARD.facts
+    assert not state.phone_files
+    second, concurrent = await asyncio.gather(*(main.generate_phone_file(DEFAULT_CARD) for _ in range(2)))
+    assert second is concurrent and second.source == "model"
+    assert await main.generate_phone_file(DEFAULT_CARD) is second
+    assert planner.attempts == 2
 
 
 def test_confirmed_file_is_self_contained_and_source_never_enters_model_context():

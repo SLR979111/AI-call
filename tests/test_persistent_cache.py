@@ -82,6 +82,22 @@ async def test_tts_cache_survives_reopen_and_is_voice_scoped(tmp_path):
     await same_voice.close()
 
 
+async def test_forecast_uses_full_cached_audio_without_synthesizing_its_prefix(monkeypatch):
+    text = "请上传商标状态截图。然后点提交。"
+    pcm = bytes(1920)
+    cloud = Cloud(Settings(api_key="test", voice="voice-a"))
+
+    async def prefetch(text):
+        pytest.fail("A full cached forecast should never request TTS")
+
+    monkeypatch.setattr(cloud, "prefetch", prefetch)
+    cloud.remember(text, pcm)
+    try:
+        assert [clip async for clip in cloud.forecast_clips(text)] == [(text, pcm)]
+    finally:
+        await cloud.close()
+
+
 def test_opening_forecast_cache_survives_reopen(tmp_path):
     path = tmp_path / "cache.sqlite3"
     key = json.dumps({"task": "card", "model": "deepseek-flash"}, ensure_ascii=False)

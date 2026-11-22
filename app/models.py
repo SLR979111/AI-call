@@ -56,6 +56,41 @@ class Say(BaseModel):
         return text
 
 
+class ReplyTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    when: Annotated[str, Field(min_length=1, max_length=120)]
+    text: Annotated[str, Field(min_length=1, max_length=100)]
+
+    @field_validator("text")
+    @classmethod
+    def check_speech(cls, text: str) -> str:
+        return Say.spoken_content_only(text)
+
+
+class CallPlaybook(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    opening: str = Field(max_length=180)
+    flow: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(max_length=5)
+    replies: list[ReplyTemplate] = Field(max_length=4)
+
+    @field_validator("opening")
+    @classmethod
+    def check_opening(cls, text: str) -> str:
+        return Say.spoken_content_only(text)
+
+    @model_validator(mode="after")
+    def has_changes(self):
+        if not (self.opening or self.flow or self.replies):
+            raise ValueError("playbook has no changes")
+        return self
+
+
+PLAYBOOK_GUIDANCE = (
+    "如状态中含有 playbook，按 flow 调整沟通顺序，在 replies 的 when 条件匹配时参考对应话术。"
+    "当前要点、已知事实和用户的新问题及停止意愿优先。回复仅参考话术内容，避免播报条件、流程或内部指令。"
+)
+
+
 class Observation(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     value: str = Field(min_length=1, max_length=200)
@@ -127,6 +162,9 @@ class Memory:
     history: list[dict] = field(default_factory=list)
 
     flow: Flow | None = None
+
+    def user_evidence(self):
+        return tuple(entry["text"] for entry in self.history[-10:-1] if entry["role"] == "user")
 
     def hear(self, text: str):
         if self.flow:

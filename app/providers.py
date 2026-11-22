@@ -13,11 +13,11 @@ import wave
 from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass
-from graphlib import TopologicalSorter
 from typing import AsyncIterator, Callable
 
 import httpx
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 from .speech_start import first_sound
 from .cache_audit import CacheAudit
@@ -139,16 +139,18 @@ class Cloud:
             # Error bodies can contain user data or credentials. Do not echo them.
             raise ProviderError(f"{service} 请求失败（HTTP {response.status_code}）")
 
-    async def chat(self, messages: list[dict], *, max_tokens: int = 650) -> AsyncIterator[str]:
+    async def chat(self, messages: list[dict], *, max_tokens: int = 650,
+                   use_cache: bool = True) -> AsyncIterator[str]:
         started = time.perf_counter()
         emitted = False
         hit = False
         try:
-            # Check LLM cache first
             temperature = 0.2
-            cached_response = self.cache_manager.llm.get(
-                messages, self.settings.model, temperature, max_tokens=max_tokens,
-            )
+            cached_response = None
+            if use_cache:
+                cached_response = self.cache_manager.llm.get(
+                    messages, self.settings.model, temperature, max_tokens=max_tokens,
+                )
             hit = cached_response is not None
             # Expose the result before the first yielded chunk so the caller's
             # TTFT mark can label this turn's LLM source correctly.
@@ -188,13 +190,13 @@ class Cloud:
                     except (KeyError, TypeError, json.JSONDecodeError) as exc:
                         raise ProviderError("模型返回了无法解析的数据") from exc
 
-            # Cache the full response
             if collected:
                 full_response = "".join(collected)
-                self.cache_manager.llm.put(
-                    messages, self.settings.model, temperature, full_response,
-                    max_tokens=max_tokens,
-                )
+                if use_cache:
+                    self.cache_manager.llm.put(
+                        messages, self.settings.model, temperature, full_response,
+                        max_tokens=max_tokens,
+                    )
                 self.audit.llm(messages=messages, model=self.settings.model,
                                temperature=temperature, max_tokens=max_tokens,
                                response=full_response)
@@ -391,32 +393,55 @@ class Cloud:
         except Exception:  # noqa: BLE001 - a warm-up is best effort
             return None
 
-    async def plan_phone(self, card):
-        from .phone_file import BasicResponse, CompiledMaterials, DependencyReview, Graph, PhoneFile, PLAN_PROMPT, REVIEW_PROMPT, model_json
-        materials = await model_json(self, PLAN_PROMPT, card.model_dump(), CompiledMaterials, 4400)
-        graph = materials.graph
-        file = PhoneFile(title=card.title, basic_response=BasicResponse(opening=card.opening, guide=materials.guide),
-                         background=materials.background, checkpoints=card.checkpoints, graph=graph, source="model")
+    async def plan_phone(self, card, *, experiences=()):
+        from .phone_file import BasicResponse, CompiledMaterials, DependencyReview, PhoneFile, PLAN_PROMPT, REVIEW_PROMPT, model_json
+        task = card.model_dump()
+        prompt = PLAN_PROMPT
+        if experiences:
+            task["reviewed_experience"] = experiences
+            prompt += (
+                "\nreviewed_experience 是跨工单审核过的沟通约束。只采用符合 when 的条目。"
+                "flow 约束体现到节点、前置条件、分支及完成依据；reply 约束体现到 guide 或相关节点的 action。"
+                "工单原有事实、目标和必要检查点优先。经验只指导沟通，不提供本单事实、权限或承诺。"
+            )
+
+        async def compile_graph(instruction):
+            materials = await model_json(self, instruction, task, CompiledMaterials, 4400, cache=False,
+                                         allow_large_context=bool(experiences))
+            file = PhoneFile(title=card.title, basic_response=BasicResponse(opening=card.opening, guide=materials.guide),
+                             background=materials.background, checkpoints=card.checkpoints, graph=materials.graph,
+                             source="model")
+            return materials.graph, file
+
         try:
-            review = await model_json(self, REVIEW_PROMPT, {"goal": card.goal, "graph": graph.model_dump()},
-                                      DependencyReview, 650)
-            changes = {entry.id: entry.requires for entry in review.changes}
-            ancestors = {}
-            deps = graph.dependencies()
-            for key in TopologicalSorter(deps).static_order():
-                ancestors[key] = set(deps[key]).union(*(ancestors[p] for p in deps[key]))
-            if changes and all(k in ancestors and set(v) <= ancestors[k] for k,v in changes.items()):
-                nodes = [node.model_copy(update={"requires": changes[node.id]}) if node.id in changes
-                         else node for node in graph.nodes]
-                revised = Graph(nodes=nodes, default_leaf=graph.default_leaf)
+            graph, file = await compile_graph(prompt)
+        except ValidationError as exc:
+            issues = "。".join(f"{'.'.join(map(str, item['loc'])) or 'graph'} {item['msg']}"
+                               for item in exc.errors(include_input=False, include_url=False)[:3])
+            graph, file = await compile_graph(prompt + "\n上一次生成未通过校验。请重新生成完整 JSON，修正以下问题：" + issues)
+        try:
+            # Review is best effort once the first graph is already valid.
+            async with asyncio.timeout(6):
+                review_input = {"goal": card.goal, "graph": graph.model_dump()}
+                review_prompt = REVIEW_PROMPT
+                flow_rules = [rule for rule in experiences if rule["kind"] == "flow"]
+                if flow_rules:
+                    review_input["reviewed_experience"] = flow_rules
+                    review_prompt += "\nreviewed_experience 只用于检查适用的流程情境，保留业务必要前置。"
+                review = await model_json(self, review_prompt, review_input, DependencyReview, 650, cache=False,
+                                          allow_large_context=bool(flow_rules))
+            if review.changes or review.remove_merges:
+                revised = review.revise(graph)
                 return PhoneFile.model_validate({**file.model_dump(), "graph": revised})
-        except (ValueError, ProviderError, httpx.HTTPError, OSError):
+        except (ValueError, ProviderError, httpx.HTTPError, OSError, TimeoutError):
             pass  # The original graph already passed structural validation.
         return file
 
     async def route_phone(self, flow, history):
+        from .models import PLAYBOOK_GUIDANCE
         from .phone_file import Route, ROUTE_PROMPT, model_json
-        return await model_json(self, ROUTE_PROMPT, {
+        prompt = ROUTE_PROMPT + ("\n" + PLAYBOOK_GUIDANCE if flow.playbook else "")
+        return await model_json(self, prompt, {
             **flow.file.briefing(), "leaves": flow.file.graph.leaves(),
             "paths": {leaf: flow.path(leaf) for leaf in flow.file.graph.leaves()},
             "state": flow.context(), "dialogue": history[-10:], "latest_user": history[-1]["text"],
@@ -426,6 +451,14 @@ class Cloud:
         """Publish a separately voiced clause as soon as it is available."""
         from .speech_start import reusable_clause
         prefix = reusable_clause(text)
+        full = self.cached(text)
+        if full is not None:
+            if prefix and prefix != text:
+                first = self.cached(prefix)
+                if first:
+                    yield prefix, first
+            yield text, full
+            return
         if prefix and prefix != text:
             first = await self.warm(prefix)
             if first:

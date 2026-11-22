@@ -37,7 +37,7 @@
 | 9 | MiniCPM-o 4.5 内部 Qwen3/SigLIP2 | ✅ | **SinCircle** | 天命、法务 | 已核实：Qwen3-8B Apache-2.0、SigLIP2 Apache-2.0；Whisper 代码 MIT/权重 Apache-2.0；CosyVoice2 Apache-2.0 |
 | 10 | Melo 训练数据/说话人授权 | ⚠️ | **SinCircle** | 法务 | MIT 只覆盖代码/权重，训练数据与音色授权单独确认 |
 | 11 | LiveKit Server | ⚠️ | **天命** | cx、赛事/法务接口 | 实际 1.13.11；已落 `licenses/LiveKit-NOTICE.md`；正式交付锁 digest 并补 Apache-2.0/NOTICE |
-| 11b | LiveKit 客户端 SDK | ⚠️ | **cx** | 天命 | `livekit-client 2.23.0` 已 vendored；Apache-2.0 全文/NOTICE 待随包 |
+| 11b | LiveKit 客户端 SDK | ✅ | **cx** | 天命 | 已随 2.23.0 SDK 附[发布包许可](../licenses/livekit-client-LICENSE)和[组件说明](../licenses/LiveKit-NOTICE.md) |
 | 12 | coturn | ⚠️ | **cx** | 天命 | 当前 dev 未部署；正式 TURN 上线前锁版本并审 OpenSSL/libevent |
 | 13 | FunASR / CosyVoice | ⚠️ | **SinCircle** | 湖中日月 | 接入时逐模型核实代码+权重；目前未引入 |
 | 14 | W4A16 量化派生 | ✅ | **SinCircle** | 天命 | 保留 base Apache-2.0、量化说明、校准来源 |

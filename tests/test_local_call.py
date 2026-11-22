@@ -183,3 +183,79 @@ def test_invalid_interrupt_applies_no_receipts_and_socket_recovers(tmp_path, mon
         ws.send_json({"type": "played", "epoch": 1, "unit": 1, "samples": 120})
         ws.send_json({"type": "stop"})
     progress.assert_awaited_once_with(1, 1, 120, done=False)
+
+
+@pytest.mark.parametrize("mode", ["local", "cloud"])
+def test_empty_voice_transcript_plays_an_audio_only_repeat_request(mode, tmp_path, monkeypatch):
+    import struct
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+    from app import hearing, main
+
+    spoken = []
+    pcm = b"\x01\x00" * 960
+
+    async def speech(self, text):
+        spoken.append(text)
+        yield pcm
+
+    class Detector:
+        def feed(self, samples):
+            return float(samples[:2] != b"\x00\x00")
+
+    monkeypatch.setattr(main, "prepare_cloud_task", AsyncMock(return_value={"status": "ready"}))
+    monkeypatch.setattr(main, "generate_phone_file", AsyncMock(side_effect=lambda card, mode="cloud": main.compile_phone(card)))
+    monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
+    monkeypatch.setattr(main, "load_from_env", lambda: None)
+    monkeypatch.setattr(main.LocalProvider, "ready", AsyncMock())
+    monkeypatch.setattr(hearing, "SpeechDetector", Detector)
+    for provider in (main.LocalProvider, main.Cloud):
+        monkeypatch.setattr(provider, "transcribe", AsyncMock(return_value="  "))
+        monkeypatch.setattr(provider, "speech", speech)
+    monkeypatch.setattr(main.Cloud, "prefetch", AsyncMock(return_value=pcm))
+
+    def receive_reply(ws):
+        events, packets = [], []
+        while True:
+            message = ws.receive()
+            if "bytes" in message:
+                packets.append(message["bytes"])
+                continue
+            event = json.loads(message["text"])
+            events.append(event)
+            assert event["type"] != "error", event
+            if event["type"] == "utterance_end":
+                ws.send_json({"type": "played", "epoch": event["epoch"], "unit": event["unit"],
+                              "samples": event["samples"], "done": True})
+            if event["type"] == "reply_done":
+                return events, packets
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "start", "voice": True, "audio_protocol": 2,
+                          "mode": mode, "predictions": False})
+            events, _ = receive_reply(ws)
+            opening = next(event["text"] for event in events if event["type"] == "utterance")
+            opening_epoch = events[-1]["epoch"]
+            for seq in range(60):
+                voiced = seq < 16
+                samples = struct.pack("<h", 4000 if voiced else 0) * 320
+                rms = 4000 / 32768 if voiced else 0.
+                header = struct.pack("<IdIfffff", seq, seq * 20., int(voiced), rms, rms, 0., 0., 0.)
+                ws.send_bytes(header + samples + samples)
+            events, packets = receive_reply(ws)
+            epoch = events[-1]["epoch"]
+            assert epoch > opening_epoch
+            assert [event for event in events if event["type"] == "utterance"] == [
+                {"type": "utterance", "epoch": epoch, "unit": 1, "rate": 24000,
+                 "candidate_id": None, "filler": False, "audio_only": True},
+            ]
+            assert not any(event["type"] == "transcript" for event in events)
+            assert packets == [struct.pack("<III", epoch, 1, 0) + pcm]
+            state = ws.receive_json()
+            assert state["phase"] == "listening"
+            assert state["last_question"] == "您是负责这块的吗？"
+            ws.send_json({"type": "stop"})
+    assert spoken == [opening, "不好意思，我没听清，您能再说一遍吗？"]

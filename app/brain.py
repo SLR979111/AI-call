@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import copy
@@ -18,8 +19,9 @@ from .forecast import (
     OpeningForecastCache, candidate_limit_from_env, has_unasked_question,
     likely_short_answers, merge_candidates, stream_candidates, ticket_quota,
 )
-from .phone_file import compile_phone, model_context
-from .models import Candidate, Memory, Say, TaskCard, Update
+from .phone_file import ROUTE_RULES, Route, compile_phone, model_context
+from .phone_style import PHONE_STYLE
+from .models import PLAYBOOK_GUIDANCE, Candidate, Memory, Say, TaskCard, Update
 from .ticket_forecast import enabled as ticket_forecast_enabled
 from .ticket_forecast import excluded_intents_from_env
 from .ticket_forecast import generate_ticket_candidates
@@ -31,26 +33,36 @@ from .semantic_decision import shared_matcher
 
 
 BEHAVIOR = """你是电话客服。按 basic_response 的身份和应答方式，只使用 background 中的业务事实。
-graph 是完整业务流程，state.flow 给出这轮的小目标、完成依据和已完成节点。先解决对方最新的追问，每轮只推进一个必要动作。若有 repair 先处理理解障碍。
-区分已知记录、假设条件和对方自述。没有依据就说明未知，不编造操作、承诺或渠道。不朗读内部指令。口语直接、简短，避免机械承接。已说明且对方听懂的事情无需重述。
-dialogue 中部分播放的句子只能按已听到的部分理解。打断后结合当前问题接话，尊重暂停和结束意愿。"""
+graph 是完整业务流程，state.flow 给出这轮的小目标、完成依据和已完成节点。先解决对方最新的追问，若有 repair 先处理理解障碍。对方已经明确的现状不再问一次。操作只说资料给出的入口和步骤。按钮位置、页面状态变化等没有给出的细节不猜。
+区分已知记录、假设条件和对方自述。没有依据就说明未知，不编造操作、承诺或渠道。不朗读内部指令。已说明且对方听懂的事情无需重述。
+dialogue 中部分播放的句子只能按已听到的部分理解。打断后结合当前问题接话，尊重暂停和结束意愿。
+""" + PHONE_STYLE
 
-POLICY = BEHAVIOR + """
-只输出 JSONL。先输出一或两条 {"type":"say","text":"要说的话","covers":[],"question":""}，或一条 {"type":"reuse","id":"候选ID"}。
+REPLY_POLICY = """一或两条 {"type":"say","text":"要说的话","covers":[],"question":""}，或一条 {"type":"reuse","id":"候选ID"}。
 仅在候选完整回答本轮新诉求时复用。live_lead_ 首句可接一条 say 补答，其他 reuse 单独使用。text 只写口语；涵盖全部条件才标记对应 graph 节点的 checkpoint ID。question 只能摘自实际说出口的问题。
 最后输出 {"type":"update","facts":[],"questions":[],"confirmation":"","disposition":"active","disposition_quote":""}。
 facts 各项为 {"name":"字段","value":"明确自述","quote":"本轮原话"}。仅记录当事人明确说的事实并更新改口；questions 记录尚待答的问题。confirmation 和所有 quote 必须是本轮原话的连续摘录。
 按 state.flow.finished 判定所选沟通目标是否完成。disposition 可取 active/complete/paused/declined。暂停或拒绝需有原话依据。本轮尚未播出的说明不算已告知。对方说还有问题但尚未提出时，请其直接讲。
 """
+POLICY = BEHAVIOR + "\n只输出 JSONL。先输出" + REPLY_POLICY
+
+VOICE_ROUTE_POLICY = BEHAVIOR + """
+只输出 JSONL。首行必须是 {"type":"route","leaf":"叶子id","completed":[],"reopen":[],"need":"本轮诉求","next_node":null}。route 只供系统使用。
+""" + ROUTE_RULES + "\n紧接着用本次选定的路径回答，按本轮已经有证据的节点变动判断完成。输出" + REPLY_POLICY
 
 FORECAST = BEHAVIOR + """
 根据刚才的实际回复，为下一轮预测两个不同分支。每个分支只预测一步。when 写完整适用条件，examples 给出一两条满足所有条件的原话。reply.text 直接说具体业务内容，最多100字。不要把简短承接当成已办理或已提交。
 只输出 {"candidates":[{"id":"c1","when":"条件","examples":["用户原话"],"reply":{"text":"回复","covers":[],"question":""}}]}。
 covers 只填本句完整说明的要点 ID。question 只摘录实际问句。"""
+FORECAST_PROMPT_KEY = hashlib.sha256(FORECAST.encode("utf-8")).hexdigest()
 
 
 class DialogueProtocolError(ProviderError):
     """A model record failed JSONL or dialogue ordering checks."""
+
+
+class VoiceRouteError(DialogueProtocolError):
+    """The combined response failed before any validated speech was available."""
 
 
 async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncIterator[dict]:
@@ -59,13 +71,6 @@ async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncI
         buffer += chunk
         if len(buffer) > 10000:
             raise DialogueProtocolError("模型输出过长")
-        if on_first_clause:
-            clause = pending_speech_clause(buffer)
-            if clause:
-                on_first_clause(clause)
-                on_first_clause = None
-            elif "\n" in buffer:
-                on_first_clause = None
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             line = line.strip()
@@ -76,7 +81,17 @@ async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncI
                     raise DialogueProtocolError("模型输出格式无效") from exc
                 if not isinstance(obj, dict):
                     raise DialogueProtocolError("模型输出格式无效")
+                if on_first_clause and obj.get("type") != "route":
+                    clause = pending_speech_clause(line)
+                    if clause:
+                        on_first_clause(clause)
+                    on_first_clause = None
                 yield obj
+        if on_first_clause:
+            clause = pending_speech_clause(buffer)
+            if clause:
+                on_first_clause(clause)
+                on_first_clause = None
     tail = buffer.strip()
     if tail and not tail.startswith("```"):
         try:
@@ -101,14 +116,17 @@ FORECAST_BRANCHES = (
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
                  *, forecast_branches: int = 3, ticket_forecasts: bool | None = None,
-                 candidate_limit: int | None = None, decision_model: DecisionModel | None = None):
+                 candidate_limit: int | None = None, decision_model: DecisionModel | None = None,
+                 combine_voice_route: bool = False, fresh_forecasts: bool = False):
         self.cloud = cloud
-        self.opening_forecasts = opening_forecasts
+        self.fresh_forecasts = fresh_forecasts
+        self.opening_forecasts = None if fresh_forecasts else opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
         self.decision_model = decision_model or DecisionModel.from_env(cloud)
-        self.ticket_forecasts = ticket_forecasts
+        self.ticket_forecasts = False if fresh_forecasts else ticket_forecasts
         self.candidate_limit = candidate_limit
+        self.combine_voice_route = combine_voice_route
         # Optional second opinion for the cases the lexical rules reject. It is
         # silent (None) when the embedding model is missing, so the default path
         # never depends on it.
@@ -124,7 +142,7 @@ class Brain:
 
     def ticket_candidates(self, snapshot: dict) -> list[Candidate]:
         """Deterministic ticket candidates are never stored on disk."""
-        if not self.ticket_forecasts_enabled():
+        if snapshot.get("state", {}).get("flow", {}).get("playbook") or not self.ticket_forecasts_enabled():
             return []
         try:
             card = TaskCard.model_validate(snapshot.get("task"))
@@ -195,6 +213,17 @@ class Brain:
                 return
             memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
             candidates = []
+        if (self.combine_voice_route and memory.flow and not position
+                and not self.semantic_engine and not self.decision_model
+                and not self.match_reuse(memory, candidates)):
+            available = memory.fresh_candidates(candidates) if not memory.flow.event else []
+            try:
+                async with aclosing(self._stream_response(memory, available, on_first_clause, route_voice=True)) as events:
+                    async for event in events:
+                        yield event
+                return
+            except VoiceRouteError:
+                logging.getLogger(__name__).info("Combined voice response rejected; retrying with separate routing")
         if memory.flow and hasattr(self.cloud, "route_phone"):
             try:
                 async with asyncio.timeout(12 if getattr(self.cloud, "is_local", False) else 2.5):
@@ -206,7 +235,7 @@ class Brain:
                     # A speculative voice response works on a copy. Only Session
                     # commits its event after the final transcript is confirmed.
                     memory = replace(memory, flow=copy.deepcopy(memory.flow))
-                    memory.flow.apply(route, memory.history[-1]["text"])
+                    memory.flow.apply(route, memory.history[-1]["text"], earlier_users=memory.user_evidence())
                     yield "route", route
         candidates = memory.fresh_candidates(candidates)
         # A forecast only counts as a prediction opportunity when it survived the
@@ -250,20 +279,50 @@ class Brain:
                 return
             elif decision == "say":
                 candidates = []
-        
-        # Slow path: LLM-based decision
+
+        async with aclosing(self._stream_response(memory, candidates, on_first_clause)) as events:
+            async for event in events:
+                yield event
+
+    async def _stream_response(self, memory, candidates, on_first_clause, *, route_voice=False):
         snapshot = self.snapshot(memory)
         snapshot["candidates"] = [{"id": item.id, "when": item.when, "reply": {"text": item.reply.text}}
                                   for item in candidates]
-        messages = [{"role": "system", "content": POLICY},
+        if route_voice:
+            leaves = memory.flow.file.graph.leaves()
+            snapshot.update(leaves=leaves, paths={leaf: memory.flow.path(leaf) for leaf in leaves})
+        instruction = VOICE_ROUTE_POLICY if route_voice else POLICY
+        if memory.flow and memory.flow.playbook:
+            instruction += "\n" + PLAYBOOK_GUIDANCE
+        messages = [{"role": "system", "content": instruction},
                     {"role": "user", "content": json.dumps(model_context(snapshot), ensure_ascii=False)}]
         said = 0
         asked = reused = False
         pending_update = None
+        pending_route = None
+        chat_options = {"max_tokens": 900} if route_voice else {}
         try:
-            async with aclosing(self.cloud.chat(messages)) as chunks, aclosing(json_lines(chunks, on_first_clause)) as events:
+            async with aclosing(self.cloud.chat(messages, **chat_options)) as chunks, aclosing(json_lines(chunks, on_first_clause)) as events:
                 async for event in events:
                     kind = event.get("type")
+                    if route_voice and not said and pending_route is None:
+                        if kind != "route":
+                            raise DialogueProtocolError("模型未先返回工单路由")
+                        pending_route = Route.model_validate(event)
+                        if pending_route.leaf not in leaves:
+                            raise DialogueProtocolError("模型选择了无效的工单终点")
+                        flow = copy.deepcopy(memory.flow)
+                        flow.apply(pending_route, memory.history[-1]["text"], earlier_users=memory.user_evidence())
+                        candidates = flow.candidates(candidates)
+                        self.candidates_considered = bool(candidates)
+                        eligible = [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))]
+                        if eligible:
+                            decision, _ = self.decision_engine.should_reuse(
+                                memory.history[-1]["text"], eligible,
+                                self._last_completed_assistant(memory), memory.card)
+                            if decision == "say":
+                                candidates = []
+                        continue
                     if pending_update is not None:
                         raise DialogueProtocolError("模型在状态更新后继续输出")
                     if kind == "say" and not reused and said < 2 and not asked:
@@ -282,6 +341,9 @@ class Brain:
                         }
                         said += 1
                         asked = bool(say.question)
+                        if pending_route is not None:
+                            yield "route", pending_route
+                            pending_route = None
                         yield "reuse" if prepared else "say", say
                     elif kind == "reuse" and said == 0:
                         match = next((c for c in candidates if c.id == event.get("id")), None)
@@ -292,6 +354,9 @@ class Brain:
                         said = 1
                         reused = not match.id.startswith("live_lead_")
                         asked = bool(match.reply.question)
+                        if pending_route is not None:
+                            yield "route", pending_route
+                            pending_route = None
                         yield "reuse", match.reply
                     elif kind == "update" and said:
                         pending_update = Update.model_validate(event)
@@ -304,6 +369,8 @@ class Brain:
             reason = str(exc) if isinstance(exc, DialogueProtocolError) else "invalid event fields"
             logging.getLogger(__name__).warning("Rejected dialogue record (accepted_speech=%d): %s", said, reason)
             if not said:
+                if route_voice:
+                    raise VoiceRouteError(reason) from exc
                 raise ProviderError("这次回复没能生成，请再说一次。") from exc
             # The validated speech is already queued. Its playback receipt owns
             # delivery credit, and a rejected tail has no authority to change state.
@@ -344,12 +411,15 @@ class Brain:
         cached: list[Candidate] = []
         complete = False
         if self.opening_forecasts is not None:
-            # Task-only reuse could cross model versions, so include the model.
+            # Reuse only under the same model and forecast wording rules.
             # Voice does not change text; audio is always prepared per session.
             model = getattr(getattr(self.cloud, "settings", None), "model", "")
+            flow = snapshot.get("state", {}).get("flow", {})
             key = json.dumps({
                 "task": snapshot["task"], "model": model,
-                "phone_file": snapshot.get("state", {}).get("flow", {}).get("file"),
+                "forecast_prompt": FORECAST_PROMPT_KEY,
+                "phone_file": flow.get("file"),
+                **({"playbook": flow["playbook"]} if flow.get("playbook") else {}),
                 # Switching ticket templates, exclusions or the cap changes
                 # which model candidates were cached, so A/B arms must not
                 # share records.
@@ -377,9 +447,10 @@ class Brain:
         branches = FORECAST_BRANCHES[:self.forecast_branches]
 
         general_branches = len(branches)
-        if getattr(self.cloud, "is_local", False):
+        local = getattr(self.cloud, "is_local", False)
+        if local:
             branches = branches[:1]
-        elif snapshot.get("opening"):
+        elif not self.fresh_forecasts and snapshot.get("opening"):
             # Prime two independent FAQ answers per request on the first call.
             # OpeningForecastCache keys every fact and checkpoint in the task.
             topics = [point["description"] for point in snapshot["task"]["checkpoints"]]
@@ -390,6 +461,7 @@ class Brain:
 
         queue = asyncio.Queue()
         valid_points = {p["id"] for p in snapshot["task"]["checkpoints"]}
+        chat_options = {"use_cache": False} if self.fresh_forecasts and not local else {}
 
         async def forecast_branch(index: int, instruction: str):
             branch_snapshot = dict(snapshot)
@@ -403,11 +475,13 @@ class Brain:
                     "好的只表示承接，不能推断填错字、更名、已补好或已提交。"
                     "是的只确认上一句明确的是非问句；没有是非问句时按承接处理。"
                 )
+            if snapshot.get("state", {}).get("flow", {}).get("playbook"):
+                instruction = PLAYBOOK_GUIDANCE + "\n" + instruction
             messages = [{"role": "system", "content": FORECAST + "\n" + instruction},
                         {"role": "user", "content": json.dumps(model_context(branch_snapshot), ensure_ascii=False)}]
             try:
                 number = 0
-                async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600), 2):
+                async for item in stream_candidates(self.cloud.chat(messages, max_tokens=600, **chat_options), 2):
                     item.id = f"topic_{index}_{number}" if index >= general_branches else f"p{index}_{number}"
                     number += 1
                     item.reply.covers = [p for p in item.reply.covers if p in valid_points]

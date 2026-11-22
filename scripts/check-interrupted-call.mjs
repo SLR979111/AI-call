@@ -40,7 +40,7 @@ try {
   await page.locator('#editFacts').fill('图书室周六上午九点开门。没有其他要说明的事。');
   await page.locator('#editPoints').fill('说明周六上午九点开门');
   await page.locator('#editOpening').fill('您好，这里是社区图书室。我想和您说一下周末安排，您现在方便吗？');
-  await page.locator('#callOptions summary').click();
+  await page.locator('#toggleCallOptions').click();
   await page.locator('#prediction').uncheck();
   await page.locator('#generateOrder').click();
   await page.locator('#saveTask:enabled').waitFor();

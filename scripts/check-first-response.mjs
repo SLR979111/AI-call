@@ -91,7 +91,7 @@ try {
     await page.goto(process.env.CALL_URL || 'http://127.0.0.1:8088');
     await page.locator('#startVoice:enabled').waitFor();
     await page.getByRole('button', {name:'选择工单', exact:true}).click();
-    await page.locator('#callOptions summary').click();
+    await page.locator('#toggleCallOptions').click();
     await page.locator('#callMode').selectOption(process.env.CALL_MODE || 'cloud');
     await page.locator('#prediction').setChecked(mode === 'on');
     await page.locator('#closeDialog').click();

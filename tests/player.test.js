@@ -90,6 +90,64 @@ test('muting clears both cleaned audio and the speech decision',()=>{
   assert.ok(new Int16Array(packets[0],36).every(s=>s===0));
 });
 
+test('dial waits for a capture frame from a live unmuted microphone, including silence', async t => {
+  const track = {readyState: 'live', muted: true, stop() {}};
+  const stream = {getAudioTracks: () => [track], getTracks: () => [track]};
+  let attach;
+  const attached = new Promise(resolve => { attach = resolve; });
+  const originals = new Map();
+  function replace(name, value) {
+    originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, {value, configurable: true, writable: true});
+  }
+  t.after(() => {
+    for (const [name, previous] of originals) {
+      if (previous) Object.defineProperty(globalThis, name, previous);
+      else delete globalThis[name];
+    }
+  });
+  replace('fetch', async () => ({ok: true, arrayBuffer: async () =>
+    Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0).buffer}));
+  replace('navigator', {mediaDevices: {getUserMedia: async () => stream}});
+  replace('AudioWorkletNode', class {
+    port = {postMessage() {}};
+    connect() { attach(this.port); }
+    disconnect() {}
+  });
+  const ctx = {...context(), audioWorklet: {async addModule() {}},
+    createMediaStreamSource: () => ({connect() {}, disconnect() {}})};
+  const speaker = {connect() {}, disconnect() {}};
+  const mic = new Microphone(ctx, {readyState: 3}, () => {}, speaker);
+  const opening = mic.open();
+  let ready = false;
+  opening.then(() => { ready = true; }, () => {});
+  try {
+    const port = await attached;
+    const audio = hasInput => port.onmessage({data: {type: 'audio', hasInput}});
+    port.onmessage({data: {type: 'ready'}});
+    audio(true);
+    await new Promise(setImmediate);
+    assert.equal(ready, false);
+
+    track.muted = false;
+    audio(false);
+    await new Promise(setImmediate);
+    assert.equal(ready, false);
+
+    audio(true);
+    await opening;
+    assert.equal(ready, true);
+  } finally { mic.close(); }
+});
+
+test('visible speech activity can appear over the opening while its echo filter warms', () => {
+  const levels = [];
+  const mic = new Microphone(context(), {readyState: 3}, () => {}, {}, level => levels.push(level));
+  const frame = {warming: true, playback: true, speech: true, clean_rms: .02};
+  mic.frame({...frame, echo_score: .9});
+  mic.frame({...frame, echo_score: .2});
+  assert.deepEqual(levels.map(level => level.active), [false, true]);
+});
 
 test('a cancelled connection settles promptly and ignores its former close handler', async t => {
   const previousLocation = globalThis.location;

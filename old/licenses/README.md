@@ -5,6 +5,7 @@
 | 文件 | 覆盖组件 | 许可证/性质 | 义务 |
 |---|---|---|---|
 | `sherpa-onnx-LICENSE` | sherpa-onnx 2.0.1 | Apache-2.0 | 保留 LICENSE/NOTICE |
+| [livekit-client-LICENSE](livekit-client-LICENSE) | LiveKit 浏览器客户端 2.23.0 | Apache-2.0 | 随 SDK 保留上游许可与[组件说明](LiveKit-NOTICE.md) |
 | `onnxruntime-ThirdPartyNotices.txt` | onnxruntime 1.28.0 | MIT + 第三方 notices | 随包保留 |
 | `libsndfile-LGPL-2.1.txt` | libsndfile / SoundFile | LGPL-2.1-or-later | 动态链接、附许可、允许替换/重链接 |
 | `libsndfile-NOTICE.md` | libsndfile 交付说明 | LGPL 义务说明 | 与上者一起分发 |

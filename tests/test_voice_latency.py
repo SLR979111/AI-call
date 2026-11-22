@@ -5,6 +5,7 @@ import pytest
 
 from app.brain import Brain, json_lines
 from app.models import DEFAULT_CARD, Memory, Say, Update
+from app.phone_file import Flow, Route, compile_phone
 from app.session import Session
 from app.speech_start import first_sound
 from app.voice_preview import first_clause, restore_quotes, same_transcript
@@ -40,6 +41,54 @@ async def test_prepare_clause_before_metadata_without_publishing_an_event():
     result = [event async for event in json_lines(stream(), seen.append)]
     assert result[0]["covers"] == ["reason"]
     assert first_clause('{"type":"update","text":"不应播出。"}') is None
+
+
+async def test_cloud_voice_routes_and_starts_synthesis_in_the_same_request():
+    prepared = []
+    calls = []
+
+    class VoiceCloud:
+        async def route_phone(self, flow, history):
+            pytest.fail("The combined response already routes this turn")
+
+        async def chat(self, messages, **kwargs):
+            calls.append(messages)
+            yield '{"type":"route","leaf":"goal_reason","completed":[{"id":"purpose","quote":"我负责"}]}\n'
+            yield '{"type":"say","text":"需要商标状态截图，'
+            assert prepared == ["需要商标状态截图，"]
+            yield '请补上。"}\n{"type":"update"}'
+
+    memory = Memory(DEFAULT_CARD, flow=Flow(compile_phone(DEFAULT_CARD)))
+    memory.hear("我负责，请问要什么截图？")
+    brain = Brain(VoiceCloud(), combine_voice_route=True)
+    brain.semantic_engine = brain.decision_model = None
+    events = [event async for event in brain.respond(memory, [], on_first_clause=prepared.append)]
+    assert len(calls) == 1
+    assert [kind for kind, _ in events] == ["route", "say", "update"]
+    assert events[0][1].leaf == "goal_reason"
+    assert not memory.flow.done
+
+
+async def test_invalid_combined_route_falls_back_without_publishing_its_speech():
+    class VoiceCloud:
+        async def route_phone(self, flow, history):
+            return Route(leaf="goal_reason")
+
+        async def chat(self, messages, **kwargs):
+            if kwargs:
+                yield '{"type":"route","leaf":"not_a_leaf"}\n{"type":"say","text":"不应播出。"}\n'
+                return
+            yield '{"type":"say","text":"需要商标状态截图。"}\n{"type":"update"}'
+
+    memory = Memory(DEFAULT_CARD, flow=Flow(compile_phone(DEFAULT_CARD)))
+    memory.hear("请问要什么截图？")
+    brain = Brain(VoiceCloud(), combine_voice_route=True)
+    brain.semantic_engine = brain.decision_model = None
+    prepared = []
+    events = [event async for event in brain.respond(memory, [], on_first_clause=prepared.append)]
+    assert [kind for kind, _ in events] == ["route", "say", "update"]
+    assert [value.text for kind, value in events if kind == "say"] == ["需要商标状态截图。"]
+    assert prepared == ["需要商标状态截图。"]
 
 
 async def test_changed_draft_cannot_leak_speech_history_or_task_credit():

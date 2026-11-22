@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>历史通话 · AI Call</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/history.css">
+  <link rel="stylesheet" href="/static/call-analysis.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="icon-button" href="/" aria-label="通话主页" title="通话主页"><svg aria-hidden="true"><use href="/static/icons.svg#back"/></svg></a>
+    <h1>历史通话</h1>
+    <button class="icon-button" id="refreshHistory" type="button" aria-label="刷新记录" title="刷新记录"><svg aria-hidden="true"><use href="/static/icons.svg#reset"/></svg></button>
+  </header>
+  <main id="historyMain">
+    <div class="workbench">
+      <section class="records" aria-label="通话列表">
+        <form id="historyFilters" class="filters" role="search" aria-label="筛选历史通话">
+          <div class="search-field">
+            <label class="sr-only" for="historyQuery">搜索工单或编号</label>
+            <input id="historyQuery" type="search" maxlength="100" placeholder="搜工单或编号">
+            <button class="icon-button" type="submit" aria-label="搜索" title="搜索"><svg aria-hidden="true"><use href="/static/icons.svg#search"/></svg></button>
+          </div>
+          <details id="historyFilterMenu" class="filter-menu">
+            <summary class="icon-button" aria-label="筛选" title="筛选"><svg aria-hidden="true"><use href="/static/icons.svg#settings"/></svg></summary>
+            <div class="filter-fields">
+              <label>类型
+                <select id="historyKind">
+                  <option value="">全部</option><option value="voice">语音</option><option value="text">试聊</option>
+                </select>
+              </label>
+              <label>结果
+                <select id="historyOutcome">
+                  <option value="">全部</option><option value="complete">已完成</option><option value="active">未完成</option>
+                  <option value="paused">已暂停</option><option value="declined">已拒绝</option><option value="unknown">未记录</option>
+                </select>
+              </label>
+            </div>
+          </details>
+        </form>
+        <p id="historyCount" class="list-status" role="status">读取中…</p>
+        <ul id="historyList" class="record-list"></ul>
+        <nav id="historyPager" class="pager" aria-label="历史通话分页" hidden>
+          <button class="icon-button pager-prev" id="prevHistoryPage" type="button" aria-label="上一页" title="上一页"><svg aria-hidden="true"><use href="/static/icons.svg#chevron"/></svg></button>
+          <span id="historyPageNumber"></span>
+          <button class="icon-button pager-next" id="nextHistoryPage" type="button" aria-label="下一页" title="下一页"><svg aria-hidden="true"><use href="/static/icons.svg#chevron"/></svg></button>
+        </nav>
+      </section>
+      <section id="historyDetail" class="detail" aria-label="通话详情" tabindex="-1">
+        <button id="backToHistoryList" class="icon-button back-list" type="button" aria-label="返回列表" title="返回列表"><svg aria-hidden="true"><use href="/static/icons.svg#back"/></svg></button>
+        <p id="historyDetailStatus" class="detail-empty" role="status">选择通话</p>
+        <article id="historyCall" hidden>
+          <header class="call-heading">
+            <div class="call-title">
+              <h2 id="historyCallTitle"></h2>
+              <button id="openCallAnalysis" class="optimize-call" type="button" aria-haspopup="dialog" disabled>
+                <svg aria-hidden="true"><use href="/static/icons.svg#trend"/></svg><span>优化</span>
+              </button>
+            </div>
+            <div class="call-subtitle"><span id="historyCallTime"></span><span id="historyCallOutcome" class="badge"></span>
+              <details id="historyCallInfo"><summary>详情</summary><dl id="historyCallMeta" class="call-meta"></dl></details>
+            </div>
+          </header>
+          <h3 class="sr-only">对话转写</h3>
+          <p id="historyNoTranscript" class="no-transcript" hidden>无转写</p>
+          <ol id="historyTranscript" class="transcript" aria-label="对话转写"></ol>
+        </article>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/static/history.js"></script>
+</body>
+</html>

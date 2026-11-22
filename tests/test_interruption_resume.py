@@ -115,6 +115,24 @@ async def test_voice_barge_in_renders_immediately_but_yields_to_unfinished_asr(m
         await session.close()
 
 
+async def test_interrupting_repeat_prompt_does_not_resume_it():
+    events = []
+
+    async def send(event):
+        events.append(event)
+
+    session = Session(DEFAULT_CARD, RecordingCloud(), TestBrain(), send, voice=True, predictions=False)
+    try:
+        session.request_repeat(100.)
+        await until(lambda: any(isinstance(event, bytes) for event in events))
+        epoch = session.epoch
+        await session.interrupt("speech")
+        assert frames(events, "cancel")[-1]["epoch"] == epoch
+        assert session.resume_task is None
+    finally:
+        await session.close()
+
+
 async def test_close_or_new_input_discards_speculative_audio(monkeypatch):
     monkeypatch.setattr(session_module, "RESUME_DELAY", .05)
     for action in ("close", "text"):

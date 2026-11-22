@@ -19,7 +19,7 @@ from .forecast import candidate_limit_from_env
 from .brain import Brain
 from .phone_file import Flow, PhoneFile, compile_phone
 from .speech_start import reusable_clause
-from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
+from .models import CallPlaybook, Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
 from .playback import Playback, Unit, enqueue_for_playback
 from .silent_logger import silent_log
@@ -77,10 +77,15 @@ class Session:
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
                  phone_file: PhoneFile | None = None, predictions: bool = True, log_dir: Path | None = None,
                  decision_tracker=None, performance_monitor=None, on_hangup=None,
-                 wait_for_input_end: Callable[[], Awaitable] | None = None):
+                 wait_for_input_end: Callable[[], Awaitable] | None = None,
+                 analysis_task: TaskCard | None = None, mode: str | None = None,
+                 playbook: CallPlaybook | None = None, playbook_version: int | None = None):
         self.id = uuid.uuid4().hex[:12]
-        file = phone_file or compile_phone(card)
-        self.memory = Memory(file.task, flow=Flow(file))
+        self.base_file = phone_file or compile_phone(card)
+        file = self.base_file.with_opening(playbook.opening) if playbook else self.base_file
+        self.memory = Memory(file.task, flow=Flow(file, playbook=playbook))
+        self.analysis_task = analysis_task or card
+        self.mode, self.playbook_version = mode, playbook_version
         self.cloud, self.brain, self.transport = cloud, brain, send
         self.voice, self.predictions = voice, predictions
         self.epoch = 0
@@ -211,13 +216,13 @@ class Session:
     async def start(self):
         self.memory.flow.opening_status = "playing"
         self.epoch += 1
-        self.log("started", task=self.memory.card.model_dump(), voice=self.voice,
-                 predictions=self.predictions)
+        self.log("started", task=self.analysis_task.model_dump(), voice=self.voice,
+                 predictions=self.predictions, mode=self.mode, playbook_version=self.playbook_version)
         epoch = self.epoch
         self.starting = True
         await self.send({"type": "ready", "session_id": self.id, "voice": self.voice,
-                         "predictions": self.predictions, "task": self.memory.card.model_dump(),
-                         "phone_file": self.memory.flow.file.model_dump()})
+                         "predictions": self.predictions, "task": self.base_file.task.model_dump(),
+                         "phone_file": self.base_file.model_dump()})
         if self.is_current(epoch):
             self.starting = False
             self._begin_turn("opening")
@@ -337,7 +342,8 @@ class Session:
             self.log("staged_reuse_error", error=type(exc).__name__)
             return None
 
-    async def user_text(self, text: str, *, source: str = "text", end_ms: float | None = None):
+    async def user_text(self, text: str, *, source: str = "text", end_ms: float | None = None,
+                        voice_timing: dict | None = None):
         text = text.strip()
         if not text or self.closed or self.ended:
             return
@@ -398,6 +404,8 @@ class Session:
                 self.log("predictions_dropped_after_interrupt",
                          candidates=len(staged_candidates))
         self._begin_turn(source)
+        if voice_timing:
+            self.turn_metrics.update(voice_timing)
         self.turn_metrics.update(last_voice_client_ms=end_ms,
                                  candidates_available=len(candidates),
                                  staged_reuse=staged_reuse,
@@ -408,6 +416,24 @@ class Session:
         if self.is_current(epoch):
             self.starting = False
             self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio, preview=preview, leads=leads))
+
+    def request_repeat(self, end_ms: float):
+        if not self.voice or self.closed or self.ended:
+            return
+        # Speech onset already interrupted any reply before ASR finalized.
+        self.cancel_continuation()
+        if self.forecast and not self.forecast.done():
+            self.forecast.cancel()
+        self.candidates = []
+        self.prediction_audio.clear()
+        self.prediction_epoch = -1
+        self._clear_staged()
+        self.epoch += 1
+        self.playback = Playback()
+        self.reply_completed = False
+        self._begin_turn("asr_repeat")
+        self.turn_metrics["last_voice_client_ms"] = end_ms
+        self.response = self.spawn(self._run(self.epoch, repeat_prompt=True))
 
     def cancel_continuation(self):
         if self.resume_task is not None:
@@ -493,7 +519,8 @@ class Session:
         self.pending_update = None
         self.playback.interrupt()
         if self.voice and self.phase == "speaking" and reason in {"speech", "manual"}:
-            unfinished = [u for u in self.units.values() if not u.delivered and not u.entry.get("bridge")]
+            unfinished = [u for u in self.units.values()
+                          if not u.delivered and not u.audio_only and not u.entry.get("bridge")]
             if unfinished:
                 first, *rest = unfinished
                 heard = first.entry["text"]
@@ -544,9 +571,10 @@ class Session:
             self.memory.flow.opening_status = "delivered"
         unit.entry["delivery"] = "complete"
         unit.entry.pop("played_ms", None)
-        unit.say.covers = self.memory.delivered_covers(unit.say)
-        self.memory.delivered.update(unit.say.covers)
-        self.memory.last_question = unit.say.question
+        if not unit.audio_only:
+            unit.say.covers = self.memory.delivered_covers(unit.say)
+            self.memory.delivered.update(unit.say.covers)
+            self.memory.last_question = unit.say.question
         unit.finished.set()
         self.log("delivered", unit=unit.number, text=unit.say.text, covers=unit.say.covers)
 
@@ -620,7 +648,8 @@ class Session:
     async def _run(self, epoch: int, *, opening: bool = False, user: str = "",
                    candidates: list[Candidate] | None = None,
                    audio: dict[str, bytes] | None = None, preview=None, leads=(),
-                   continuation: list[Say] | None = None, prepared: Unit | None = None, resume_hangup=False):
+                   continuation: list[Say] | None = None, prepared: Unit | None = None, resume_hangup=False,
+                   repeat_prompt: bool = False):
         queue: asyncio.Queue = asyncio.Queue(maxsize=5)
         children: list[asyncio.Task] = [preview.task] if preview else []
         children.extend(lead.task for lead in leads)
@@ -656,10 +685,12 @@ class Session:
             entry = {"role": "assistant", "text": line.text, "delivery": "unplayed"}
             if bridge_pcm is not None:
                 entry["bridge"] = True
-            self.memory.history.append(entry)
+            if not repeat_prompt:
+                self.memory.history.append(entry)
             use_prepared = prepared is not None and not current_units
             unit = prepared if use_prepared else Unit(len(current_units) + 1, line, entry)
             unit.is_opening = opening
+            unit.audio_only = repeat_prompt
             unit.entry = entry
             current_units.append(unit)
             self.units[unit.number] = unit
@@ -689,16 +720,23 @@ class Session:
                 if prepared_preview:
                     preview_audio_claimed = True
                 children.append(self.spawn(self._synthesize(unit, pcm, preview=prepared_preview, turn=turn)))
-            await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
-                             "text": line.text, "rate": 24000, "candidate_id": candidate_id,
-                             "filler": bridge_pcm is not None}, epoch=epoch)
+            utterance = {"type": "utterance", "epoch": epoch, "unit": unit.number,
+                         "rate": 24000, "candidate_id": candidate_id,
+                         "filler": bridge_pcm is not None}
+            if repeat_prompt:
+                utterance["audio_only"] = True
+            else:
+                utterance["text"] = line.text
+            await self.send(utterance, epoch=epoch)
             await enqueue_for_playback(queue, unit, output)
 
         try:
             self.phase = "thinking"
             await self.send({"type": "reply_start", "epoch": epoch}, epoch=epoch)
             await self.state()
-            if continuation:
+            if repeat_prompt:
+                await say(Say(text="不好意思，我没听清，您能再说一遍吗？"))
+            elif continuation:
                 hangup = resume_hangup
                 for line in continuation:
                     await say(line)
@@ -748,7 +786,7 @@ class Session:
                                         turn)
                                 llm_first = True
                         if kind == "route":
-                            self.memory.flow.apply(value, user)
+                            self.memory.flow.apply(value, user, earlier_users=self.memory.user_evidence())
                             goal = self.memory.flow.context()
                             self.log("phone_route", leaf=goal["leaf"], current=goal["current"], completed=goal["completed"])
                             await self.state()
@@ -830,7 +868,7 @@ class Session:
             # gets a private copy and merges that update before snapshotting;
             # playback is never blocked. Eligibility still requires complete
             # playback (see user_text).
-            if self.predictions and not hangup and self.memory.status == "active":
+            if self.predictions and not repeat_prompt and not hangup and self.memory.status == "active":
                 base = copy.deepcopy(self.memory)
                 self.forecast = self.spawn(self._forecast(
                     epoch, opening, pending_update, base, user, before,
@@ -843,7 +881,7 @@ class Session:
                 self._finish_turn(completed=True, turn=turn)
 
                 # Track task completion
-                if self.memory.status == "complete" and self.performance_monitor:
+                if not repeat_prompt and self.memory.status == "complete" and self.performance_monitor:
                     self.performance_monitor.record_task_completion(success=True)
                 
                 await self.send({"type": "reply_done", "epoch": epoch,
@@ -892,7 +930,9 @@ class Session:
                     self.forecast.cancel()
                 self.phase = "listening"
                 message = str(exc) if isinstance(exc, ProviderError) else "本次回复未完成，请重试或换一种说法。"
-                self.log("reply_error", error=type(exc).__name__)
+                self.log("reply_error", error=type(exc).__name__,
+                         cutoff=[{"text": u.entry["text"]} for u in current_units
+                                 if u.entry.get("delivery") == "partial"])
                 self._finish_turn(completed=False, error=type(exc).__name__, turn=turn)
                 await self.send({"type": "cancel", "epoch": epoch, "reason": "reply_error"})
                 await self.send({"type": "error", "message": message, "recoverable": True})
@@ -1102,4 +1142,9 @@ class Session:
         self.audio_warm.clear()
         self._clear_staged()
         self.bridge_audio = None
-        self.log("closed")
+        pending = [unit for unit in self.units.values() if "remaining_text" not in unit.entry]
+        for unit in pending:
+            unit.record_cutoff()
+        self.log("closed", status=self.memory.status,
+                 cutoff=[{"text": u.entry["text"]} for u in pending
+                         if u.entry.get("delivery") == "partial"])

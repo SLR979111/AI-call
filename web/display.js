@@ -295,7 +295,7 @@ function onMessage({ data }) {
     case 'utterance':
       if (event.epoch !== epoch || call?.player?.blocked.has(event.epoch)) break;
       call?.player?.unit(event);
-      addLine('ai', event.text, `${event.epoch}:${event.unit}`);
+      if (!event.audio_only) addLine('ai', event.text, `${event.epoch}:${event.unit}`);
       setPartial('');
       break;
 

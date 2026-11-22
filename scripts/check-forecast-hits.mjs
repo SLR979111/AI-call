@@ -56,7 +56,7 @@ try {
     await page.goto(base);
     await page.locator('#startVoice:enabled').waitFor();
     await page.locator('#editTask').click();
-    await page.locator('#callOptions summary').click();
+    await page.locator('#toggleCallOptions').click();
   await page.locator('#prediction').check();
     await page.locator('#closeDialog').click();
     await page.locator('#startVoice').click();

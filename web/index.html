@@ -7,7 +7,8 @@
   <title>AI Call</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/call.css">
-  <link rel="stylesheet" href="/static/text-engine.css">
+  <link rel="stylesheet" href="/static/call-analysis.css">
+  <link rel="stylesheet" href="/static/text-engine.css?v=ae4b0e2e">
 </head>
 <body>
   <main id="viewport" aria-label="对话区域" tabindex="0">
@@ -43,21 +44,51 @@
         <button id="interrupt" aria-label="打断" title="打断"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M12 7l7 5-7 5Z"/></svg></button>
         <button id="stop" aria-label="结束对话" title="结束对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13c4-5 14-5 18 0v5h-5v-4a13 13 0 0 0-8 0v4H3v-5Z"/></svg></button>
       </div>
-      <div class="toolbar-end"><button id="latest" aria-label="回到最新" title="回到最新" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m-6-6 6 6 6-6M5 21h14"/></svg></button></div>
+      <div class="toolbar-end">
+        <button id="latest" aria-label="回到最新" title="回到最新" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m-6-6 6 6 6-6M5 21h14"/></svg></button>
+      </div>
     </div>
   </footer>
   <dialog id="taskDialog" aria-labelledby="orderHeading">
-    <div class="order-heading"><h1 id="orderHeading">工单流程</h1><button id="closeDialog" type="button" aria-label="关闭"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#close"/></svg></button></div>
+    <header class="order-heading">
+      <h1 id="orderHeading">工单流程</h1>
+      <div class="order-heading-tools">
+        <a id="openCallHistory" class="icon-control labeled-control" href="/history" aria-label="历史通话" title="历史通话" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 1 2.5 6.2M3 7v5h5m4-5v5l3 2"/></svg><span>历史</span>
+        </a>
+        <button id="openCallAnalysis" class="icon-control labeled-control" type="button" aria-label="通话优化" title="跨工单经验库" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16M8 15l4-4 3 2 5-6M16 7h4v4"/></svg><span>优化</span>
+        </button>
+        <button id="closeDialog" class="icon-control" type="button" aria-label="关闭" title="关闭"><svg aria-hidden="true"><use href="/static/icons.svg#close"/></svg></button>
+      </div>
+    </header>
     <div class="order-toolbar">
-      <select id="taskPack" aria-label="选择工单"></select>
-      <button id="addOrder" class="action" type="button"><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#plus"/></svg> 添加工单</button>
+      <div class="order-select">
+        <svg aria-hidden="true"><use href="/static/icons.svg#document"/></svg>
+        <select id="taskPack" aria-label="选择工单"></select>
+        <svg aria-hidden="true"><use href="/static/icons.svg#chevron"/></svg>
+      </div>
+      <button id="addOrder" class="icon-control labeled-control add-order" type="button" aria-label="新建工单" title="新建工单"><svg aria-hidden="true"><use href="/static/icons.svg#plus"/></svg><span>新建</span></button>
     </div>
     <p id="orderMessage" role="status" hidden></p>
+    <div class="order-loading" id="orderLoading" aria-hidden="true" hidden>
+      <div class="loading-rank"><span></span></div>
+      <div class="loading-rank"><span></span></div>
+      <div class="loading-rank"><span></span><span></span><span></span></div>
+      <div class="loading-rank"><span></span><span></span></div>
+    </div>
     <section id="graphView">
-      <nav class="order-tabs" aria-label="电话文件">
-        <button type="button" id="graphTab" aria-pressed="true">流程图</button>
-        <button type="button" id="materialsTab" aria-pressed="false">应答与背景</button>
-      </nav>
+      <div class="order-view-bar" id="orderViewBar">
+        <nav class="order-tabs" aria-label="电话文件视图">
+          <button class="icon-control labeled-control" type="button" id="graphTab" aria-controls="phoneGraph" aria-pressed="true"><svg aria-hidden="true"><use href="/static/icons.svg#flow"/></svg><span>流程图</span></button>
+          <button class="icon-control labeled-control" type="button" id="materialsTab" aria-label="应答与背景" title="应答与背景" aria-controls="materialsView" aria-pressed="false"><svg aria-hidden="true"><use href="/static/icons.svg#reply"/></svg><span>应答</span></button>
+        </nav>
+        <div class="order-select path-filter" id="pathFilter">
+          <svg aria-hidden="true"><use href="/static/icons.svg#branch"/></svg>
+          <select id="phonePathFilter" aria-label="查看路径" title="查看路径"></select>
+          <svg aria-hidden="true"><use href="/static/icons.svg#chevron"/></svg>
+        </div>
+      </div>
       <div id="phoneGraph"></div>
       <div id="materialsView" hidden>
         <label>开场白<textarea id="basicOpening" maxlength="180"></textarea></label>
@@ -71,28 +102,47 @@
         <label>完成依据<textarea id="nodeDone" required maxlength="320" rows="2"></textarea></label>
         <fieldset><legend>前置节点</legend><div id="nodeDeps"></div></fieldset>
         <fieldset><legend>涉及的工单要点</legend><div id="nodePoints"></div></fieldset>
-        <div class="action-row"><button class="action" type="submit">应用到草稿</button><button class="action" type="button" id="cancelNode">返回流程图</button><button class="action" type="button" id="removeNode">删除节点</button></div>
+        <div class="action-row node-form-actions">
+          <button class="icon-control labeled-control danger-control" type="button" id="removeNode" aria-label="删除节点" title="删除节点"><svg aria-hidden="true"><use href="/static/icons.svg#trash"/></svg><span>删除</span></button>
+          <button class="icon-control labeled-control" type="button" id="cancelNode" aria-label="返回流程图" title="返回流程图"><svg aria-hidden="true"><use href="/static/icons.svg#back"/></svg><span>返回</span></button>
+          <button class="action primary-action" type="submit">应用到草稿</button>
+        </div>
       </form>
-      <div class="action-row" id="graphActions"><button type="button" class="action" id="editGraph">编辑电话文件</button><button type="button" class="action" id="addNode" hidden><svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#plus"/></svg> 添加节点</button>
-        <button type="button" class="action" id="editSource">编辑工单</button><button type="button" class="action" id="downloadPhone">下载电话文件</button></div>
       <label id="defaultGoalField" hidden>默认通话目标<select id="defaultGoal"></select></label>
     </section>
     <form id="taskForm" hidden>
       <label>工单名称<input id="editTitle" required maxlength="80"></label>
       <label>对话目标<textarea id="editGoal" required maxlength="1000" rows="2"></textarea></label>
       <label>已知信息<textarea id="editFacts" maxlength="5000" rows="4"></textarea></label>
-      <label>需要说清的要点 <small>每行一项，最多 8 项</small><textarea id="editPoints" required rows="3"></textarea></label>
+      <label>需要说清的要点<textarea id="editPoints" required rows="3" placeholder="每行一项，最多 8 项"></textarea></label>
       <label>开场白<textarea id="editOpening" required maxlength="180" rows="2"></textarea></label>
       <button id="generateOrder" type="submit" class="action primary-action">生成流程图</button>
     </form>
-    <div class="review-actions" id="reviewActions" hidden><button class="action" id="discardDraft" type="button">放弃草稿</button><button class="action primary-action" id="saveTask" type="button">确认并使用</button></div>
-    <details class="call-options" id="callOptions"><summary>通话选项</summary>
-      <label>通话模式<select id="callMode"><option value="cloud">云端语音 · 当前音色</option><option value="local">纯本地 · MeloTTS 普通话女声</option></select></label>
-      <label class="prediction-option"><input id="prediction" type="checkbox" checked>提前准备可能的回复</label>
-      <div class="session-details"><span id="outcomeText">等待开始</span><span id="latency"></span><span id="duration"></span><span id="cacheStat"></span><ul id="checkpoints"></ul></div>
-      <div class="action-row"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#external"/></svg></a><button class="action" id="export" type="button">导出对话</button><button class="action" id="restoreTask" type="button">使用默认工单</button></div>
-    </details>
-    <div class="import-row"><button type="button" class="action" id="importPhone">载入电话文件</button><input id="phoneInput" type="file" accept=".json" hidden></div>
+    <div class="order-footer">
+      <div class="order-tools" id="graphActions" role="group" aria-label="编辑">
+        <button type="button" class="icon-control labeled-control" id="editGraph"><svg aria-hidden="true"><use href="/static/icons.svg#edit"/></svg><span>编辑流程</span></button>
+        <button type="button" class="icon-control labeled-control" id="addNode" hidden><svg aria-hidden="true"><use href="/static/icons.svg#node-add"/></svg><span>添加节点</span></button>
+        <button type="button" class="icon-control labeled-control" id="editSource"><svg aria-hidden="true"><use href="/static/icons.svg#document-edit"/></svg><span>编辑工单</span></button>
+      </div>
+      <div class="review-actions" id="reviewActions" hidden><button class="action" id="discardDraft" type="button">放弃草稿</button><button class="action primary-action" id="saveTask" type="button">确认并使用</button></div>
+      <div class="order-tools order-utilities" role="group" aria-label="文件和设置">
+        <button type="button" class="icon-control labeled-control" id="importPhone" aria-label="导入电话文件" title="导入电话文件"><svg aria-hidden="true"><use href="/static/icons.svg#upload"/></svg><span>导入</span></button>
+        <button type="button" class="icon-control labeled-control" id="downloadPhone" aria-label="下载电话文件" title="下载电话文件"><svg aria-hidden="true"><use href="/static/icons.svg#download"/></svg><span>下载</span></button>
+        <button type="button" class="icon-control labeled-control" id="toggleCallOptions" aria-controls="callOptions" aria-expanded="false"><svg aria-hidden="true"><use href="/static/icons.svg#settings"/></svg><span>通话选项</span></button>
+        <input id="phoneInput" type="file" accept=".json" hidden>
+      </div>
+    </div>
+    <section class="call-options" id="callOptions" aria-labelledby="callOptionsHeading" hidden>
+      <h2 id="callOptionsHeading">通话选项</h2>
+      <label class="call-option">
+        通话模式
+        <select id="callMode"><option value="cloud">云端</option><option value="local">纯本地</option></select>
+      </label>
+      <label class="call-option">
+        提前准备回复
+        <input id="prediction" class="toggle-switch" type="checkbox" role="switch" checked>
+      </label>
+    </section>
   </dialog>
   <script src="/static/text-motion.js"></script>
   <script src="/static/text-engine.js"></script>

@@ -13,7 +13,8 @@ import soxr
 from .forecast import match_example
 from .local_asr import install_model, model_dir
 from .phone_file import model_context
-from .models import Say, Update
+from .phone_style import PHONE_STYLE
+from .models import PLAYBOOK_GUIDANCE, Say, Update
 from .providers import Cloud, ProviderError, Settings
 from .speech_start import first_sound
 from .voice_preview import first_clause
@@ -83,9 +84,9 @@ class LocalProvider(Cloud):
             if voice and self.engine is None:
                 self.engine = await asyncio.get_running_loop().run_in_executor(self.worker, load_voice)
 
-    async def chat(self, messages, *, max_tokens=650, schema=None):
+    async def chat(self, messages, *, max_tokens=650, schema=None, context_size=8192):
         payload = {"model": MODEL, "messages": messages, "stream": True, "think": False, "keep_alive": "15m",
-                   "options": {"temperature": 0.2, "num_predict": max_tokens, "num_ctx": 8192}}
+                   "options": {"temperature": 0.2, "num_predict": max_tokens, "num_ctx": context_size}}
         if schema is not None:
             payload["format"] = schema
         async with self.client.stream("POST", "/api/chat", json=payload) as response:
@@ -99,15 +100,19 @@ class LocalProvider(Cloud):
                     if piece:
                         yield piece
 
-    async def structured(self, model, instruction, context, max_tokens, on_first_clause=None):
+    async def structured(self, model, instruction, context, max_tokens, on_first_clause=None, *,
+                         context_size=8192):
         schema = model.model_json_schema()
         messages = [{"role": "system", "content": instruction}]
         if model is Say:
             # Keep task instructions out of the caller's role. A small local
             # model must distinguish actual statements from conditional examples.
             materials = {k: context[k] for k in ("basic_response", "background", "graph", "state")}
-            sections = [instruction, "按当前小目标和对方最新诉求回复，事实以背景资料和实际通话为准。",
+            sections = [instruction, "按对方最新自述的状态处理。业务事实和操作步骤以 background 为准。"
+                        "图节点的 done_when 只用于记进度。背景没有要求截图或检查某个页面时，不要求对方这么做。",
                         json.dumps(materials, ensure_ascii=False)]
+            if context["state"].get("flow", {}).get("playbook"):
+                sections.insert(1, PLAYBOOK_GUIDANCE)
             cutoffs = [e for e in context["dialogue"][-8:] if "remaining_text" in e]
             if cutoffs:
                 sections.append("打断记录：" + json.dumps(cutoffs, ensure_ascii=False))
@@ -128,7 +133,8 @@ class LocalProvider(Cloud):
                 obj["additionalProperties"] = False
                 obj["required"] = list(obj["properties"])
         raw = ""
-        async with aclosing(self.chat(messages, max_tokens=max_tokens, schema=schema)) as stream:
+        options = {"context_size": context_size} if context_size != 8192 else {}
+        async with aclosing(self.chat(messages, max_tokens=max_tokens, schema=schema, **options)) as stream:
             async for chunk in stream:
                 raw += chunk
                 obj = raw.lstrip()
@@ -163,11 +169,11 @@ class LocalProvider(Cloud):
             yield "reuse", line
         else:
             line = await self.structured(Say,
-                "你是中文电话客服。优先处理最后一句中的新情况和具体问题。"
+                f"你是中文电话客服。优先处理最后一句中的新情况和具体问题。\n{PHONE_STYLE}\n"
                 "只基于本轮用户原话和此前已经说过的话判断当前情况。资料中含有‘若/如果/可能/后来’的内容仅是条件，禁止把这些情况当作用户已报告的事实。"
-                "text 只用一句话先回答眼前的一件事，通常15至35个字。只确认负责或方便时就说明现有记录里的第一个问题。"
+                "text 只写说给对方听的话。只确认负责或方便时就说明现有记录里的第一个问题。"
                 "不要用‘您提到/您已经’引出对方没说过的事，不复述整套流程，不加例行反问。"
-                "只用给出的事实。对方明确改了做法时，回答新做法下的要求。没提供的信息就说无法确认。不要说明推理，不承诺查询或回电。"
+                "只用给出的事实和操作步骤，不猜按钮位置或提交后的页面状态。对方明确改了做法时，回答新做法下的要求。没提供的信息就说无法确认。不要说明推理。没有查询、回电或主动通知能力。"
                 "打断历史的 text 是已听到的部分。忙或拒绝时尊重对方。"
                 "covers 只填本句完整讲清的 checkpoint id。",
                 snapshot, 240, on_first_clause)

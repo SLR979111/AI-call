@@ -45,7 +45,8 @@ class Capture extends AudioWorkletProcessor {
           if (this.offset === 320) {
             try {
               const processed = this.acoustics.process(this.frame, this.reference);
-              this.port.postMessage({type:'audio', ...processed}, [processed.pcm,processed.raw_pcm]);
+              this.port.postMessage({type:'audio', hasInput: Boolean(input?.length), ...processed},
+                [processed.pcm, processed.raw_pcm]);
             } catch {
               this.port.postMessage({type:'error'});
               this.acoustics.close(); this.closed=true;

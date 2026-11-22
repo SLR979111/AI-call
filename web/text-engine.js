@@ -41,11 +41,19 @@ class TextLayoutEngine extends EventTarget {
     if (!history) this.current.set(role, id);
     this.invalidate(); return handle;
   }
-  record(handle) { const value = this.records.get(handle?.id); return value?.handle === handle && !value.closed ? value : null; }
+  record(handle) { const value = this.records.get(handle?.id); return value && value.handle === handle && !value.closed ? value : null; }
   append(handle, delta) { const record = this.record(handle); if (!record) return false; record.text += delta; this.invalidate(); return true; }
   revise(handle, text) { const record = this.record(handle); if (!record) return false; record.text = String(text); this.invalidate(); return true; }
   finish(handle) { const record = this.record(handle); if (record) record.closed = true; }
   cancel(handle) { this.finish(handle); }
+  discard(handle) {
+    const record = this.record(handle);
+    if (!record) return;
+    this.records.delete(record.id);
+    this.rows.get(record.id)?.remove(); this.rows.delete(record.id);
+    if (this.current.get(record.role) === record.id) this.current.delete(record.role);
+    this.invalidate();
+  }
   setCandidateProgress(value) { this.candidateProgress = value; this.invalidate(); }
   setCandidates(items, progress) {
     this.candidateProgress = progress;

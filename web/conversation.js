@@ -23,6 +23,11 @@ export class LiveConversation {
         const key = `${event.epoch}:${event.unit}`;
         if (event.epoch !== this.epoch || this.blocked.has(event.epoch) || this.finished.has(event.epoch) || this.units.has(key)) return false;
         this.units.add(key);
+        if (event.audio_only) {
+          this.engine.discard(this.partial); this.partial = null;
+          this.engine.setCandidates([]); this.candidates = [];
+          return true;
+        }
         let handle = this.replies.get(event.epoch);
         if (!handle) {
           const candidate = this.candidates.find(item => item.id === event.candidate_id && item.text === event.text);

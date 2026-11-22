@@ -21,7 +21,7 @@
 - 许可：Apache-2.0
 - 来源：<https://github.com/livekit/client-sdk-js>
 - 修改：未修改；直接 vendored 供浏览器 ESM 懒加载
-- 交付说明：随包保留本说明与 Apache-2.0 文本
+- 交付时随包保留本说明和 [2.23.0 发布包中的许可证](livekit-client-LICENSE)。
 
 ## 未使用/未部署
 
@@ -33,5 +33,5 @@
 ```text
 LiveKit Server：已使用 1.13.11
 LiveKit 客户端：已使用 2.23.0，vendored
-许可证材料：本说明已落，Apache-2.0 全文需随正式交付包补齐
+客户端许可原文随仓库分发。服务端镜像的交付事项见上文。
 ```

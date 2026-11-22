@@ -15,12 +15,14 @@
 双击 `start.cmd`，浏览器打开 <http://127.0.0.1:8088>。停止服务用 `stop.cmd`。
 
 1. 点击底部的工单名称查看完整流程图，也可以切换已保存的工单。点击“添加工单”填写资料，再点“生成流程图”。在草稿中可修改节点、前置依赖、完成依据、基础应答和背景资料。点击“确认并使用”后，这份电话文件会保存在当前浏览器，并用于拨号。文件可下载或在其他浏览器载入。旧版界面仍可通过 `/static/classic.html` 访问。
-2. 点击“开始通话”使用麦克风，或点击“文字试聊”。语音模式也可以输入文字。扬声器播放时，收音端使用实际播放的音频做消回声。
+2. 在工单页的「通话选项」选择云端或纯本地，并用滑块开关提前准备回复。点击“开始通话”使用麦克风，或点击“文字试聊”。语音模式也可以输入文字。扬声器播放时，收音端使用实际播放的音频做消回声。
 3. 说话或点“打断”会停止当前回复。下一轮按浏览器已播放的采样数估算句中的文字位置，完整播放的要点才会打勾。要点说完、对方确认理解且没有新问题时，客服可以先道别，等最后一句播完再挂断。
 
 工单库内置 11 张京东商家资质工单，覆盖品牌资料补正、补交进度、授权主体、主体资质到期、商标截图、企业更名、质检报告型号、许可附页、授权商品范围、商标续展和双品牌附件错放。每张工单有自己的记录、处理条件和完成要点。选择后可以直接用语音或文字追问、改口、确认或结束。通过 `/?pack=jd-brand-mixup` 可以直接接听双品牌工单，回放库中的六个例子也各有“进入互动通话”入口。工单数据为虚构案例；对话不会改动京东后台。
 
-页面上的接话耗时从用户最后一帧语音算到正文开始播放。要复测同一段输入，在已启动服务时运行 `node scripts/check-first-response.mjs <24kHz单声道PCM16文件> current`。每轮分别报告最终识别、正文文字到达和正文音频开始的时间。可用 `CALL_URL` 指定服务。运行 `node scripts/check-interrupted-call.mjs` 可在冻结文字动画时验证真实播放、打断续谈和主动道别。
+在工单流程弹窗或历史详情点「优化」，打开对应通话模式的经验库。「已入库」显示生效的经验，可切换版本。「复盘」里可查看报告、编辑和确认入库。复盘默认累计 5 通、至少来自两张工单，可在「复盘」的「设置」里调整样本条件和自动触发。新建工单生成电话文件时，模型会参考相关的已审核经验，把适用的流程约束写入节点和前置关系，把应答约束写入基础应答或节点动作。纯本地和云端各用自己的经验库，缺少模式信息的旧通话供纯本地复盘。
+
+接话耗时从用户最后一帧语音算到正文开始播放。要复测同一段输入，在已启动服务时运行 `node scripts/check-first-response.mjs <24kHz单声道PCM16文件> current`。每轮分别报告最终识别、正文文字到达和正文音频开始的时间。可用 `CALL_URL` 指定服务。运行 `node scripts/check-interrupted-call.mjs` 可在冻结文字动画时验证真实播放、打断续谈和主动道别。
 
 新机器需要 Python 3.12 和 uv，然后：
 
@@ -61,7 +63,7 @@ uv run --no-project --python 3.12 --with-requirements old/requirements.txt pytho
 - **可选裁决**。默认 `DECISION_ENABLED=0`、`SEMANTIC_DECISION=0`。两项可独立开启，修改 `.env` 后重启服务。规则命中时立即复用。规则未命中时，`SEMANTIC_DECISION=1` 用本机 BGE 比较短答与候选条件。云端模式还可用 `DECISION_ENABLED=1` 为含糊输入增加一次候选选择请求，默认预算 900 毫秒。两项同时开启时，先试本机向量，再试云端选择，最后沿用原回复流程。
 - 本机向量裁决需要在服务的 Python 环境中安装 `sentence-transformers`，并将已下载的 `bge-small-zh-v1.5` 目录填入 `SEMANTIC_MODEL_DIR`。权重在后台加载，缺少依赖、模型尚未就绪或超时均沿用原流程。
 - **命中后不阻塞**：预合成音频先播；缓存回复的状态 `update` 在后台请求，播放完成和 `reply_done` 不必等它。更新返回后再补写状态，用户打断则取消旧更新。
-- 开场相同、整张任务卡和模型完全一致时，可复用上次生成的开场候选。开场预测、LLM/ASR 结果和 TTS PCM 都写入本地 SQLite（`CACHE_PATH`），进程重启或新对话仍可直接读取；开场预测最多保留 16 张任务卡，后续轮次仍依据本次沟通重新准备。
+- 每轮候选文字根据本次通话的最新对话和工单状态重新生成。同一音色、同一句文字可以直接复用已有语音。云端的正式回复、识别结果和 TTS PCM 仍通过本地 SQLite（`CACHE_PATH`）跨通话和重启复用。
 - **声音**始终上行。浏览器使用 AudioWorklet 采集并重采样为 16 kHz；下行是 24 kHz PCM。实际送往扬声器的声音同时送入 AEC3 参考通道，经过消回声与降噪后用本机 Silero VAD 复核。播放期间还检查残余声音与播放参考的相似度；启动阶段用多路延迟比对保护真正插话。自动打断只由后端这一处触发，前端不再凭音量抢先停播。手动打断仍立即生效。
 - **本地识别加速**：终稿识别优先使用本机 SenseVoice（`LOCAL_ASR=1`，默认开启），短句约 0.1–0.2 s，命中预测时首句音频约 0.3–0.4 s；模型缺失或识别为空时自动回退云端 `/v1/tools/asr`。
 - **插话证据**：播放期间要求最近320 ms中至少160 ms的人声证据，允许音节间的小间隙；保留600 ms前置音频，避免截掉首字。底噪只在未播放且人声概率低时学习，回声不会把人声门槛越抬越高。每次回复有独立版本，客户端和服务端都丢弃取消后的旧结果。
@@ -88,7 +90,7 @@ uv run --no-project --python 3.12 --with-requirements old/requirements.txt pytho
 | `web/connection.js` | 一次拨打所用的连接、麦克风和播放设备的生命周期 |
 | `web/acoustics.js`、`web/vendor/` | 播放参考比对、AEC3、降噪及其许可证 |
 
-互动工单的场景事实由任务卡提供，实际业务查询、登记、派单和转接仍需在外部系统办理。预测、LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。
+互动工单的场景事实由任务卡提供，实际业务查询、登记、派单和转接仍需在外部系统办理。云端通话的 LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。
 
 如需在缓存丢失后重建，可设置 `CACHE_AUDIT_PATH=./runtime/cache-audit.jsonl`，在 provider 边界记录完整模型请求/回复和原始 PCM；再运行 `uv run python scripts/backfill_cache.py` 回灌。审计日志含对话内容，不要提交到仓库。详见 [缓存审计说明](old/docs/31-cache-audit-backfill.md)。
 
@@ -125,7 +127,7 @@ npm run test:browser
 
 ### 切换云端或纯本地通话
 
-打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、MeloTTS 的普通话女声朗读。两种模式各自保存预测与音频缓存。
+打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、MeloTTS 的普通话女声朗读。两种模式各自复用匹配的音频缓存。
 
 首次使用纯本地或从旧版华妍音色升级时，先启动已安装的 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen2.5:7b-instruct) · [MeloTTS 中文音色](https://huggingface.co/myshell-ai/MeloTTS-Chinese)
 
@@ -158,3 +160,9 @@ node scripts/check-first-response.mjs runtime/validation/latency-dialogues offli
 实现 API 参考：[AudioWorklet](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorklet)、[FastAPI WebSocket](https://fastapi.tiangolo.com/advanced/websockets/)。
 
 随代码提供本地 Silero VAD 模型、WebRTC AEC3 WASM 和各自许可证；其余依赖分别由 `uv.lock`、`package-lock.json` 固定。仓库不包含 API 凭据、运行环境、测试音频和通话日志。云接口及声学回灌需自行配置 `.env`；只运行 `uv run pytest -q` 和 `npm test` 不需要凭据。
+
+## 许可证
+
+本仓库的自有源码采用 Mozilla Public License 2.0（MPL-2.0）。[项目许可证全文](LICENSE)
+
+第三方代码、模型和二进制组件各自适用上游许可证。随仓库分发的组件可查阅 [Silero VAD 许可证](app/assets/silero-vad-LICENSE)、[WebRTC 音频处理许可证](web/vendor/webrtc-audio-processing/LICENSE)和[第三方声明](web/vendor/webrtc-audio-processing/THIRD-PARTY-NOTICES.md)。归档实现的依赖及许可记录见[归档组件清单](old/THIRD_PARTY.md)和[许可证目录](old/licenses/)。

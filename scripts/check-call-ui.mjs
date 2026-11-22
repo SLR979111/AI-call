@@ -61,7 +61,7 @@ try {
   assert.equal(sent.find(event => event.type === 'start').task.title, config.default_task.title);
   report.unmodified_legacy_default_migrates = true;
   assert.equal(await page.locator('.ring, #scenes, #sceneLabel').count(), 0);
-  assert.ok((await page.locator('footer button:not(#editTask)').allTextContents()).every(text => !text.trim()));
+  assert.ok((await page.locator('footer.controls button:not(#editTask)').allTextContents()).every(text => !text.trim()));
   const chevron = page.locator('#editTask svg use[href="/static/icons.svg#chevron"]');
   assert.equal(await chevron.count(),1);
   assert.ok(await chevron.evaluate(el => el.getBBox().width > 0));
@@ -147,7 +147,7 @@ try {
   for (const width of [320, 390, 600]) {
     await page.setViewportSize({width, height: 844}); await page.waitForTimeout(80);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    assert.ok(await page.evaluate(() => [...document.querySelectorAll('footer button')].filter(button => button.checkVisibility()).every(button => {
+    assert.ok(await page.evaluate(() => [...document.querySelectorAll('footer.controls button')].filter(button => button.checkVisibility()).every(button => {
       const r = button.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;
     })));
   }
@@ -162,9 +162,18 @@ try {
   await page.locator('#editTask').click();
   await page.locator('#phoneGraph .phone-rank').first().waitFor();
   assert.equal(await page.locator('#taskForm').isVisible(), false);
-  await page.locator('#callOptions summary').click();
-  assert.equal(await page.getByRole('link',{name:'观看对话回放'}).getAttribute('href'), '/demo/?library=1');
-  await page.locator('#restoreTask').click();
+  await page.getByRole('button', {name: '通话选项', exact: true}).click();
+  const callOptions = page.locator('#callOptions');
+  await callOptions.getByRole('combobox', {name: '通话模式'}).waitFor();
+  const predictions = callOptions.getByRole('switch', {name: '提前准备回复'});
+  const enabled = await predictions.isChecked();
+  await predictions.focus(); await predictions.press('Space');
+  assert.equal(await predictions.isChecked(), !enabled);
+  await predictions.setChecked(enabled);
+  assert.equal(await callOptions.locator('a, button, .session-details').count(), 0);
+  const defaultPack = Object.entries(config.task_packs)
+    .find(([,card]) => JSON.stringify(card) === JSON.stringify(config.default_task))[0];
+  await page.locator('#taskPack').selectOption(defaultPack);
   await page.waitForFunction(title => JSON.parse(localStorage.getItem('g2-task')).title === title, config.default_task.title);
   await page.locator('#addOrder').click();
   const created = '图书室周六开门';
@@ -174,16 +183,47 @@ try {
   await page.locator('#editPoints').fill('说明周六开放时间');
   await page.locator('#editOpening').fill('您好，现在方便说一下开放时间吗？');
   const beforeDraft = preparations.length;
+  let releaseGraph;
+  const graphGate = new Promise(resolve => { releaseGraph = resolve; });
+  const generateUrl = /\/api\/phone-file\?mode=cloud$/;
+  const generatesDraft = request => generateUrl.test(request.url()) && request.postDataJSON().title === created;
+  await page.route(generateUrl, async route => {
+    if (generatesDraft(route.request())) await graphGate;
+    await route.continue();
+  });
+  const graphRequested = page.waitForRequest(generatesDraft);
   await page.locator('#generateOrder').click();
+  await graphRequested;
+  const skeleton = page.locator('#orderLoading .loading-rank span').first();
+  await skeleton.waitFor();
+  assert.equal(await skeleton.evaluate(el => getComputedStyle(el).animationName), 'graph-pulse');
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  assert.equal(await skeleton.evaluate(el => getComputedStyle(el).animationName), 'none');
+  await page.emulateMedia({reducedMotion: 'no-preference'});
+  releaseGraph();
   await page.locator('#saveTask:enabled').waitFor();
+  assert.equal(await skeleton.isVisible(), false);
+  report.phone_generation_shows_motion_aware_preview = true;
   assert.equal(await page.locator('#selectedTitle').textContent(),config.default_task.title);
   assert.equal(preparations.length,beforeDraft);
   assert.equal(await page.locator('.phone-rank').first().locator('[data-node]').count(),1);
-  assert.equal(await page.locator('.phone-rank').first().locator('summary').innerText(),'通话开始');
+  assert.equal(await page.locator('.phone-rank').first().locator('.phone-node').innerText(),'通话开始');
+  const graphNodes = page.locator('#phoneGraph [data-node]');
+  const totalNodes = await graphNodes.count();
+  const branch = page.getByRole('combobox', {name:'查看路径'});
+  await branch.selectOption({index:1});
+  assert.ok(await graphNodes.count() < totalNodes);
+  await branch.selectOption('');
+  assert.equal(await graphNodes.count(), totalNodes);
+  await page.getByRole('button',{name:'问候与自我介绍', exact:true}).click();
+  assert.equal(await page.locator('#phoneNodeHeading').innerText(), '问候与自我介绍');
   await page.getByRole('button',{name:'编辑节点 问候与自我介绍'}).click();
   await page.locator('#basicOpening').fill('您好，我是图书室客服。现在方便吗？');
   await page.locator('#graphTab').click();
-  await page.locator('[data-node="purpose"] .node-edit').click();
+  const editableNode = page.locator('#phoneGraph [data-node][data-kind="business"]').first();
+  const editedId = await editableNode.getAttribute('data-node');
+  await editableNode.click();
+  await page.locator('#phoneNodeDetail .node-edit').click();
   await page.locator('#nodeGoal').fill('说明来电和图书室的关系');
   await page.locator('#nodeAction').fill('先回答读者问的时间。');
   await page.getByRole('button',{name:'应用到草稿'}).click();
@@ -196,7 +236,7 @@ try {
   const artifact = await download;
   const file = JSON.parse(await fs.readFile(await artifact.path(),'utf8'));
   assert.equal(file.title,created); assert.equal(file.format,'ai-call.phone.dag.v2'); assert.ok(!('task' in file));
-  assert.equal(file.graph.nodes.find(n => n.id === 'purpose').action,'先回答读者问的时间。');
+  assert.equal(file.graph.nodes.find(n => n.id === editedId).action,'先回答读者问的时间。');
   assert.equal(file.graph.nodes.find(n => n.kind === 'greeting').action,'您好，我是图书室客服。现在方便吗？');
   assert.equal(file.basic_response.guide,'用一句话直接回答读者。');
   assert.equal(file.background,'图书室本周六九点开门。');

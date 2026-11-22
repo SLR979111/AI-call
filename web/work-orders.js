@@ -1,4 +1,4 @@
-import {readPhone, showGraph, downloadPhone} from './phone-file.js';
+import {readPhone, showGraph, clearGraph, downloadPhone} from './phone-file.js';
 
 const $ = id => document.getElementById(id);
 const PREFIX = 'g2-order/';
@@ -27,7 +27,9 @@ function checked(id) { return [...$(id).querySelectorAll('input:checked')].map(e
 export function workOrders({mode, locked, activate, progress}) {
   const entries = new Map();
   let activeId, selected, card, file, stage = 'view', revision = 0, pending = false, nodeId;
+  let materials = false;
   const dialog = $('taskDialog');
+  const graph = $('phoneGraph'), pathSelect = $('phonePathFilter');
   const inReview = () => stage === 'review';
   function message(value = '') {
     $('orderMessage').textContent = value; $('orderMessage').hidden = !value;
@@ -40,33 +42,40 @@ export function workOrders({mode, locked, activate, progress}) {
   }
   function controls() {
     const busy = locked() || pending;
+    const generating = pending && !file;
+    const showViews = !!file && !nodeId;
     $('taskPack').disabled = locked() || stage !== 'view';
     $('addOrder').disabled = busy || stage !== 'view'; $('importPhone').disabled = busy || stage !== 'view';
-    $('restoreTask').disabled = busy || stage !== 'view';
-    $('graphView').hidden = stage === 'form';
-    $('taskForm').hidden = stage !== 'form';
+    $('graphView').hidden = !file;
+    $('orderLoading').hidden = !generating;
+    $('taskForm').hidden = stage !== 'form' || generating;
     $('generateOrder').disabled = pending;
     for (const el of $('taskForm').querySelectorAll('input, textarea')) el.disabled = pending;
     $('graphView').inert = pending && !!file;
     $('reviewActions').hidden = stage === 'view';
     $('saveTask').hidden = !inReview(); $('saveTask').disabled = busy || !!nodeId;
-    $('graphActions').hidden = !file || !!nodeId;
-    $('editGraph').hidden = inReview() || locked(); $('editSource').hidden = locked();
+    $('graphActions').hidden = !file || !!nodeId || locked();
+    $('editGraph').hidden = inReview();
     $('addNode').hidden = !inReview(); $('defaultGoalField').hidden = !inReview() || !!nodeId;
-    $('downloadPhone').disabled = !file;
+    $('downloadPhone').hidden = !file || !!nodeId;
     $('nodeForm').hidden = !nodeId;
+    $('orderViewBar').hidden = !showViews;
+    $('pathFilter').hidden = materials;
+    graph.hidden = !showViews || materials;
+    $('materialsView').hidden = !showViews || !materials;
+    $('graphTab').setAttribute('aria-pressed', String(!materials));
+    $('materialsTab').setAttribute('aria-pressed', String(materials));
     for (const id of ['basicOpening','basicGuide','backgroundText']) $(id).readOnly = !inReview();
     $('orderHeading').textContent = stage === 'form' ? '填写工单' : inReview() ? '确认电话文件' : '工单流程';
   }
-  function graphTab(materials = false) {
-    $('materialsView').hidden = !materials; $('phoneGraph').hidden = materials;
-    $('graphTab').setAttribute('aria-pressed', String(!materials));
-    $('materialsTab').setAttribute('aria-pressed', String(materials));
+  function graphTab(showMaterials = false) {
+    materials = showMaterials;
+    controls();
   }
   function draw() {
     controls();
-    if (!file) { $('phoneGraph').replaceChildren(); return; }
-    showGraph($('phoneGraph'), file, stage === 'view' && selected === activeId ? progress() : null, inReview() ? editNode : null);
+    if (!file) { clearGraph(graph, pathSelect); return; }
+    showGraph(graph, pathSelect, file, stage === 'view' && selected === activeId ? progress() : null, inReview() ? editNode : null);
     $('basicOpening').value = file.basic_response.opening; $('basicGuide').value = file.basic_response.guide;
     $('backgroundText').value = file.background;
     const leafSelect = $('defaultGoal'); leafSelect.replaceChildren(...leaves(file).map(n => new Option(n.goal,n.id)));
@@ -82,7 +91,7 @@ export function workOrders({mode, locked, activate, progress}) {
     const entry = entries.get(id);
     if (!entry) return;
     selected = id; card = entry.card; file = entry.file; stage = 'view'; nodeId = null;
-    pending = !file || !!entry.needsValidation; graphTab(); options();
+    pending = !file || !!entry.needsValidation; materials = false; options();
     if (entry.needsValidation) file = null;
     draw(); message(pending ? '正在生成工单流程…' : '');
     try {
@@ -109,16 +118,18 @@ export function workOrders({mode, locked, activate, progress}) {
     $('editTitle').value = source.title; $('editGoal').value = source.goal;
     $('editFacts').value = source.facts; $('editOpening').value = source.opening;
     $('editPoints').value = source.checkpoints.map(p => p.description).join('\n');
-    $('editPoints').setCustomValidity(''); message(); options(); controls(); $('editTitle').focus();
+    $('editPoints').setCustomValidity(''); message(); options(); draw(); $('editTitle').focus();
   }
-  function review(data) {
-    stage = 'review'; file = structuredClone(data); nodeId = null; graphTab(); options();
-    message((data.source === 'work_order' ? '已按工单要点生成草稿。' : '已生成草稿。') + '核对流程、基础应答和背景资料后确认。'); draw();
+  function review(data, notice = '请核对草稿后确认。') {
+    stage = 'review'; file = structuredClone(data); nodeId = null; materials = false; options();
+    message(notice); draw();
+    $('graphTab').focus();
   }
   function editNode(id) {
     if (!inReview() || locked()) return;
     const n = file.graph.nodes.find(n => n.id === id);
     if (n?.kind === 'greeting') { graphTab(true); $('basicOpening').focus(); return; }
+    materials = false;
     nodeId = id || 'node_' + crypto.randomUUID().replaceAll('-','');
     $('nodeGoal').value = n?.goal || ''; $('nodeAction').value = n?.action || ''; $('nodeDone').value = n?.done_when || '';
     const blocked = new Set([nodeId]); // Descendants would create a cycle.
@@ -138,7 +149,7 @@ export function workOrders({mode, locked, activate, progress}) {
     file = {...file, graph: {...file.graph,nodes}};
     const goals = leaves(file);
     if (!goals.some(n => n.id === file.graph.default_leaf)) file.graph.default_leaf = goals[0].id;
-    nodeId = null; draw(); message('流程已更新，请确认草稿。');
+    nodeId = null; draw(); message('流程已更新，请确认草稿。'); $('graphTab').focus();
   }
   $('nodeForm').onsubmit = e => {
     e.preventDefault();
@@ -148,11 +159,11 @@ export function workOrders({mode, locked, activate, progress}) {
     const nodes = file.graph.nodes.some(v => v.id === nodeId) ? file.graph.nodes.map(v => v.id === nodeId ? n : v) : [...file.graph.nodes,n];
     updateNodes(nodes);
   };
-  $('cancelNode').onclick = () => { nodeId = null; draw(); };
+  $('cancelNode').onclick = () => { nodeId = null; draw(); $('graphTab').focus(); };
   $('removeNode').onclick = () => updateNodes(file.graph.nodes.filter(n => n.id !== nodeId).map(n => ({...n,requires:n.requires.filter(p => p !== nodeId)})));
   $('addNode').onclick = () => file.graph.nodes.filter(businessNode).length < 28 ? editNode(null) : message('每张图最多 28 个业务节点。');
   $('defaultGoal').onchange = e => { file.graph.default_leaf = e.target.value; };
-  $('graphTab').onclick = () => { graphTab(); draw(); }; $('materialsTab').onclick = () => graphTab(true);
+  $('graphTab').onclick = () => graphTab(); $('materialsTab').onclick = () => graphTab(true);
   for (const [id, key] of [['basicOpening','opening'],['basicGuide','guide'],['backgroundText','background']]) {
     $(id).oninput = () => {
       if (!inReview()) return;
@@ -167,7 +178,6 @@ export function workOrders({mode, locked, activate, progress}) {
   }
   $('editGraph').onclick = () => { if (file && !locked()) review(file); };
   $('taskPack').onchange = e => view(e.target.value, true);
-  $('restoreTask').onclick = () => view(entries.keys().next().value, true);
   $('addOrder').onclick = () => form(blank(), 'local-' + crypto.randomUUID());
   $('editSource').onclick = () => form(card, selected);
   $('taskForm').onsubmit = async e => {
@@ -179,12 +189,14 @@ export function workOrders({mode, locked, activate, progress}) {
     const source = {title:$('editTitle').value.trim(),goal:$('editGoal').value.trim(),facts:$('editFacts').value.trim(),
       opening:$('editOpening').value.trim(),checkpoints:descriptions.map((description,i) =>
         ({id: card.checkpoints[i]?.id || 'p_' + i,description}))};
-    const version = ++revision; pending = true; controls(); message('正在生成应答、背景资料和流程图…');
+    const version = ++revision; pending = true; controls(); message('正在生成电话文件…');
+    $('discardDraft').focus({preventScroll: true});
     try {
       const generated = await readPhone(source, false, mode());
       if (revision !== version) return;
       if (entries.get(selected)?.preset && !sameCard(source,card)) selected = 'local-' + crypto.randomUUID();
-      card = source; review(generated);
+      card = source; pending = false;
+      review(generated, generated.source === 'work_order' ? '已生成基础流程。可核对并编辑后使用，或返回工单重新生成。' : undefined);
     } catch (e) { if (version === revision) message(e.message); }
     finally { if (version === revision) { pending = false; controls(); } }
   };
@@ -206,6 +218,15 @@ export function workOrders({mode, locked, activate, progress}) {
     finally { if (revision === version) { pending = false; controls(); } }
   };
   $('downloadPhone').onclick = () => { if (file) downloadPhone(file); };
+  function showCallOptions(open) {
+    $('callOptions').hidden = !open;
+    $('toggleCallOptions').setAttribute('aria-expanded', String(open));
+    if (open) $('callOptions').scrollIntoView({block: 'nearest'});
+  }
+  $('toggleCallOptions').onclick = () => showCallOptions($('callOptions').hidden);
+  $('openCallHistory').onclick = event => {
+    event.currentTarget.target = locked() || stage !== 'view' ? '_blank' : '_self';
+  };
   $('importPhone').onclick = () => $('phoneInput').click();
   $('phoneInput').onchange = async e => {
     const source = e.target.files[0]; e.target.value = '';
@@ -220,7 +241,7 @@ export function workOrders({mode, locked, activate, progress}) {
   };
   $('discardDraft').onclick = () => view(activeId);
   $('closeDialog').onclick = () => dialog.close();
-  dialog.addEventListener('close', () => { revision++; pending = false; });
+  dialog.addEventListener('close', () => { revision++; pending = false; showCallOptions(false); });
   $('editTask').onclick = () => {
     if (!activeId) return;
     dialog.showModal(); view(activeId);

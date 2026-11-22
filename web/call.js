@@ -3,15 +3,17 @@ import {workOrders, sameCard as sameTask} from './work-orders.js';
 import {prepareTask, checkPreparation} from './preparation.js';
 import {CallConnection} from './connection.js';
 import {LiveConversation} from './conversation.js';
+import {bindCallAnalysis} from './call-analysis.js';
 
 const $ = id => document.getElementById(id);
 const view = new LiveConversation($('transcript'), $('viewport'));
 let task, defaultTask, call, voice = false, connected = false, epoch = 0;
-let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false, replyActive = false;
-let composing = false, savedCustom, prefixHits = 0;
+let inputInFlight = false, replyActive = false;
+let composing = false, savedCustom;
 const packs = new Map();
 let activePhone, flowState;
 let mode = localStorage.getItem('g2-call-mode') === 'local' ? 'local' : 'cloud';
+bindCallAnalysis(() => ({mode}));
 let cloudConfigured = false, preparation = null;
 $('callMode').value = mode;
 $('callMode').onchange = () => {
@@ -22,6 +24,11 @@ $('callMode').onchange = () => {
   clearError();
 };
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
+const dialStages = {
+  component: '正在载入消回声组件…',
+  permission: '等待麦克风权限，请在浏览器提示中选择允许',
+  capture: '正在等待麦克风开始采集…',
+};
 
 function send(event) { call?.send(event); }
 function warmTask(card, retry = false) {
@@ -48,15 +55,17 @@ function warmTask(card, retry = false) {
 
 async function waitToDial(job) {
   notice(job.file ? '正在准备开场第一句，准备好后自动接通' : '正在准备电话流程和开场首句，准备好后自动接通');
-  const cancel = $('cancelDial');
-  cancel.hidden = false;
   try {
-    const cancelled = new Promise(resolve => { cancel.onclick = () => resolve('cancelled'); });
+    const cancelled = new Promise(resolve => setDialCancel(() => resolve('cancelled')));
     return await Promise.race([job.done, cancelled]);
   } finally {
-    cancel.onclick = null;
-    cancel.hidden = true;
+    setDialCancel();
   }
+}
+function setDialCancel(action = null) {
+  const button = $('cancelDial');
+  button.onclick = action;
+  button.hidden = !action;
 }
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
@@ -70,7 +79,7 @@ const orders = workOrders({
     if (file) localStorage.setItem('g2-phone', JSON.stringify(file));
     else localStorage.removeItem('g2-phone');
     localStorage.setItem('g2-active-order',id);
-    renderTask(); warmTask(card);
+    warmTask(card);
   }
 });
 function packId(card) {
@@ -89,30 +98,10 @@ function rememberTask(card) {
     localStorage.setItem('g2-custom-task', JSON.stringify(card));
   }
 }
-function renderTask() {
-  $('checkpoints').replaceChildren();
-  for (const point of task.checkpoints) {
-    const li = document.createElement('li'); li.dataset.point = point.id;
-    const icon = document.createElement('span'); icon.className = 'check';
-    icon.innerHTML = '<svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#check"/></svg>'; icon.hidden = true;
-    const text = document.createElement('span'); text.textContent = point.description;
-    li.append(icon, text); $('checkpoints').append(li);
-  }
-}
-function record(role, text, key = null) {
-  const item = {role, text, delivery: role === 'user' || !voice ? 'complete' : 'pending'};
-  records.push(item); if (key) uiUnits.set(key, item);
-}
-function markCancelled(cancelledEpoch) {
-  view.cancel(cancelledEpoch);
-  for (const [key, item] of uiUnits) {
-    if (key.startsWith(cancelledEpoch + ':') && item.delivery === 'pending') item.delivery = 'interrupted';
-  }
-}
 function interrupt(source = 'manual', evidence = null) {
   if (!connected || !epoch || !replyActive) return;
   const progress = call?.player?.stop(true) || [];
-  markCancelled(epoch);
+  view.cancel(epoch);
   send({type: 'interrupt', epoch, progress, source, evidence});
   $('phase').textContent = voice ? '在听，请说' : '已打断，可以继续输入';
 }
@@ -133,13 +122,12 @@ async function start(useVoice) {
   $('startVoice').disabled = $('startText').disabled = true;
   const active = call = new CallConnection({
     onMessage, onError: showError, onClose: () => cleanup('连接已结束'),
-    onDone(epoch, unit) {
-      const item = uiUnits.get(epoch + ':' + unit);
-      if (item) item.delivery = 'complete';
-    },
-    onLevel: input => view.setInput(input)
+    onLevel: input => view.setInput(input),
+    onStage: step => { if (call === active) notice(dialStages[step]); },
   });
   try {
+    const cancel = () => cleanup('已取消拨打');
+    setDialCancel(cancel);
     voice = useVoice;
     await active.resumeAudio(voice);
     if (call !== active) return;
@@ -149,25 +137,23 @@ async function start(useVoice) {
       if (status === 'cancelled') { await cleanup('已取消拨打，工单继续准备'); return; }
       checkPreparation(status);
     }
-    notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
     if (call !== active) return;
+    notice('正在连接本地服务…');
+    setDialCancel(cancel);
     await active.open();
     if (call !== active) return;
-    records = []; uiUnits.clear(); turns = hits = prefixHits = 0; flowState = null; epoch = 0; replyActive = false; view.reset();
+    setDialCancel();
+    flowState = null; epoch = 0; replyActive = false; view.reset();
     $('textInput').value = ''; composing = false;
-    $('latency').textContent = ''; $('cacheStat').textContent = ''; $('latest').hidden = true;
-    renderTask(); connected = true;
+    $('latest').hidden = true;
+    connected = true;
     $('startControls').hidden = true; $('callControls').hidden = false;
     $('mute').hidden = !voice;
     $('mute').setAttribute('aria-label', '暂停麦克风'); $('mute').title = '暂停麦克风'; $('mute').setAttribute('aria-pressed', 'false');
     $('callMode').disabled = $('prediction').disabled = true;
     $('connection').textContent = '已连接';
-    const startedAt = performance.now();
-    timer = setInterval(() => {
-      const seconds = Math.floor((performance.now() - startedAt) / 1000);
-      $('duration').textContent = Math.floor(seconds / 60).toString().padStart(2, '0') + ':' + (seconds % 60).toString().padStart(2, '0');
-    }, 1000);
-    send({type: 'start', ...(activePhone ? {phone_file:activePhone} : {task}), voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
+    send({type: 'start', ...(activePhone ? {phone_file: activePhone, analysis_task: task} : {task}),
+      voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
     notice(mode === 'local' ? '正在准备本地模型…' : '');
     showText(!voice);
   } catch (error) {
@@ -191,19 +177,17 @@ function onMessage({data}) {
       notice(); break;
     case 'reply_start':
       if (!view.handle(event)) break;
-      epoch = event.epoch; replyActive = true; call?.player?.begin(epoch); $('latency').textContent = ''; clearError(); break;
+      epoch = event.epoch; replyActive = true; call?.player?.begin(epoch); clearError(); break;
     case 'utterance':
       if (!view.handle(event)) break;
-      call?.player?.unit(event); record('assistant', event.text, event.epoch + ':' + event.unit); break;
+      call?.player?.unit(event);
+      break;
     case 'utterance_end': call?.player?.finish(event); break;
     case 'cancel':
-      call?.player?.cancel(event.epoch); markCancelled(event.epoch);
+      call?.player?.cancel(event.epoch); view.cancel(event.epoch);
       if (event.epoch === epoch) replyActive = false;
       break;
-    case 'transcript':
-      if (view.handle(event) && event.final) record('user', event.text);
-      break;
-    case 'candidate_progress': case 'candidates': view.handle(event); break;
+    case 'transcript': case 'candidate_progress': case 'candidates': view.handle(event); break;
     case 'state': {
       if (event.epoch < epoch) break;
       $('phase').textContent = phaseNames[event.phase] || '在听，请说';
@@ -211,23 +195,11 @@ function onMessage({data}) {
         flowState = {progress: event.flow, card: task};
         orders.refresh();
       }
-      const status = {active: '对话进行中', complete: '已说明并得到明确确认', paused: '通话已结束', declined: '对方已拒绝，结束本次目标'};
-      $('outcomeText').textContent = status[event.status] || '等待开始';
-      for (const li of $('checkpoints').children) {
-        const done = event.delivered.includes(li.dataset.point);
-        li.classList.toggle('done', done); li.querySelector('.check').hidden = !done;
-        li.setAttribute('aria-label', (done ? '已完成 · ' : '') + li.textContent);
-      }
       break;
     }
     case 'reply_done':
       if (!view.handle(event)) break;
       replyActive = false;
-      turns++; if (event.reused) hits++; if (event.prefix_audio_hit) prefixHits++;
-      $('cacheStat').textContent = '完成 ' + turns + ' 次回复 · 整条复用 ' + hits + ' 次' + (prefixHits ? ' · 前半句复用 ' + prefixHits + ' 次' : ''); break;
-    case 'latency':
-      const latency = 'voice_to_answer_ms' in event ? event.voice_to_answer_ms : event.voice_to_playback_ms;
-      if (event.epoch === epoch && latency != null) $('latency').textContent = '接话 ' + (latency / 1000).toFixed(2) + 's';
       break;
     case 'hangup':
       if (event.epoch !== epoch) break;
@@ -237,8 +209,10 @@ function onMessage({data}) {
   }
 }
 async function cleanup(label = '对话已结束，可以重新开始') {
-  connected = false; replyActive = false; clearInterval(timer);
-  for (const item of uiUnits.values()) if (item.delivery === 'pending') item.delivery = 'interrupted';
+  connected = false; replyActive = false;
+  inputInFlight = false;
+  setDialCancel();
+  $('editTask').disabled = $('startVoice').disabled = $('startText').disabled = false;
   view.stop();
   const active = call;
   call = null;
@@ -274,11 +248,6 @@ $('textInput').addEventListener('compositionend', () => { composing = false; });
 $('textInput').addEventListener('keydown', event => {
   if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault();
 });
-$('export').onclick = () => {
-  const blob = new Blob([JSON.stringify({task, conversation: records}, null, 2)], {type: 'application/json'});
-  const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = 'ai-call-g2-conversation.json'; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
 view.engine.addEventListener('followchange', event => { $('latest').hidden = event.detail.following; });
 $('latest').onclick = () => view.engine.followLatest();
 window.addEventListener('beforeunload', () => { call?.close(); view.destroy(); });

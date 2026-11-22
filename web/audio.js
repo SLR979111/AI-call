@@ -147,48 +147,84 @@ export class Microphone {
     this.muted = false;
     this.closed = false;
   }
-  async open() {
-    if (!acousticModule) {
-      const response = await fetch('/static/vendor/webrtc-audio-processing/webrtc-audio-processing.wasm');
-      if (!response.ok) throw new Error('消回声组件未能载入，请刷新后重试。');
-      acousticModule = await WebAssembly.compile(await response.arrayBuffer());
+  async open(onStage = () => {}) {
+    this.checkOpen();
+    const cancelled = new Promise((_, reject) => { this.cancelOpen = reject; });
+    cancelled.catch(() => {}); // Closing can also happen before the first wait.
+    async function wait(task, message, milliseconds = 5000) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), milliseconds);
+      });
+      try { return await Promise.race([task, cancelled, timeout]); }
+      finally { clearTimeout(timer); }
     }
-    this.checkOpen();
-    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,
-      echoCancellation:true, noiseSuppression:false, autoGainControl:false}, video:false});
-    if (this.closed) stream.getTracks().forEach(track => track.stop());
-    this.checkOpen();
-    this.stream = stream;
-    await this.context.audioWorklet.addModule('/static/capture.js');
-    this.checkOpen();
-    this.source = this.context.createMediaStreamSource(this.stream);
-    this.worklet = new AudioWorkletNode(this.context, 'capture-16k', {
-      numberOfInputs:2, numberOfOutputs:1, outputChannelCount:[1],
-      channelCount:1, channelCountMode:'explicit', processorOptions:{module:acousticModule},
-    });
-    this.source.connect(this.worklet, 0, 0);
-    this.playbackNode.connect(this.worklet, 0, 1);
-    this.worklet.connect(this.context.destination);
-    let timeout;
     try {
-      await new Promise((resolve, reject) => {
-        this.cancelReady = reject;
-        timeout = setTimeout(() => reject(new Error('消回声组件启动超时，请重新开始通话。')), 5000);
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前页面无法打开麦克风，请从本机通话页面进入。');
+      if (!acousticModule) {
+        onStage('component');
+        const error = '消回声组件未能载入，请刷新后重试。';
+        const loading = fetch('/static/vendor/webrtc-audio-processing/webrtc-audio-processing.wasm')
+          .then(response => {
+            if (!response.ok) throw new Error(error);
+            return response.arrayBuffer();
+          }).then(bytes => WebAssembly.compile(bytes));
+        acousticModule = await wait(loading, error);
+      }
+      this.checkOpen();
+      onStage('permission');
+      const permission = navigator.mediaDevices.getUserMedia({audio:{channelCount:1,
+        echoCancellation:true, noiseSuppression:false, autoGainControl:false}, video:false})
+        .then(stream => {
+          // A native permission prompt can resolve after timeout or cancellation.
+          if (this.closed) stream.getTracks().forEach(track => track.stop());
+          this.checkOpen();
+          this.stream = stream;
+          return stream;
+        });
+      const stream = await wait(permission, '等待麦克风权限超时，请在浏览器中允许此网站使用麦克风后重试。', 15000);
+      this.checkOpen();
+      onStage('capture');
+      const captureError = '麦克风未能开始采集，请检查输入设备后重试。';
+      const track = stream.getAudioTracks()[0];
+      if (!track || track.readyState !== 'live') throw new Error(captureError);
+      await wait(this.context.audioWorklet.addModule('/static/capture.js?v=mic-ready-1'),
+        '麦克风采集组件启动超时，请刷新后重试。');
+      this.checkOpen();
+      this.source = this.context.createMediaStreamSource(stream);
+      this.worklet = new AudioWorkletNode(this.context, 'capture-16k', {
+        numberOfInputs:2, numberOfOutputs:1, outputChannelCount:[1],
+        channelCount:1, channelCountMode:'explicit', processorOptions:{module:acousticModule},
+      });
+      const capturing = new Promise((resolve, reject) => {
         const fail = () => {
           const message = '声音处理出现问题，请重新开始通话。';
-          if (this.cancelReady) reject(new Error(message));
+          if (this.cancelOpen) reject(new Error(message));
           else this.onError(message);
         };
         this.worklet.onprocessorerror = fail;
         this.worklet.port.onmessage = ({data}) => {
-          if (data.type === 'ready') resolve();
-          else if (data.type === 'error') fail();
-          else if (data.type === 'audio') this.frame(data);
+          if (data.type === 'error') fail();
+          else if (data.type === 'audio') {
+            // The worklet can produce silence before the microphone supplies
+            // an input channel. Only a live track and a capture frame can dial.
+            if (this.cancelOpen) {
+              if (!data.hasInput || track.readyState !== 'live' || track.muted) return;
+              resolve();
+            }
+            this.frame(data);
+          }
         };
       });
+      this.source.connect(this.worklet, 0, 0);
+      this.playbackNode.connect(this.worklet, 0, 1);
+      this.worklet.connect(this.context.destination);
+      await wait(capturing, captureError);
+    } catch (error) {
+      this.close();
+      throw error;
     } finally {
-      clearTimeout(timeout);
-      this.cancelReady = null;
+      this.cancelOpen = null;
     }
   }
   checkOpen() {
@@ -196,7 +232,8 @@ export class Microphone {
   }
   frame(frame) {
     if (this.closed) return;
-    this.onLevel({active: !this.muted && !!frame.speech && !frame.warming,
+    const echoDuringStartup = frame.warming && frame.playback && frame.echo_score >= .6;
+    this.onLevel({active: !this.muted && !!frame.speech && !echoDuringStartup,
       level: this.muted ? 0 : Math.min(1, Math.sqrt(Math.max(0, frame.clean_rms || 0)) * 3)});
     if (this.socket.readyState !== WebSocket.OPEN) return;
     const pcm = frame.pcm;
@@ -228,7 +265,7 @@ export class Microphone {
   close() {
     if (this.closed) return;
     this.closed = true;
-    this.cancelReady?.(new DOMException('通话已结束', 'AbortError'));
+    this.cancelOpen?.(new DOMException('通话已结束', 'AbortError'));
     if (this.worklet) {
       this.worklet.onprocessorerror = null;
       this.worklet.port.onmessage = null;

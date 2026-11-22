@@ -1,9 +1,12 @@
 import asyncio
 import json
 
+import httpx
+
 from app.brain import Brain
 from app.forecast import OpeningForecastCache, likely_short_answers, match_example, stream_candidates
 from app.models import DEFAULT_CARD, Candidate, Memory, Say
+from app.providers import Cloud, Settings
 from app.session import Session
 from test_core import until
 
@@ -104,7 +107,7 @@ async def test_unasked_followup_skips_candidates_even_when_model_would_choose_on
     assert events[0][0] == "say"
 
 
-async def test_only_identical_openings_share_forecasts_across_sessions():
+async def test_only_identical_openings_and_prompts_share_forecasts_across_sessions(monkeypatch):
     class Cloud:
         calls = 0
 
@@ -126,6 +129,49 @@ async def test_only_identical_openings_share_forecasts_across_sessions():
     assert after_followup == first_calls + 3  # Only the opening primes task topics.
     await Brain(cloud, cache).predict({**snapshot, "task": {**snapshot["task"], "facts": "改用新的提交入口"}})
     assert cloud.calls == after_followup + first_calls
+    monkeypatch.setattr("app.brain.FORECAST_PROMPT_KEY", "updated-wording")
+    await Brain(cloud, cache).predict(snapshot)
+    assert cloud.calls == after_followup + 2 * first_calls
+
+
+async def test_live_forecast_uses_the_whole_pool_for_fresh_context(monkeypatch):
+    monkeypatch.setenv("TICKET_FORECAST_ENABLED", "1")
+    requests = []
+
+    def generate(request):
+        body = json.loads(request.content)
+        snapshot = json.loads(body["messages"][-1]["content"])
+        requests.append(body)
+        latest = snapshot["dialogue"][-1]["text"] if snapshot["dialogue"] else "开场"
+        reply = json.dumps({"candidates": [
+            branch(f"{latest}，分支{len(requests)}的备选{index}。").model_dump()
+            for index in range(2)
+        ]}, ensure_ascii=False)
+        chunk = json.dumps({"choices": [{"delta": {"content": reply}}]})
+        return httpx.Response(200, text=f"data: {chunk}\n\ndata: [DONE]\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(generate)) as client:
+        cloud = Cloud(Settings(api_key="test"), client)
+        brain = Brain(cloud, OpeningForecastCache(), forecast_branches=5, candidate_limit=10,
+                      fresh_forecasts=True)
+        opening = {**brain.snapshot(Memory(DEFAULT_CARD)), "opening": True}
+        latest = "我刚重新提交了。"
+        followup = {**opening, "opening": False, "dialogue": [{"role": "user", "text": latest}]}
+        opening_items = await brain.predict(opening)
+        old_request = requests[0]
+        cloud.cache_manager.llm.put(old_request["messages"], old_request["model"],
+                                    old_request["temperature"], "old forecast", max_tokens=600)
+        regenerated_items = await brain.predict(opening)
+        followup_items = await brain.predict(followup)
+        assert len(requests) == 15
+        for items in (opening_items, regenerated_items, followup_items):
+            assert len(items) == 10
+            assert all(item.id.startswith("p") for item in items)
+        assert {item.reply.text for item in opening_items}.isdisjoint(
+            item.reply.text for item in regenerated_items)
+        assert all(item.reply.text.startswith(latest) for item in followup_items)
+        assert cloud.cache_manager.llm.get(old_request["messages"], old_request["model"],
+                                           old_request["temperature"], max_tokens=600) == "old forecast"
 
 
 def test_interrupted_warmup_keeps_validated_items_and_can_be_completed():

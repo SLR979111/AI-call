@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .brain import Brain
-from .forecast import OpeningForecastCache
+from .call_analysis import CallAnalysis, Scope, router as analysis_router
+from .call_history import CallArchive, router as history_router
 from .hearing import Hearing
 from .local_asr import FirstPassASR, load_from_env, make_transcriber
 from .local_provider import LocalProvider
@@ -52,7 +53,6 @@ async def lifespan(app: FastAPI):
             cleanup.push_async_callback(asyncio.to_thread, app.state.first_pass.close)
         app.state.local = LocalProvider(app.state.first_pass)
         cleanup.push_async_callback(app.state.local.close)
-        app.state.local_forecasts = OpeningForecastCache()
         cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
         if not cache_path.is_absolute():
             cache_path = ROOT / cache_path
@@ -79,7 +79,12 @@ async def lifespan(app: FastAPI):
         cleanup.push_async_callback(asyncio.gather, app.state.semantic_task, return_exceptions=True)
         voice_detector_model()
         app.state.sessions = set()
-        app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
+        runtime = ROOT / "runtime"
+        app.state.call_archive = CallArchive(runtime / "sessions")
+        app.state.call_analysis = CallAnalysis(
+            runtime, {"cloud": app.state.cloud, "local": app.state.local},
+            archive=app.state.call_archive,
+        )
         app.state.phone_files = OrderedDict()
         app.state.phone_jobs = {}
 
@@ -96,10 +101,20 @@ async def lifespan(app: FastAPI):
         app.state.task_prewarmer = TaskPrewarmer()
         cleanup.push_async_callback(app.state.task_prewarmer.close)
         cleanup.push_async_callback(close_sessions)
+
+        worker = asyncio.create_task(app.state.call_analysis.worker(lambda: bool(app.state.sessions)))
+
+        async def close_analysis():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+        cleanup.push_async_callback(close_analysis)
         yield
 
 
 app = FastAPI(title="AI Call G2", lifespan=lifespan)
+app.include_router(analysis_router)
+app.include_router(history_router)
 
 
 @app.get("/api/config")
@@ -136,7 +151,8 @@ async def generate_phone_file(card: TaskCard, mode: str = "cloud"):
     if mode == "cloud" and not app.state.settings.api_key:
         return compile_phone(card)
     provider = app.state.local if mode == "local" else app.state.cloud
-    key = (mode, card.model_dump_json())
+    version, experiences = await asyncio.to_thread(app.state.call_analysis.planning_rules, mode, card)
+    key = (mode, card.model_dump_json(), version)
     cache = app.state.phone_files
     if key in cache:
         cache.move_to_end(key)
@@ -145,10 +161,11 @@ async def generate_phone_file(card: TaskCard, mode: str = "cloud"):
     async def build():
         try:
             async with asyncio.timeout(35):
-                result = await provider.plan_phone(card)
+                options = {"experiences": experiences} if experiences else {}
+                result = await provider.plan_phone(card, **options)
         except (ValueError, RuntimeError, TimeoutError, OSError, httpx.HTTPError) as exc:
             logging.getLogger(__name__).warning("Phone graph fallback: %s", type(exc).__name__)
-            result = compile_phone(card)
+            return compile_phone(card)
         cache[key] = result
         if len(cache) > 48:
             cache.popitem(last=False)
@@ -179,10 +196,18 @@ def read_order(payload):
     return TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump())), {}
 
 
-async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False, phone_file=None) -> dict:
+def analysis_scope(card, payload, mode):
+    source = TaskCard.model_validate(payload.get("analysis_task", card))
+    if source.title != card.title:
+        raise ValueError("电话文件与分析工单不一致")
+    return Scope(task=source, mode=mode)
+
+
+async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False,
+                             phone_file=None, opening_override="") -> dict:
     if not app.state.settings.api_key:
         return {"started": False, "status": "unconfigured"}
-    opening = phone_file.basic_response.opening if phone_file else card.opening
+    opening = opening_override or (phone_file.basic_response.opening if phone_file else card.opening)
     return await app.state.task_prewarmer.prepare(opening, app.state.cloud, wait=wait, retry=retry)
 
 
@@ -191,10 +216,13 @@ async def warm(payload: dict):
     """Prepare the confirmed opening sentence without running any dialogue."""
     try:
         card, options = read_order(payload)
+        scope = analysis_scope(card, payload, "cloud")
     except (ValidationError, TypeError, ValueError):
         return {"started": False, "error": "invalid_task"}
+    _, playbook = await asyncio.to_thread(app.state.call_analysis.active, scope)
     return await prepare_cloud_task(card, wait=payload.get("wait") is True,
-                                    retry=payload.get("retry") is True, **options)
+                                    retry=payload.get("retry") is True,
+                                    opening_override=playbook.opening if playbook else "", **options)
 
 
 @app.get("/api/prediction/stats")
@@ -212,6 +240,11 @@ async def health():
 @app.get("/")
 async def index():
     return FileResponse(ROOT / "web" / "index.html")
+
+
+@app.get("/history", include_in_schema=False)
+async def history():
+    return FileResponse(ROOT / "web" / "history.html")
 
 
 @app.websocket("/ws")
@@ -271,6 +304,8 @@ async def websocket(ws: WebSocket):
                     mode = event.get("mode", "cloud")
                     if mode not in ("local", "cloud"):
                         raise ValueError("Invalid call mode")
+                    scope = analysis_scope(card, event, mode)
+                    version, playbook = await asyncio.to_thread(app.state.call_analysis.active, scope)
                     local = mode == "local"
                     cloud = app.state.local if local else app.state.cloud
                     if local:
@@ -281,20 +316,24 @@ async def websocket(ws: WebSocket):
                             await ws.close(code=1011)
                             break
                     else:
-                        result = await prepare_cloud_task(card, wait=True, retry=True, **options)
+                        result = await prepare_cloud_task(card, wait=True, retry=True,
+                                                          opening_override=playbook.opening if playbook else "", **options)
                         if result["status"] == "failed":
                             await error("开场首句语音准备失败，请重新开始以重试。")
                             await ws.close(code=1011)
                             break
                     if not options:
                         options = {"phone_file": await generate_phone_file(card, mode)}
-                    forecasts = app.state.local_forecasts if local else app.state.opening_forecasts
+                    voice = bool(event.get("voice", True))
                     session = Session(card, cloud, Brain(
-                        cloud, forecasts,
-                        forecast_branches=app.state.settings.forecast_branches), send,
-                                      **options, voice=bool(event.get("voice", True)),
+                        cloud,
+                        forecast_branches=app.state.settings.forecast_branches,
+                        combine_voice_route=voice and not local, fresh_forecasts=True), send,
+                                      **options, voice=voice,
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
+                                      analysis_task=scope.task, mode=mode,
+                                      playbook=playbook, playbook_version=version,
                                       decision_tracker=app.state.decision_tracker,
                                       performance_monitor=app.state.performance_monitor,
                                       on_hangup=lambda: ws.close(code=1000, reason="conversation ended"))
@@ -302,13 +341,15 @@ async def websocket(ws: WebSocket):
                     if session.voice:
                         hearing = Hearing(cloud,
                             on_start=lambda: session.interrupt("speech", evidence=hearing.last_onset),
-                            on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end),
+                            on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end,
+                                                                      voice_timing=hearing.last_endpoint),
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
                             first_pass=None if local else app.state.first_pass, on_draft=session.prepare_voice,
                             min_silence_ms=680 if local else 0,
                             discard_draft=session.discard_voice,
                             on_lead=session.prepare_lead if session.predictions and not local else None,
                             on_error=hearing_error, ignores_hesitation=session.ignores_hesitation,
+                            on_unheard=session.request_repeat,
                             is_playing=lambda: session.phase == "speaking",
                             transcriber=cloud.transcribe if local else app.state.transcriber,
                             performance_monitor=app.state.performance_monitor)
@@ -365,9 +406,10 @@ async def websocket(ws: WebSocket):
         if session:
             await session.close()
             app.state.sessions.discard(session)
+            app.state.call_analysis.changed.set()
         try:
             await ws.close()
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             pass
 
 

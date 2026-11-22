@@ -124,16 +124,16 @@ def material_topic(point: Checkpoint) -> str:
 def _how_reply(card: TaskCard) -> str:
     text = card_text(card)
     if "提交入口" in text or "京麦" in text or "重新提交" in text:
-        return "补齐材料后，回到原提交入口按提示重新提交就行。"
+        return "材料补好后，回到上次提交的页面。按提示再提交一次就行。"
     if "页面提示" in text:
         if "材料" in text:
-            return "按页面提示补充材料或等待就行。"
-        return "按页面提示继续办理就行。"
+            return "您看一下页面提示。让您补材料就补，没提示就先等。"
+        return "您照着页面的提示往下办就行。"
     if "报修" in text:
-        return "需要检修的话，从自己的运营商官方客服入口报修就行。"
+        return "要报修的话，您找自家宽带的官方客服就行。"
     if "安装" in text or "预约" in text:
-        return "安装一般要几个工作日，具体以实际安排为准，这里没法预约。"
-    return "按页面提示补齐信息就行。"
+        return "安装一般要几个工作日。哪天能装得看安排，我这边没法预约。"
+    return "您看页面还缺什么，把那几项补上就行。"
 
 
 def _how_examples(card: TaskCard) -> tuple[str, str]:
@@ -152,39 +152,30 @@ def _how_examples(card: TaskCard) -> tuple[str, str]:
 def _authorization_reply(card: TaskCard) -> str:
     text = card_text(card)
     if "经销商" in text and "品牌方" in text:
-        return "还缺品牌方给经销商的那一段授权，得把两段授权接起来。"
-    return "授权关系要补齐，品牌方和经销商两段都要对得上。"
+        return "还缺品牌方给经销商的那份授权。两份授权得接得上。"
+    return "两份授权得接得上，一份是品牌方开的，一份是经销商开的。"
 
 
 def _timing_reply(card: TaskCard) -> str:
     text = card_text(card)
     if ("加急" in text or "审核一定通过" in text or "一定通过" in text
             or "保证通过" in text or "能否通过" in text or "能不能通过" in text):
-        return "具体时间以实际审核为准，加急或通过都没法保证。"
+        return "什么时候能出结果，我这边说不准。能不能加急、能不能过，也得看审核。"
     if "工作日" in text:
-        return "通常要几个工作日，具体时间以实际安排为准。"
-    return "具体时间我这里没法确认，以实际安排为准。"
+        return "一般得等几个工作日，具体哪天得看安排。"
+    return "具体要等多久，我这边说不准，得看实际安排。"
 
 
 def _missing_reply(card: TaskCard, point: Checkpoint | None) -> str:
     if point is None:
         return ""
-    return f"这次主要要补的是{material_topic(point)}。"
+    return f"这次还得补一下{material_topic(point)}。"
 
 
 def _owner_reply(card: TaskCard, point: Checkpoint | None) -> str:
-    """Reply to a caller who confirms they handle this case.
-
-    Confirming responsibility answers the opening question but supplies no
-    business fact, so the only safe move is to name the one thing the card
-    says is missing and leave the rest for the next turn.
-    """
     if point is None:
         return ""
-    topic = material_topic(point)
-    if not topic:
-        return ""
-    return f"好的，那先说最要紧的一项：{topic}这部分还得补。"
+    return f"您这单还缺{material_topic(point)}。"
 
 
 # --- scenario-specific conservative families -------------------------------
@@ -308,11 +299,13 @@ def _repair_reply(card: TaskCard) -> str:
 def _upload_issue_reply(card: TaskCard) -> str:
     text = card_text(card)
     if "京麦" in text and "驳回意见页" in text:
-        return ("回到京麦本次品牌申请的驳回意见页，按提示重新上传后提交；"
-                "更细的菜单层级我这里没有，也不能代传文件。")
+        return ("您打开京麦里这笔品牌申请，看退回意见。按那里的提示重新上传，再点提交。"
+                "再往下点哪儿我这边看不到，也没法替您上传。")
     if "上传" in text and "提交入口" in text:
-        return "回到原提交入口重新上传后提交；更细的菜单层级我这里没有，也不能代传文件。"
-    return "先按页面提示重新上传，再回到原入口提交；更细的菜单层级和代传我这里都做不到。"
+        return ("您回到上次提交的页面，重新上传，再点提交。"
+                "再往下点哪儿我这边看不到，也没法替您上传。")
+    return ("您照着页面提示重新上传，再回到上次的页面提交。"
+            "再往下点哪儿我这边看不到，也没法替您上传。")
 
 
 def _contract_reply(card: TaskCard) -> str:
@@ -462,7 +455,7 @@ _FAMILIES: tuple[_Family, ...] = (
         "name_mismatch", "question",
         "用户问授权书上的公司名与店铺主体不一致、写错或更名",
         ("公司名不一致怎么办？", "授权书上的公司名写错了。"),
-        _fixed("授权上的公司名要和店铺主体一致，填错的话请原授权方重新开具。"),
+        _fixed("授权书上得写开店那家公司的全名。写错了，就请原来开授权的那家重开一份。"),
         checkpoint_pattern=r"(?:名称|公司名|主体|更名|填错|不一致)",
         checkpoint_exclude=r"(?:发票|抬头)",
     ),
@@ -470,14 +463,14 @@ _FAMILIES: tuple[_Family, ...] = (
         "screenshot", "question",
         "用户问商标状态截图要包含什么、是否清晰，或注册证能否代替",
         ("商标状态截图要包含什么？", "注册证能代替截图吗？"),
-        _fixed("需要清晰的商标当前状态截图，要能看清名称、注册号和状态。"),
+        _fixed("要截商标现在的状态。图上能看清商标名、注册号和状态就行。"),
         checkpoint_pattern=r"(?:截图|注册证|商标状态|商标)",
     ),
     _Family(
         "saved", "statement",
         "用户说只是保存了、还没有提交",
         ("只是保存了。", "只保存还没提交。"),
-        _fixed("只保存不算提交，还需要点一下提交。"),
+        _fixed("还得点一下提交。只保存的话，材料还没交上去。"),
         checkpoint_pattern=r"(?:提交|补交|保存|审核)",
         require=r"(?:保存|没提交|尚未提交|未提交)",
     ),
@@ -485,7 +478,7 @@ _FAMILIES: tuple[_Family, ...] = (
         "submitted", "statement",
         "用户说已经提交或重新提交，正在等提示",
         ("已经提交了。", "重新提交了。"),
-        _fixed("已经提交的话，留意这次申请的最新提示就行。"),
+        _fixed("既然已经提交了，您就留意这笔申请有没有新消息。"),
         checkpoint_pattern=r"(?:提交|补交|审核)",
         require=r"(?:提交|补交)",
     ),
@@ -493,7 +486,7 @@ _FAMILIES: tuple[_Family, ...] = (
         "in_review", "question",
         "用户问审核进度、是不是还在审核中",
         ("还在审核吗？", "审核到哪一步了？"),
-        _fixed("审核进度我这里查不到，以页面提示为准。"),
+        _fixed("我这边查不到审到哪儿了。您看申请页上最新的提示就行。"),
         checkpoint_pattern=r"(?:审核|进度)",
         checkpoint_required=False,
         require=r"(?:审核中|审核进度|审核)",
@@ -502,7 +495,7 @@ _FAMILIES: tuple[_Family, ...] = (
         "handoff", "question",
         "用户问材料交到哪、下一步怎么交，或问能不能催办",
         ("材料交到哪？", "能催一下吗？"),
-        _fixed("材料按这次工单的页面提示补，催办进度我这里查不到，以页面为准。"),
+        _fixed("材料照工单页面的提示补就行。催到哪一步，我这边看不到，您可以看看页面有没有新提示。"),
         checkpoint_pattern=r"(?:补充材料|页面提示|下一步|交付|催办)",
         require=r"工单",
     ),
