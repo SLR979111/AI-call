@@ -6,10 +6,10 @@ import { createRequire } from 'node:module';
 const [base, output, transport = 'ws_pcm', followup = 'reason', endpointArg] = process.argv.slice(2);
 if (!base || !output) throw new Error('Usage: node scripts/check_pop_contest_browser.mjs BASE OUTPUT');
 const timingDemo = process.env.POP_TIMING_DEMO === '1';
-if (timingDemo && !['closure', 'endpoint-noise', 'barge-resume'].includes(followup)) {
-  throw new Error('The timing frontend supports closure, noise and interrupted playback replays');
+if (timingDemo && !['closure', 'endpoint-noise', 'barge-resume', 'redial'].includes(followup)) {
+  throw new Error('The timing frontend supports closure, noise, interrupted playback and redial replays');
 }
-const endpointMs = endpointArg === undefined || followup === 'closure' ? null : Number(endpointArg);
+const endpointMs = endpointArg === undefined || ['closure', 'redial'].includes(followup) ? null : Number(endpointArg);
 if (endpointMs !== null && (followup !== 'pauses' || !Number.isInteger(endpointMs) || endpointMs < 200 || endpointMs > 1200)) {
   throw new Error('Endpoint override is available for pause diagnostics (200–1200 ms).');
 }
@@ -21,6 +21,15 @@ const browser = await chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'],
 });
 const page = await browser.newPage();
+if (followup === 'redial') {
+  await page.addInitScript(() => {
+    // Keep startCall waiting for the new microphone while the previous call closes.
+    navigator.mediaDevices.getUserMedia = async () => {
+      await new Promise(resolve => setTimeout(resolve, 700));
+      throw new DOMException('Microphone unavailable for this replay', 'NotAllowedError');
+    };
+  });
+}
 if (endpointMs !== null) {
   await page.addInitScript(ms => {
     Object.defineProperty(window, '__AICALL_CONFIG__', {
@@ -44,6 +53,7 @@ const textChecks = [];
 const scenarioChecks = [];
 const closureChecks = [];
 const bargeResumeChecks = [];
+const redialChecks = [];
 let capturedAudio = null;
 let noMatch = null;
 page.on('pageerror', error => errors.push(String(error)));
@@ -551,6 +561,56 @@ async function checkBargeResume() {
   }
 }
 
+async function checkRedialAfterWriteback() {
+  if (!timingDemo || transport !== 'rtc_pcm' || !endpointArg) {
+    throw new Error('Redial replay requires the timing frontend, rtc_pcm and a successful closure plan');
+  }
+  const plan = JSON.parse(readFileSync(endpointArg, 'utf8'));
+  const call = plan.calls.find(entry => entry.turns.at(-1)?.[1] === 'pop_contact_recorded');
+  if (!call) throw new Error('Expected a closure case ending with a successful writeback');
+  const first = await connect(call.doc);
+  await finishOpening(first, 0);
+  for (const [file, outcome] of call.turns) {
+    const row = await speak(first, file);
+    if (row.outcome !== outcome) throw new Error('Unexpected result before redial: ' + JSON.stringify(row));
+  }
+  await page.locator('#result').waitFor({ state: 'visible' });
+  const oldRows = await page.locator('#transcript .message').count();
+  if (oldRows < 2) throw new Error('The completed call must have a visible transcript');
+
+  const start = server.length;
+  const offset = await page.evaluate(() => window.contestWire.length);
+  const alternate = await page.evaluate(() => {
+    document.getElementById('stop').click();
+    document.getElementById('editTask').click();
+    const cases = document.getElementById('contestCase');
+    const alternate = [...cases.options].find(option => option.value !== cases.value).value;
+    cases.value = alternate;
+    document.getElementById('inputSource').value = 'mic';
+    document.getElementById('closeDialog').click();
+    document.getElementById('startVoice').click();
+    return alternate;
+  });
+  const second = await waitForServer('session_ready', start);
+  if (second.session_id === first.session_id) throw new Error('Redial must open a new session');
+  await page.locator('#audioFile').waitFor({ state: 'visible' });
+  await page.waitForFunction(offset => window.contestWire.slice(offset).some(
+    row => row.type === 'playback_ended'), offset);
+  const rows = await page.locator('#transcript .message').count();
+  const timingRows = await page.locator('#timingRows tr').count();
+  const receiptVisible = await page.locator('#result').isVisible();
+  if (rows !== 1 || timingRows !== 0 || receiptVisible) {
+    throw new Error('Previous call remained visible after redial: ' + JSON.stringify({ rows, timingRows, receiptVisible }));
+  }
+  const reply = await speak(second, call.turns[0][0]);
+  if (!reply.asr || await page.locator('#transcript .message.user').count() !== 1) {
+    throw new Error('New call did not display the new input');
+  }
+  redialChecks.push({ first: first.session_id, next: second.session_id, from: call.doc, to: alternate, oldRows, rows, timingRows, receiptVisible });
+  console.log(redialChecks.at(-1));
+  await page.locator('#stop').click();
+}
+
 let failure = null;
 try {
   if (followup === 'pauses') await checkPauses();
@@ -560,6 +620,7 @@ try {
   else if (followup === 'closure') await checkClosure();
   else if (followup === 'endpoint-noise') await checkNoisyEndpoint();
   else if (followup === 'barge-resume') await checkBargeResume();
+  else if (followup === 'redial') await checkRedialAfterWriteback();
   else await checkCall();
 } catch (error) {
   failure = String(error);
@@ -574,6 +635,7 @@ try {
     text_checks: textChecks, scenario_checks: scenarioChecks,
     closure_checks: closureChecks,
     barge_resume_checks: bargeResumeChecks,
+    redial_checks: redialChecks,
     no_match_retry: noMatch, client, uploads, server,
   }, null, 2));
   await browser.close();

@@ -54,8 +54,12 @@ export class SessionClient extends EventTarget {
 
   /* ============================ 建会话 ============================ */
 
-  async startCall(caseId = '') {
+  prepareCall() {
+    this.detachConnection();
     store.resetForNewCall();
+  }
+
+  async startCall(caseId = '') {
     this.t0 = now();
     this.intentionalClose = false;
     this.reconnectAttempt = 0;
@@ -65,8 +69,6 @@ export class SessionClient extends EventTarget {
     this.currentReplyId = '';
     this.currentTtsFiller = false;
     this.transport = 'ws_pcm';
-    this.rtcPeer = null;
-    this.rtcChannel = null;
 
     const body = { mode: 'voice', scenario_id: this.cfg.SCENARIO_ID };
     if (caseId) body.case_id = caseId;
@@ -134,7 +136,7 @@ export class SessionClient extends EventTarget {
       else store.log(`收到二进制帧 ${ev.data.byteLength}B（W1 不使用）`);
     };
 
-    ws.onerror = () => store.log('WS error');
+    ws.onerror = () => { if (this.ws === ws) store.log('WS error'); };
     ws.onclose = (ev) => { if (this.ws === ws) this.onClose(ev); };
   }
 
@@ -160,7 +162,8 @@ export class SessionClient extends EventTarget {
     const delay = backoff[Math.min(this.reconnectAttempt, backoff.length - 1)];
     this.reconnectAttempt++;
     store.log(`WS closed code=${ev.code} → ${delay}ms 后重连（第 ${this.reconnectAttempt} 次）`);
-    setTimeout(() => this.connect(), delay);
+    const ws = this.ws;
+    setTimeout(() => { if (this.ws === ws && !this.intentionalClose) this.connect(); }, delay);
   }
 
   /* ============================ 发送 ============================ */
@@ -707,11 +710,20 @@ export class SessionClient extends EventTarget {
   hangup(reason = 'user_click') {
     this.intentionalClose = true;
     this.send(C2S.HANGUP, { reason, client_mono_ms: round3(this.mono()) });
+    this.detachConnection();
+    void this.livekit.stop();          // 先退房，避免远端还能听见我们
+    store.set({ phase: 'ended', turnState: 'ENDED' });
+  }
+
+  detachConnection() {
     clearInterval(this.pingTimer);
     const ws = this.ws;
     const peer = this.rtcPeer;
-    void this.livekit.stop();          // 先退房，避免远端还能听见我们
-    setTimeout(() => { peer?.close(); ws?.close(); }, 200);
+    // Ignore callbacks immediately while still letting hangup reach the server.
+    this.ws = null;
+    this.rtcPeer = null;
+    this.rtcChannel = null;
+    if (ws || peer) setTimeout(() => { peer?.close(); ws?.close(); }, 200);
   }
 }
 

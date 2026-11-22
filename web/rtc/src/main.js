@@ -89,6 +89,7 @@ const contestConfig = fetch(`${cfg.APP_BASE}/contest/cases`).then(async (respons
 /* ============================ 通话生命周期 ============================ */
 
 async function startCall(source) {
+  client.prepareCall();
   inputSource = source;
   if (timingFrontend) {
     muted = false;
