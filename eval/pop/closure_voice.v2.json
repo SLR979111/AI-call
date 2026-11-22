@@ -1,0 +1,22 @@
+{
+  "samples": {
+    "identity-explicit.wav": "我是这家店的负责人。",
+    "available.wav": "可以说。",
+    "compound.wav": "听懂了，我会按要求补材料。",
+    "clear.wav": "清楚了。",
+    "repeat.wav": "好，我懂了。"
+  },
+  "calls": [
+    {"id":"compound-confirmation","doc":"pop-scene-027","turns":[
+      ["identity-explicit.wav","pending_need"],
+      ["available.wav","pending_result"],
+      ["compound.wav","pop_contact_recorded","returned"]
+    ]},
+    {"id":"plain-and-repeat","doc":"pop-scene-007","turns":[
+      ["identity-explicit.wav","pending_need"],
+      ["available.wav","pending_result"],
+      ["clear.wav","pop_contact_recorded","returned"],
+      ["repeat.wav","pop_contact_recorded"]
+    ]}
+  ]
+}

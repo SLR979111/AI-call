@@ -1,0 +1,36 @@
+{
+  "samples": {
+    "permit-identity.wav": "对，我就是这个店铺的负责人。",
+    "permit-available.wav": "我现在方便，您说吧。",
+    "permit-question.wav": "这份许可证具体怎么改？这个书面驳回意见要从哪里找？",
+    "permit-clear.wav": "我听明白了，回到原申请按要求修改。",
+    "chain-identity.wav": "现在接电话的就是店铺负责人。",
+    "chain-available.wav": "现在可以说。",
+    "chain-question.wav": "我得补哪段授权？补完重新交还要复审吗？",
+    "chain-clear.wav": "整改办法我听懂了，这就去按要求补材料。"
+  },
+  "calls": [
+    {
+      "id": "permit-action-channel",
+      "doc": "pop-scene-053",
+      "topics": ["action", "channel"],
+      "turns": [
+        ["permit-identity.wav", "pending_need"],
+        ["permit-available.wav", "pending_result"],
+        ["permit-question.wav", "pending_result"],
+        ["permit-clear.wav", "pop_contact_recorded", "returned"]
+      ]
+    },
+    {
+      "id": "chain-action-review",
+      "doc": "pop-scene-039",
+      "topics": ["action", "review"],
+      "turns": [
+        ["chain-identity.wav", "pending_need"],
+        ["chain-available.wav", "pending_result"],
+        ["chain-question.wav", "pending_result"],
+        ["chain-clear.wav", "pop_contact_recorded", "returned"]
+      ]
+    }
+  ]
+}
