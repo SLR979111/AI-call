@@ -224,6 +224,7 @@ async def test_selecting_a_text_only_candidate_falls_back_to_tts(monkeypatch):
 
 
 async def test_forecast_promise_is_dropped_before_playout(monkeypatch):
+    monkeypatch.setenv('PREDICTION_FILTER_PROMISES', '1')
     monkeypatch.delenv(PREDICTION_AUDIO_LIMIT_ENV, raising=False)
     bad = candidate(0)
     bad.reply.text = "您放心，保证通过。"

@@ -21,6 +21,7 @@ from .voice_preview import first_clause as pending_speech_clause
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
 from .decision_model import DecisionModel
+from .semantic_decision import shared_matcher
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -129,6 +130,10 @@ class Brain:
         self.decision_model = decision_model or DecisionModel.from_env(cloud)
         self.ticket_forecasts = ticket_forecasts
         self.candidate_limit = candidate_limit
+        # Optional second opinion for the cases the lexical rules reject. It is
+        # silent (None) when the embedding model is missing, so the default path
+        # never depends on it.
+        self.semantic_engine = shared_matcher()
         # Set before each emitted reply so Session can count the decision path
         # (rule vs model vs model text) without parsing model output again.
         self.last_decision: dict | None = None
@@ -211,8 +216,13 @@ class Brain:
         # unasked-question/interruption guards and reached the decision point.
         self.candidates_considered = bool(candidates)
         if getattr(self.cloud, "is_local", False):
-            async for event in self.cloud.respond_local(self.snapshot(memory), candidates, on_first_clause):
-                yield event
+            kwargs = {"semantic_engine": self.semantic_engine} if self.semantic_engine else {}
+            async for kind, value in self.cloud.respond_local(self.snapshot(memory), candidates, on_first_clause, **kwargs):
+                if kind == "semantic_reuse":
+                    self.last_decision = {"kind": "reuse", "path": "semantic", "candidate_id": value.id}
+                    yield "reuse", value.reply
+                else:
+                    yield kind, value
             return
         # Fast path: Context-aware decision engine (considers assistant's last question type)
         if candidates and memory.history and memory.history[-1].get("role") == "user":
@@ -223,7 +233,10 @@ class Brain:
             decision, selected_candidate = self.decision_engine.should_reuse(
                 last_user_input, eligible, assistant_last_text, memory.card)
             path = "rule"
-            if decision == "llm" and self.decision_model and eligible:
+            if selected_candidate is None and self.semantic_engine and eligible:
+                selected_candidate = await self.semantic_engine.confirm(last_user_input, eligible, assistant_last_text)
+                path = "semantic"
+            if selected_candidate is None and decision == "llm" and self.decision_model and eligible:
                 selected_candidate = await self.decision_model.decide(last_user_input, assistant_last_text, eligible)
                 path = "decision_model"
 
@@ -237,7 +250,6 @@ class Brain:
                 yield "update_async", selected_candidate
                 return
             elif decision == "say":
-                # Context-aware rejection (generate new, ignore candidates)
                 candidates = []
         
         # Slow path: LLM-based decision

@@ -17,6 +17,7 @@ from .forecast import OpeningForecastCache
 from .hearing import Hearing
 from .local_asr import FirstPassASR, load_from_env, make_transcriber
 from .local_provider import LocalProvider
+from .semantic_decision import warmup_shared
 from .models import TaskCard
 from .providers import Cloud, ProviderError, Settings
 from .session import Session
@@ -63,6 +64,9 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001 - the cloud path still works without the model
             app.state.local_asr = None
             app.state.transcriber = app.state.cloud.transcribe
+    # Load the semantic matcher in the background: turns that arrive first simply
+    # fall back to the lexical rules until the weights are ready.
+    app.state.semantic_task = asyncio.create_task(warmup_shared())
     voice_detector_model()
     app.state.sessions = set()
     app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
@@ -70,6 +74,7 @@ async def lifespan(app: FastAPI):
     yield
     for session in list(app.state.sessions):
         await session.close()
+    await asyncio.gather(app.state.semantic_task, return_exceptions=True)
     await app.state.local.close()
     if app.state.first_pass:
         app.state.first_pass.close()

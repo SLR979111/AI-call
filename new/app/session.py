@@ -128,6 +128,7 @@ class Session:
         self.bridge_text = "嗯。"
         self.bridge_audio: bytes | None = None
         self.bridge_delay = 0.35
+        self.filter_prediction_promises = os.getenv("PREDICTION_FILTER_PROMISES", "0") == "1"
         self.preview = None
         self.leads = []
         self.prediction_epoch = -1
@@ -975,7 +976,7 @@ class Session:
             async def prepare(item, *, audio_allowed: bool, index: int):
                 text_ready_ms = round((time.perf_counter() - started) * 1000)
                 text = item.reply.text
-                if not prediction_text_allowed(text):
+                if self.filter_prediction_promises and not prediction_text_allowed(text):
                     self.log("prediction_compliance_drop", candidate_id=item.id)
                     return
                 audio_status = "not_requested"
