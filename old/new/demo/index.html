@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AI Call · 电话例子</title>
+  <link rel="stylesheet" href="../web/call.css">
+  <link rel="stylesheet" href="../web/text-engine.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="viewport" aria-label="对话预览" tabindex="0">
+    <div id="conversation" class="conversation"></div>
+  </main>
+  <footer class="controls">
+    <div class="button-group">
+      <button id="play" aria-label="暂停演示" title="空格：暂停 / 继续"><svg viewBox="0 0 20 20" aria-hidden="true"><path id="playIcon" d="M7 5v10M13 5v10"/></svg></button>
+      <button id="replay" aria-label="重新演示" title="R：重新演示"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.3 5.4A6.5 6.5 0 1 1 3.5 10M5.3 2.5v3.8H1.5"/></svg></button>
+      <button id="speed" aria-label="播放速度 1 倍" title="播放速度 1 倍"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17a9 9 0 1 1 16 0M12 13l5-6M8 19h8"/><circle cx="12" cy="13" r="1"/></svg></button>
+      <button id="library" aria-label="电话例子库" title="电话例子库"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h4v15H4zM10 5h4v15h-4zM16 5l4-1 3 15-4 1z"/></svg></button>
+      <button id="latest" aria-label="回到最新" title="回到最新" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m-6-6 6 6 6-6M5 21h14"/></svg></button>
+    </div>
+  </footer>
+  <dialog id="libraryDialog" aria-labelledby="libraryTitle" aria-describedby="libraryDescription">
+    <div class="dialog-heading">
+      <h1 id="libraryTitle">电话例子</h1>
+      <button id="libraryClose" aria-label="关闭例子库" title="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p id="libraryDescription">点标题回放对话，或点「进入互动通话」自己接听。</p>
+    <p class="library-current" id="currentExample"></p>
+    <div class="example-list" id="callExamples"></div>
+    <details class="motion-examples">
+      <summary>文字动效片段</summary>
+      <div class="example-list" id="motionExamples"></div>
+    </details>
+    <p class="library-note">人物与材料均为虚构，仅用于体验对话，不代表平台审核结果或政策承诺。</p>
+  </dialog>
+  <p class="sr-only" id="demoStatus" role="status" aria-live="polite"></p>
+  <script src="../web/text-motion.js"></script>
+  <script src="../web/text-engine.js"></script>
+  <script src="call-examples.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

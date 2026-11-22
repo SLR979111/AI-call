@@ -1,0 +1,45 @@
+/* TextLayoutEngine typography and layout. No demo controls or business styling. */
+.conversation {
+  --silver: #c6c8cd;
+  --customer-history: #c1e8f4;
+  --history-size: 18px;
+  --text-size: clamp(34px, 4.4vw, 54px);
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-synthesis: none;
+}
+.conversation, .conversation * { box-sizing: border-box; }
+.text-engine-viewport { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #242424 transparent; scrollbar-gutter: stable; overflow-anchor: none; }
+.conversation { --history-gap: calc(var(--history-size) * .39); position: relative; isolation: isolate; max-width: 1000px; margin: 0 auto; padding: 35px 48px 52px; min-height: 100%; display: flex; flex-direction: column; justify-content: flex-end; font-size: var(--history-size); line-height: 1.3; gap: var(--history-gap); }
+.conversation::after { content: ""; position: absolute; top: max(0px, calc(var(--scroll-floor, 0px) - 1px)); left: 0; width: 1px; height: 1px; pointer-events: none; }
+.message { flex-shrink: 0; width: 100%; min-width: 0; color: var(--silver); }
+.message.user { align-self: flex-end; text-align: right; color: var(--customer-history); }
+.message.user.focus { color: #fff; }
+.message.assistant { align-self: flex-start; }
+.copy { margin: 0; min-width: 0; font-size: var(--history-size); line-height: 1.3; font-weight: 400; letter-spacing: .025em; }
+.message.focus { margin-top: 22px; font-size: var(--text-size); line-height: 1.3; }
+.message.focus + .message.focus { margin-top: calc(.3lh - var(--history-gap)); }
+.message.focus .copy { font-size: inherit; line-height: inherit; letter-spacing: .01em; font-weight: 350; }
+.sentence-window { display: block; width: 100%; min-height: 1lh; overflow: visible; }
+.sentence { position: absolute; left: 0; top: 0; display: block; min-height: 1lh; white-space: normal; overflow-wrap: anywhere; line-break: strict; font-size: var(--text-size); line-height: 1.3; font-weight: 350; letter-spacing: .01em; transform-origin: 0 0; will-change: transform; }
+.glyph, .ink { display: inline; }
+.ink { position: relative; }
+.wave { width: 112px; height: 32px; }
+.microphone { width: 124px; height: 36px; flex-shrink: 0; align-self: flex-end; display: grid; place-items: center; margin-top: 8px; }
+.candidates { display: flex; flex-direction: column; gap: 4px; color: var(--silver); width: 100%; padding-top: 8px; }
+.candidate { display: flex; align-items: baseline; gap: 14px; text-align: left; padding: 0; color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
+.candidate:focus-visible { outline: 1px solid #aaa; outline-offset: 5px; }
+div.candidate { cursor: default; }
+.candidate .copy { flex: 1; margin-left: 14px; font-size: 16px; line-height: 1.45; letter-spacing: .02em; }
+.candidate-marker { position: absolute; left: -.7em; top: .46em; line-height: 0; }
+.candidate-marker .ink { display: inline-block; width: .29em; height: .29em; border: .05em solid currentColor; border-radius: 50%; }
+@media (min-height: 1000px) { .conversation { padding-bottom: 72px; } }
+@media (max-width: 600px) {
+  .conversation { --history-size: 15px; --text-size: 34px; }
+  .conversation { padding: 24px 26px 35px; }
+  .message.focus { margin-top: 17px; font-size: 34px; }
+  .candidate .copy { font-size: 14px; }
+  .candidate { gap: 10px; }
+}
+@media (max-height: 650px) {
+  .conversation { padding-top: 18px; padding-bottom: 28px; }
+}

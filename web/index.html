@@ -1,180 +1,65 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f3ede2">
-  <meta name="description" content="智语外呼 Fake 骨架：纯前端文本对话与语音播报演示。">
-  <title>智语外呼 · Fake 骨架</title>
-  <link rel="stylesheet" href="./style.css">
-  <script src="./app.js" defer></script>
+  <meta name="color-scheme" content="dark">
+  <title>AI Call</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/call.css">
+  <link rel="stylesheet" href="/static/text-engine.css">
 </head>
-<body data-connection="idle">
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span>
-        </div>
-        <div class="brand-copy">
-          <p class="eyebrow">VOICE AGENT / LOCAL DEMO</p>
-          <h1>智语外呼 <span class="title-dot">·</span> Fake 骨架</h1>
-          <p class="subtitle">文本输入驱动外呼链路，本地语音播报，实时查看会话状态。</p>
-        </div>
+<body>
+  <main id="viewport" aria-label="对话区域" tabindex="0">
+    <div id="transcript" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions text"></div>
+  </main>
+  <div class="sr-only" role="status"><span id="connection">准备连接</span><span id="phase">准备好了，开始聊吧</span></div>
+  <div id="error" class="error" role="alert" hidden></div>
+  <footer class="controls" aria-label="通话控制">
+    <p id="callNotice" class="call-notice" role="status" hidden></p>
+    <details id="timingPanel" class="timing-panel" hidden>
+      <summary id="timingSummary">本通话时延 · 等待麦克风输入</summary>
+      <p>从你说完开始计时。首声包含可能播放的过渡音，正文是开始回答问题的声音。</p>
+      <table><thead><tr><th>语音轮</th><th>首声</th><th>正文首播</th><th>答复来源</th></tr></thead><tbody id="timingRows"></tbody></table>
+    </details>
+    <form id="textForm" class="text-form" hidden>
+      <label class="sr-only" for="textInput">输入一句话</label>
+      <input id="textInput" maxlength="2000" autocomplete="off" placeholder="输入…">
+      <button id="sendText" aria-label="发送消息" title="发送消息" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 6-6 6 6M12 6v13"/></svg></button>
+    </form>
+    <div class="toolbar">
+      <button id="editTask" aria-label="任务设置" title="任务设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg></button>
+      <div id="startControls" class="button-group">
+        <button id="startVoice" class="primary" aria-label="开始通话" title="开始通话" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button>
+        <button id="startText" aria-label="文字试聊" title="文字试聊" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h0M6 12h1m3 0h1m3 0h1m3 0h0M7 16h10"/></svg></button>
       </div>
-
-      <div class="connection-pill" id="connectionPill" data-state="idle" role="status" aria-live="polite">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span class="connection-copy">
-          <span class="connection-label">连接状态</span>
-          <strong id="connectionText">未连接</strong>
-        </span>
+      <div id="callControls" class="button-group" hidden>
+        <button id="mute" aria-label="暂停麦克风" title="暂停麦克风" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-3 0h6"/><path class="mute-slash" d="m3 3 18 18"/></svg></button>
+        <button id="toggleText" aria-label="打开文字输入" title="打开文字输入" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M7 15h10"/></svg></button>
+        <button id="interrupt" aria-label="打断" title="打断"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M12 7l7 5-7 5Z"/></svg></button>
+        <button id="stop" aria-label="结束对话" title="结束对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13c4-5 14-5 18 0v5h-5v-4a13 13 0 0 0-8 0v4H3v-5Z"/></svg></button>
       </div>
-    </header>
-
-    <main class="workspace">
-      <section class="panel conversation" aria-labelledby="conversationTitle">
-        <div class="panel-heading">
-          <div>
-            <p class="section-kicker">DIALOGUE</p>
-            <h2 id="conversationTitle">对话区</h2>
-          </div>
-          <div class="session-meta" id="sessionMeta" hidden>
-            <span class="session-label">SESSION</span>
-            <code id="sessionShort">—</code>
-          </div>
-        </div>
-
-        <div class="action-row">
-          <button class="btn btn-primary" id="startBtn" type="button">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6.9 3.6 9.2 3l1.9 4.3-2 1.4a12.6 12.6 0 0 0 5.2 5.2l1.4-2L20 13.8l-.6 2.3a2.2 2.2 0 0 1-2.4 1.6A16.5 16.5 0 0 1 5.3 6a2.2 2.2 0 0 1 1.6-2.4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-              <path d="M15.5 4.5c1.1.4 2 1.3 2.4 2.4M16 8c.4.2.8.6 1 1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-            </svg>
-            <span id="startBtnText">发起会话</span>
-          </button>
-
-          <button class="btn btn-barge" id="bargeBtn" type="button" disabled>
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="8.3" fill="none" stroke="currentColor" stroke-width="1.7"/>
-              <rect x="9" y="9" width="6" height="6" rx="1.2" fill="currentColor"/>
-            </svg>
-            <span>打断</span>
-          </button>
-
-          <div class="mute-badge" id="muteBadge" hidden role="status">
-            <span class="mute-dot" aria-hidden="true"></span>
-            已本地静音
-          </div>
-        </div>
-
-        <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="对话记录">
-          <div class="empty-state" id="emptyState">
-            <div class="empty-wave" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
-            <p class="empty-title">准备开始一通演示</p>
-            <p class="empty-copy">点击「发起会话」创建文本模式会话，<br>然后在下方输入用户话术。</p>
-          </div>
-        </div>
-
-        <form class="composer" id="composer" novalidate>
-          <label class="sr-only" for="messageInput">用户话术</label>
-          <input
-            class="message-input"
-            id="messageInput"
-            name="message"
-            type="text"
-            maxlength="500"
-            autocomplete="off"
-            placeholder="输入用户要说的话，按 Enter 发送…"
-            disabled
-          >
-          <button class="btn btn-send" id="sendBtn" type="submit" disabled>
-            <span>发送</span>
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m4 12 15-7-4.8 14-2.9-5.2L4 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-              <path d="m11.3 13.7 3.8-4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </form>
-      </section>
-
-      <aside class="rail" aria-label="会话状态与事件">
-        <section class="panel state-panel" aria-labelledby="stateTitle">
-          <div class="panel-heading panel-heading--compact">
-            <div>
-              <p class="section-kicker">RUN STATE</p>
-              <h2 id="stateTitle">状态面板</h2>
-            </div>
-            <span class="live-tag" id="liveTag">IDLE</span>
-          </div>
-
-          <div class="state-grid">
-            <div class="state-cell">
-              <span class="state-key">turn_state</span>
-              <strong class="state-value" id="turnState">—</strong>
-            </div>
-            <div class="state-cell">
-              <span class="state-key">flow_state</span>
-              <strong class="state-value" id="flowState">—</strong>
-            </div>
-          </div>
-
-          <div class="turn-row">
-            <span class="state-key">turn_id</span>
-            <code id="turnId">—</code>
-          </div>
-
-          <div class="slots-block">
-            <div class="slots-heading">
-              <span class="state-key">slots</span>
-              <span id="slotCount">0 项</span>
-            </div>
-            <div class="slot-list" id="slotsList">
-              <p class="slot-empty">暂无槽位</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel events-panel" aria-labelledby="eventsTitle">
-          <details class="event-details" id="eventDetails" open>
-            <summary class="event-summary">
-              <span class="summary-heading">
-                <span class="section-kicker">EVENT STREAM</span>
-                <span class="summary-title" id="eventsTitle">事件日志</span>
-              </span>
-              <span class="summary-meta">
-                <span class="event-count" id="eventCount">0 / 50</span>
-                <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </span>
-            </summary>
-
-            <div class="events-toolbar">
-              <span>入站 ↓ · 出站 ↑ · 最近 50 条</span>
-              <button class="text-button" id="clearLogBtn" type="button">清空</button>
-            </div>
-
-            <div class="event-log" id="eventLog" aria-live="polite">
-              <p class="event-empty" id="eventEmpty">等待连接事件…</p>
-            </div>
-          </details>
-        </section>
-      </aside>
-    </main>
-
-    <footer class="footer">
-      <span>Fake 骨架 · 纯 HTML / CSS / JS · 无外部依赖</span>
-      <span>本地语音合成 · 自动重连 2 次</span>
-    </footer>
-  </div>
-
-  <div class="toast-region" id="toastRegion" aria-live="assertive" aria-atomic="true"></div>
-
-  <noscript>
-    <p class="noscript">此演示需要启用 JavaScript。</p>
-  </noscript>
+      <div class="toolbar-end"><button id="latest" aria-label="回到最新" title="回到最新" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m-6-6 6 6 6-6M5 21h14"/></svg></button></div>
+    </div>
+  </footer>
+  <dialog id="taskDialog">
+    <form id="taskForm">
+      <div class="dialog-heading"><h1>任务设置</h1><button id="closeDialog" type="button" aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+      <label>互动工单<select id="taskPack"><option value="">自定义工单</option></select></label>
+      <div class="task-shortcuts"><a href="/demo/?library=1" target="_blank" rel="noopener">观看对话回放 ↗</a><button id="restoreTask" type="button">恢复默认任务</button></div>
+      <label>通话模式<select id="callMode"><option value="cloud">云端语音 · 当前音色</option><option value="local">纯本地 · MeloTTS 普通话女声</option></select></label>
+      <label>任务名称<input id="editTitle" required maxlength="80"></label>
+      <label>对话目标<textarea id="editGoal" required maxlength="1000" rows="2"></textarea></label>
+      <label>已知信息<textarea id="editFacts" maxlength="5000" rows="3"></textarea></label>
+      <label>需要说清楚的要点 <span>每行一项，最多 8 项</span><textarea id="editPoints" required rows="3"></textarea></label>
+      <label>开场白<textarea id="editOpening" required maxlength="180" rows="2"></textarea></label>
+      <label class="prediction-option"><input id="prediction" type="checkbox" checked>提前准备可能的回复</label>
+      <div class="session-details"><span id="outcomeText">等待开始</span><span id="latency"></span><span id="duration"></span><span id="cacheStat"></span><ul id="checkpoints"></ul></div>
+      <div class="dialog-actions"><button id="export" type="button" aria-label="导出对话" title="导出对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/></svg></button><button id="saveTask" class="save-task" type="submit">保存任务</button></div>
+    </form>
+  </dialog>
+  <script src="/static/text-motion.js"></script>
+  <script src="/static/text-engine.js"></script>
+  <script type="module" src="/static/call.js"></script>
 </body>
 </html>

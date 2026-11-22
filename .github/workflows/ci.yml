@@ -14,9 +14,12 @@ concurrency:
 
 jobs:
   test:
-    name: pytest + contract validation + WS E2E
+    name: Archived service entry and regression
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: old
     env:
       APP_ENV: test
       DEV_NO_AUTH: "1"
@@ -30,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: old/requirements.txt
 
       - name: Install dependencies
         run: |
@@ -41,13 +44,15 @@ jobs:
         run: mkdir -p data
 
       - name: Run tests
+        env:
+          DISK_CACHE_DIR: ${{ runner.temp }}/archived-test-cache
         run: pytest -q
 
       - name: Validate contracts
         run: python contracts/validate.py contracts/fixtures
 
       - name: Frontend protocol tests
-        working-directory: web/rtc
+        working-directory: old/web/rtc
         run: |
           node test/golden-replay.mjs
           node test/pcm-path.mjs
@@ -60,12 +65,9 @@ jobs:
         run: sh scripts/ci_e2e.sh
 
   new-implementation:
-    name: new/ standalone tests
+    name: G2 regression
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: new
     steps:
       - name: Checkout
         uses: actions/checkout@v4

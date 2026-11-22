@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+web/vendor/** -whitespace
+
+# The archive retains the checkout rules from its original root.
+old/** !text !eol

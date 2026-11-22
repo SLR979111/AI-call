@@ -1,0 +1,21 @@
+.controls .button-group { min-height: 46px; }
+#libraryDialog { width: min(640px, calc(100% - 32px)); }
+#libraryDescription, .library-note { color: #919398; font-size: 13px; line-height: 1.7; }
+.library-current { margin: 18px 0 10px; color: #bec6cc; font-size: 12px; }
+.example-list { display: grid; gap: 8px; }
+.example-card { display: flex; flex-direction: column; align-items: stretch; width: 100%; height: auto; padding: 14px 16px; text-align: left; border: 1px solid #2b2d30; border-radius: 10px; background: #17181a; }
+.example-card:hover { background: #222427; border-color: #64696e; }
+.example-card[aria-current="true"] { border-color: #82949e; background: #20262b; }
+.example-title { display: block; color: #e0e3e5; font-size: 14px; font-weight: 500; line-height: 1.5; }
+.example-description { display: block; margin-top: 5px; color: #969ca2; font-size: 12px; line-height: 1.6; }
+.example-meta { display: block; margin-top: 7px; color: #74828b; font-size: 11px; }
+.motion-examples { margin-top: 18px; }
+.motion-examples summary { cursor: pointer; color: #a0a7ac; font-size: 13px; padding: 8px 0; }
+.motion-examples .example-list { margin-top: 8px; }
+.motion-examples .example-card { padding: 10px 14px; }
+.library-note { margin-bottom: 0; font-size: 11px; }
+@media (max-width: 390px) { .controls .button-group { gap: 5px; } .example-card { padding: 12px; } }
+
+.example-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.example-row .example-card { width: 100%; }
+.example-row a { color: #ddd; font-size: .8rem; text-underline-offset: .22em; }

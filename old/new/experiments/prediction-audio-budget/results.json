@@ -1,0 +1,2129 @@
+{
+  "arms": [
+    {
+      "limit": null,
+      "label": "all",
+      "prefetch_calls": 10,
+      "audio_bytes_total": 1068000,
+      "audio_candidate_count": 10,
+      "text_only_candidate_count": 0,
+      "published_count": 10,
+      "skipped_count": 0,
+      "forecast_total_ms": 544.3,
+      "audio_all_ready_ms": 544.1,
+      "published_all_ms": 308,
+      "text_generated_ms": {
+        "p0": 40.4,
+        "p1": 69.3,
+        "p2": 69.4,
+        "p3": 106.5,
+        "p4": 106.7,
+        "p5": 190.1,
+        "p6": 219.7,
+        "p7": 248.1,
+        "p8": 277.1,
+        "p9": 308.1
+      },
+      "published_ms": {
+        "p0": 41,
+        "p1": 69,
+        "p2": 69,
+        "p3": 107,
+        "p4": 107,
+        "p5": 190,
+        "p6": 220,
+        "p7": 248,
+        "p8": 277,
+        "p9": 308
+      },
+      "audio_ready_ms": {
+        "p0": 248.3,
+        "p1": 307.9,
+        "p2": 277.2,
+        "p3": 335.7,
+        "p4": 308.3,
+        "p5": 394.0,
+        "p6": 435.9,
+        "p7": 466.3,
+        "p8": 497.2,
+        "p9": 544.1
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "preparing",
+        "p6": "preparing",
+        "p7": "preparing",
+        "p8": "preparing",
+        "p9": "preparing"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 96000,
+        "p3": 120000,
+        "p4": 108000,
+        "p5": 96000,
+        "p6": 96000,
+        "p7": 108000,
+        "p8": 96000,
+        "p9": 132000
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": null,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 41,
+            "audio_ready_ms": 248.3
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 41,
+            "audio_ready_ms": 248.3
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 69,
+            "audio_ready_ms": 307.9
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 69,
+            "audio_ready_ms": 307.9
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 69,
+            "audio_ready_ms": 277.2
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 69,
+            "audio_ready_ms": 277.2
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 107,
+            "audio_ready_ms": 335.7
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 107,
+            "audio_ready_ms": 335.7
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 107,
+            "audio_ready_ms": 308.3
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 107,
+            "audio_ready_ms": 308.3
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 308,
+            "audio_ready_ms": 544.1
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 308,
+            "audio_ready_ms": 544.1
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 6,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 10,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": false,
+        "reason": "every published candidate already has prepared audio"
+      },
+      "final_audio_texts": [
+        "好的，我去核对。",
+        "好的，我记下了。",
+        "好的，我这边看到了。",
+        "好的，那就不打扰您了。",
+        "好的，那我直接说明。",
+        "方便的，您请讲。",
+        "明白，我一起更新。",
+        "还缺授权和截图。",
+        "那我晚点再联系您。",
+        "那还需要点提交。"
+      ]
+    },
+    {
+      "limit": 0,
+      "label": "N=0",
+      "prefetch_calls": 0,
+      "audio_bytes_total": 0,
+      "audio_candidate_count": 0,
+      "text_only_candidate_count": 10,
+      "published_count": 10,
+      "skipped_count": 10,
+      "forecast_total_ms": 305.5,
+      "audio_all_ready_ms": null,
+      "published_all_ms": 305,
+      "text_generated_ms": {
+        "p0": 41.7,
+        "p1": 69.9,
+        "p2": 83.3,
+        "p3": 111.9,
+        "p4": 125.0,
+        "p5": 184.8,
+        "p6": 216.1,
+        "p7": 247.2,
+        "p8": 277.5,
+        "p9": 305.4
+      },
+      "published_ms": {
+        "p0": 42,
+        "p1": 70,
+        "p2": 83,
+        "p3": 112,
+        "p4": 125,
+        "p5": 185,
+        "p6": 216,
+        "p7": 247,
+        "p8": 277,
+        "p9": 305
+      },
+      "audio_ready_ms": {
+        "p0": null,
+        "p1": null,
+        "p2": null,
+        "p3": null,
+        "p4": null,
+        "p5": null,
+        "p6": null,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "limit_skipped",
+        "p1": "limit_skipped",
+        "p2": "limit_skipped",
+        "p3": "limit_skipped",
+        "p4": "limit_skipped",
+        "p5": "limit_skipped",
+        "p6": "limit_skipped",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 0,
+        "p1": 0,
+        "p2": 0,
+        "p3": 0,
+        "p4": 0,
+        "p5": 0,
+        "p6": 0,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 0,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 42,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 42,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 70,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 70,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 83,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 83,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 112,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 112,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 125,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 125,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 305,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 305,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 0,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 0,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": []
+    },
+    {
+      "limit": 1,
+      "label": "N=1",
+      "prefetch_calls": 1,
+      "audio_bytes_total": 96000,
+      "audio_candidate_count": 1,
+      "text_only_candidate_count": 9,
+      "published_count": 10,
+      "skipped_count": 9,
+      "forecast_total_ms": 306.8,
+      "audio_all_ready_ms": 243.5,
+      "published_all_ms": 307,
+      "text_generated_ms": {
+        "p0": 40.4,
+        "p1": 71.6,
+        "p2": 85.1,
+        "p3": 114.3,
+        "p4": 127.1,
+        "p5": 181.0,
+        "p6": 218.6,
+        "p7": 243.4,
+        "p8": 281.1,
+        "p9": 306.7
+      },
+      "published_ms": {
+        "p0": 40,
+        "p1": 72,
+        "p2": 85,
+        "p3": 114,
+        "p4": 127,
+        "p5": 181,
+        "p6": 219,
+        "p7": 243,
+        "p8": 281,
+        "p9": 307
+      },
+      "audio_ready_ms": {
+        "p0": 243.5,
+        "p1": null,
+        "p2": null,
+        "p3": null,
+        "p4": null,
+        "p5": null,
+        "p6": null,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "limit_skipped",
+        "p2": "limit_skipped",
+        "p3": "limit_skipped",
+        "p4": "limit_skipped",
+        "p5": "limit_skipped",
+        "p6": "limit_skipped",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 0,
+        "p2": 0,
+        "p3": 0,
+        "p4": 0,
+        "p5": 0,
+        "p6": 0,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 1,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 40,
+            "audio_ready_ms": 243.5
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 40,
+            "audio_ready_ms": 243.5
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 72,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 72,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 85,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 85,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 114,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 114,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 127,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 127,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 307,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 307,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 1,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 1,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": [
+        "方便的，您请讲。"
+      ]
+    },
+    {
+      "limit": 2,
+      "label": "N=2",
+      "prefetch_calls": 2,
+      "audio_bytes_total": 216000,
+      "audio_candidate_count": 2,
+      "text_only_candidate_count": 8,
+      "published_count": 10,
+      "skipped_count": 8,
+      "forecast_total_ms": 307.5,
+      "audio_all_ready_ms": 307.3,
+      "published_all_ms": 307,
+      "text_generated_ms": {
+        "p0": 40.0,
+        "p1": 66.2,
+        "p2": 66.4,
+        "p3": 111.4,
+        "p4": 124.3,
+        "p5": 187.3,
+        "p6": 217.7,
+        "p7": 247.1,
+        "p8": 277.9,
+        "p9": 307.4
+      },
+      "published_ms": {
+        "p0": 40,
+        "p1": 66,
+        "p2": 66,
+        "p3": 111,
+        "p4": 124,
+        "p5": 187,
+        "p6": 218,
+        "p7": 247,
+        "p8": 278,
+        "p9": 307
+      },
+      "audio_ready_ms": {
+        "p0": 247.1,
+        "p1": 307.3,
+        "p2": null,
+        "p3": null,
+        "p4": null,
+        "p5": null,
+        "p6": null,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "limit_skipped",
+        "p3": "limit_skipped",
+        "p4": "limit_skipped",
+        "p5": "limit_skipped",
+        "p6": "limit_skipped",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 0,
+        "p3": 0,
+        "p4": 0,
+        "p5": 0,
+        "p6": 0,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 2,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 40,
+            "audio_ready_ms": 247.1
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 40,
+            "audio_ready_ms": 247.1
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 66,
+            "audio_ready_ms": 307.3
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 66,
+            "audio_ready_ms": 307.3
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 66,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 66,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 111,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 111,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 124,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 124,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 307,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 307,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 2,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 2,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": [
+        "好的，我这边看到了。",
+        "方便的，您请讲。"
+      ]
+    },
+    {
+      "limit": 3,
+      "label": "N=3",
+      "prefetch_calls": 3,
+      "audio_bytes_total": 312000,
+      "audio_candidate_count": 3,
+      "text_only_candidate_count": 7,
+      "published_count": 10,
+      "skipped_count": 7,
+      "forecast_total_ms": 311.7,
+      "audio_all_ready_ms": 270.4,
+      "published_all_ms": 312,
+      "text_generated_ms": {
+        "p0": 49.3,
+        "p1": 49.5,
+        "p2": 80.8,
+        "p3": 107.8,
+        "p4": 133.0,
+        "p5": 189.4,
+        "p6": 215.6,
+        "p7": 241.1,
+        "p8": 270.2,
+        "p9": 311.5
+      },
+      "published_ms": {
+        "p0": 49,
+        "p1": 49,
+        "p2": 81,
+        "p3": 108,
+        "p4": 133,
+        "p5": 189,
+        "p6": 216,
+        "p7": 241,
+        "p8": 270,
+        "p9": 312
+      },
+      "audio_ready_ms": {
+        "p0": 241.3,
+        "p1": 270.2,
+        "p2": 270.4,
+        "p3": null,
+        "p4": null,
+        "p5": null,
+        "p6": null,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "limit_skipped",
+        "p4": "limit_skipped",
+        "p5": "limit_skipped",
+        "p6": "limit_skipped",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 96000,
+        "p3": 0,
+        "p4": 0,
+        "p5": 0,
+        "p6": 0,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 3,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 49,
+            "audio_ready_ms": 241.3
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 49,
+            "audio_ready_ms": 241.3
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 49,
+            "audio_ready_ms": 270.2
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 49,
+            "audio_ready_ms": 270.2
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 81,
+            "audio_ready_ms": 270.4
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 81,
+            "audio_ready_ms": 270.4
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 108,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 108,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 133,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 133,
+            "audio_ready_ms": null
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 312,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 312,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 3,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 3,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": [
+        "好的，我这边看到了。",
+        "方便的，您请讲。",
+        "那还需要点提交。"
+      ]
+    },
+    {
+      "limit": 5,
+      "label": "N=5",
+      "prefetch_calls": 5,
+      "audio_bytes_total": 540000,
+      "audio_candidate_count": 5,
+      "text_only_candidate_count": 5,
+      "published_count": 10,
+      "skipped_count": 5,
+      "forecast_total_ms": 339.2,
+      "audio_all_ready_ms": 339.0,
+      "published_all_ms": 308,
+      "text_generated_ms": {
+        "p0": 50.0,
+        "p1": 50.3,
+        "p2": 91.1,
+        "p3": 91.3,
+        "p4": 120.4,
+        "p5": 190.7,
+        "p6": 218.8,
+        "p7": 245.5,
+        "p8": 277.5,
+        "p9": 307.9
+      },
+      "published_ms": {
+        "p0": 50,
+        "p1": 50,
+        "p2": 91,
+        "p3": 91,
+        "p4": 120,
+        "p5": 191,
+        "p6": 219,
+        "p7": 246,
+        "p8": 278,
+        "p9": 308
+      },
+      "audio_ready_ms": {
+        "p0": 277.4,
+        "p1": 277.6,
+        "p2": 307.8,
+        "p3": 308.1,
+        "p4": 339.0,
+        "p5": null,
+        "p6": null,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "limit_skipped",
+        "p6": "limit_skipped",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 96000,
+        "p3": 120000,
+        "p4": 108000,
+        "p5": 0,
+        "p6": 0,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 5,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 277.4
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 50,
+            "audio_ready_ms": 277.4
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 50,
+            "audio_ready_ms": 277.6
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 50,
+            "audio_ready_ms": 277.6
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 91,
+            "audio_ready_ms": 307.8
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 91,
+            "audio_ready_ms": 307.8
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 91,
+            "audio_ready_ms": 308.1
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 91,
+            "audio_ready_ms": 308.1
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 120,
+            "audio_ready_ms": 339.0
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 120,
+            "audio_ready_ms": 339.0
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 308,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 308,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 5,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 5,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": [
+        "好的，我这边看到了。",
+        "好的，那我直接说明。",
+        "方便的，您请讲。",
+        "那我晚点再联系您。",
+        "那还需要点提交。"
+      ]
+    },
+    {
+      "limit": 7,
+      "label": "N=7",
+      "prefetch_calls": 7,
+      "audio_bytes_total": 732000,
+      "audio_candidate_count": 7,
+      "text_only_candidate_count": 3,
+      "published_count": 10,
+      "skipped_count": 3,
+      "forecast_total_ms": 431.9,
+      "audio_all_ready_ms": 431.7,
+      "published_all_ms": 301,
+      "text_generated_ms": {
+        "p0": 46.0,
+        "p1": 46.2,
+        "p2": 90.8,
+        "p3": 90.9,
+        "p4": 121.2,
+        "p5": 182.5,
+        "p6": 210.8,
+        "p7": 242.3,
+        "p8": 272.1,
+        "p9": 301.1
+      },
+      "published_ms": {
+        "p0": 46,
+        "p1": 46,
+        "p2": 91,
+        "p3": 91,
+        "p4": 121,
+        "p5": 183,
+        "p6": 211,
+        "p7": 242,
+        "p8": 272,
+        "p9": 301
+      },
+      "audio_ready_ms": {
+        "p0": 242.4,
+        "p1": 272.1,
+        "p2": 301.2,
+        "p3": 330.6,
+        "p4": 330.6,
+        "p5": 404.3,
+        "p6": 431.7,
+        "p7": null,
+        "p8": null,
+        "p9": null
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "preparing",
+        "p6": "preparing",
+        "p7": "limit_skipped",
+        "p8": "limit_skipped",
+        "p9": "limit_skipped"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 96000,
+        "p3": 120000,
+        "p4": 108000,
+        "p5": 96000,
+        "p6": 96000,
+        "p7": 0,
+        "p8": 0,
+        "p9": 0
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 7,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 46,
+            "audio_ready_ms": 242.4
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 46,
+            "audio_ready_ms": 242.4
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 46,
+            "audio_ready_ms": 272.1
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 46,
+            "audio_ready_ms": 272.1
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 91,
+            "audio_ready_ms": 301.2
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 91,
+            "audio_ready_ms": 301.2
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 91,
+            "audio_ready_ms": 330.6
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 91,
+            "audio_ready_ms": 330.6
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 121,
+            "audio_ready_ms": 330.6
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 121,
+            "audio_ready_ms": 330.6
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 301,
+            "audio_ready_ms": null
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 301,
+            "audio_ready_ms": null
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 5,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 7,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": true,
+        "candidate_id": "p9",
+        "ok": true,
+        "tts_calls": 1,
+        "sources": [
+          "tts"
+        ],
+        "prediction_audio_hit": false,
+        "reply_completed": true,
+        "errors": []
+      },
+      "final_audio_texts": [
+        "好的，我记下了。",
+        "好的，我这边看到了。",
+        "好的，那我直接说明。",
+        "方便的，您请讲。",
+        "还缺授权和截图。",
+        "那我晚点再联系您。",
+        "那还需要点提交。"
+      ]
+    },
+    {
+      "limit": 10,
+      "label": "N=10",
+      "prefetch_calls": 10,
+      "audio_bytes_total": 1068000,
+      "audio_candidate_count": 10,
+      "text_only_candidate_count": 0,
+      "published_count": 10,
+      "skipped_count": 0,
+      "forecast_total_ms": 528.1,
+      "audio_all_ready_ms": 527.9,
+      "published_all_ms": 303,
+      "text_generated_ms": {
+        "p0": 43.9,
+        "p1": 72.6,
+        "p2": 72.8,
+        "p3": 102.2,
+        "p4": 131.2,
+        "p5": 189.6,
+        "p6": 220.8,
+        "p7": 247.9,
+        "p8": 276.1,
+        "p9": 303.3
+      },
+      "published_ms": {
+        "p0": 44,
+        "p1": 73,
+        "p2": 73,
+        "p3": 102,
+        "p4": 131,
+        "p5": 190,
+        "p6": 221,
+        "p7": 248,
+        "p8": 276,
+        "p9": 303
+      },
+      "audio_ready_ms": {
+        "p0": 248.0,
+        "p1": 303.2,
+        "p2": 276.0,
+        "p3": 331.3,
+        "p4": 331.4,
+        "p5": 409.0,
+        "p6": 437.3,
+        "p7": 468.8,
+        "p8": 469.0,
+        "p9": 527.9
+      },
+      "audio_status": {
+        "p0": "preparing",
+        "p1": "preparing",
+        "p2": "preparing",
+        "p3": "preparing",
+        "p4": "preparing",
+        "p5": "preparing",
+        "p6": "preparing",
+        "p7": "preparing",
+        "p8": "preparing",
+        "p9": "preparing"
+      },
+      "audio_bytes_by_candidate": {
+        "p0": 96000,
+        "p1": 120000,
+        "p2": 96000,
+        "p3": 120000,
+        "p4": 108000,
+        "p5": 96000,
+        "p6": 96000,
+        "p7": 108000,
+        "p8": 96000,
+        "p9": 132000
+      },
+      "final_candidate_ids": [
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p8",
+        "p9"
+      ],
+      "limit_event": 10,
+      "answers": [
+        {
+          "answer": "好的，您现在方便吗？",
+          "candidate_id": "p0",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 44,
+            "audio_ready_ms": 248.0
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p0",
+            "answer": "好的，您现在方便吗？",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 44,
+            "audio_ready_ms": 248.0
+          }
+        },
+        {
+          "answer": "我已经提交了。",
+          "candidate_id": "p1",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 73,
+            "audio_ready_ms": 303.2
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p1",
+            "answer": "我已经提交了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 73,
+            "audio_ready_ms": 303.2
+          }
+        },
+        {
+          "answer": "只是保存了。",
+          "candidate_id": "p2",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 73,
+            "audio_ready_ms": 276.0
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p2",
+            "answer": "只是保存了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 73,
+            "audio_ready_ms": 276.0
+          }
+        },
+        {
+          "answer": "我是负责人。",
+          "candidate_id": "p3",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 102,
+            "audio_ready_ms": 331.3
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p3",
+            "answer": "我是负责人。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 102,
+            "audio_ready_ms": 331.3
+          }
+        },
+        {
+          "answer": "现在有点忙。",
+          "candidate_id": "p4",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": false,
+            "path": "text_only_tts",
+            "published_ms": 131,
+            "audio_ready_ms": 331.4
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p4",
+            "answer": "现在有点忙。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 131,
+            "audio_ready_ms": 331.4
+          }
+        },
+        {
+          "answer": "我明白了。",
+          "candidate_id": "p9",
+          "early": {
+            "at_ms": 150,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": false,
+            "audio": false,
+            "path": "not_ready",
+            "published_ms": 303,
+            "audio_ready_ms": 527.9
+          },
+          "late": {
+            "at_ms": 900,
+            "candidate_id": "p9",
+            "answer": "我明白了。",
+            "published": true,
+            "audio": true,
+            "path": "prediction_audio",
+            "published_ms": 303,
+            "audio_ready_ms": 527.9
+          }
+        }
+      ],
+      "summary": {
+        "early_ms": 150,
+        "late_ms": 900,
+        "early_text_hits": 5,
+        "early_audio_hits": 0,
+        "late_text_hits": 6,
+        "late_audio_hits": 6,
+        "answer_count": 6
+      },
+      "coverage": {
+        "early_published": 5,
+        "early_audio": 0,
+        "early_total": 10,
+        "late_published": 10,
+        "late_audio": 10,
+        "late_total": 10
+      },
+      "fallback": {
+        "applicable": false,
+        "reason": "every published candidate already has prepared audio"
+      },
+      "final_audio_texts": [
+        "好的，我去核对。",
+        "好的，我记下了。",
+        "好的，我这边看到了。",
+        "好的，那就不打扰您了。",
+        "好的，那我直接说明。",
+        "方便的，您请讲。",
+        "明白，我一起更新。",
+        "还缺授权和截图。",
+        "那我晚点再联系您。",
+        "那还需要点提交。"
+      ]
+    }
+  ]
+}
