@@ -5,6 +5,10 @@ import { createRequire } from 'node:module';
 
 const [base, output, transport = 'ws_pcm', followup = 'reason', endpointArg] = process.argv.slice(2);
 if (!base || !output) throw new Error('Usage: node scripts/check_pop_contest_browser.mjs BASE OUTPUT');
+const timingDemo = process.env.POP_TIMING_DEMO === '1';
+if (timingDemo && !['closure', 'endpoint-noise', 'barge-resume'].includes(followup)) {
+  throw new Error('The timing frontend supports closure, noise and interrupted playback replays');
+}
 const endpointMs = endpointArg === undefined || followup === 'closure' ? null : Number(endpointArg);
 if (endpointMs !== null && (followup !== 'pauses' || !Number.isInteger(endpointMs) || endpointMs < 200 || endpointMs > 1200)) {
   throw new Error('Endpoint override is available for pause diagnostics (200–1200 ms).');
@@ -39,6 +43,7 @@ const pauseChecks = [];
 const textChecks = [];
 const scenarioChecks = [];
 const closureChecks = [];
+const bargeResumeChecks = [];
 let capturedAudio = null;
 let noMatch = null;
 page.on('pageerror', error => errors.push(String(error)));
@@ -76,18 +81,23 @@ await page.addInitScript(() => {
     return rtcSend.call(this, data);
   };
   const create = RTCPeerConnection.prototype.createDataChannel;
+  function receive(message) {
+    const data = JSON.parse(message);
+    if (['speech_endpoint', 'barge_resume'].includes(data.type)) window.contestWire.push({ at: performance.now(), ...data });
+    window.recordContestServer(message);
+  }
   RTCPeerConnection.prototype.createDataChannel = function (...options) {
     const channel = create.apply(this, options);
     let fragments = '';
     channel.addEventListener('message', ({ data }) => {
       if (data[0] === '=') {
         fragments = '';
-        window.recordContestServer(data.slice(1));
+        receive(data.slice(1));
       } else if (data[0] === '[') fragments = data.slice(1);
       else if (fragments) {
         fragments += data.slice(1);
         if (data[0] === '!') {
-          window.recordContestServer(fragments);
+          receive(fragments);
           fragments = '';
         }
       }
@@ -111,10 +121,12 @@ async function waitForServer(type, start) {
 
 async function connect(caseId) {
   const start = server.length;
-  await page.goto(base + '/rtc/?downlink=pcm&transport=' + transport);
+  await page.goto(base + (timingDemo ? '/?timing=1' : '/rtc/?downlink=pcm&transport=' + transport));
+  if (timingDemo) await page.locator('#editTask').click();
   if (caseId) await page.locator('#contestCase').selectOption(caseId);
   await page.locator('#inputSource').selectOption('file');
-  await page.locator('#btnStart').click();
+  if (timingDemo) await page.locator('#closeDialog').click();
+  await page.locator(timingDemo ? '#startVoice' : '#btnStart').click();
   await page.locator('#audioFile').waitFor({ state: 'visible' });
   await page.waitForFunction(() => !document.getElementById('audioFile').disabled);
   await page.waitForFunction(expected => document.getElementById('transport').textContent.includes(expected), transport);
@@ -158,11 +170,14 @@ async function speak(session, filename) {
     row => row.type === 'playback_ended' && row.turn_id === turn), [localStart, result.turn_id], { timeout: 26000 });
   const local = await page.evaluate(offset => window.contestWire.slice(offset), localStart);
   const first = local.find(row => row.type === 'playback_first_frame' && row.turn_id === result.turn_id);
-  const end = local.find(row => row.type === 'speech_ended' && row.at <= first?.at);
+  const end = local.find(row => row.type === 'speech_endpoint' && row.at <= first?.at) ||
+    local.find(row => row.type === 'speech_ended' && row.at <= first?.at);
+  const fileEnd = local.find(row => row.type === 'speech_ended' && row.end_of_input);
   const proxy = first && end && end.last_voiced_mono_ms > 0
     ? Math.round((first.at - end.last_voiced_mono_ms) * 100) / 100 : null;
   const row = { session_id: session.session_id, turn: result.turn_id, input_file: filename, asr: input.text,
-                outcome: result.result.outcome, last_voiced_to_browser_playback_proxy_ms: proxy };
+                outcome: result.result.outcome, last_voiced_to_browser_playback_proxy_ms: proxy,
+                endpoint_before_file_end: end?.type === 'speech_endpoint' && (!fileEnd || end.at < fileEnd.at) };
   console.log(filename, row.asr, row.outcome, proxy);
   return row;
 }
@@ -436,18 +451,103 @@ async function checkClosure() {
       measurements.push(row);
       rows.push({ ...row, expected_outcome: outcome, expected_tool: tool ?? null });
     }
-    const receipt = server.slice(start).find(event =>
-      event.type === 'turn_result' && event.result?.result?.writeback)?.result.result.writeback.record_id;
-    if (receipt) {
-      await page.waitForFunction(id => document.getElementById('result').textContent.includes(id), receipt);
+    let timingUi;
+    if (timingDemo) {
+      await page.locator('#timingSummary').click();
+      timingUi = {
+        median: await page.locator('#timingSummary').textContent(),
+        rows: await page.locator('#timingRows tr').allTextContents(),
+        receipt: await page.locator('#result').textContent(),
+      };
+      const timings = rows.map(row => row.last_voiced_to_browser_playback_proxy_ms).sort((a, b) => a - b);
+      const median = (timings[Math.floor((timings.length - 1) / 2)] + timings[Math.floor(timings.length / 2)]) / 2;
+      const first = Number(timingUi.median.match(/首声 P50 ([\d.]+) 秒/)?.[1]) * 1000;
+      const answer = Number(timingUi.median.match(/正文 P50 ([\d.]+) 秒/)?.[1]) * 1000;
+      const receipt = server.slice(start).find(event =>
+        event.type === 'turn_result' && event.result?.result?.writeback)?.result.result.writeback.record_id;
+      if (timingUi.rows.length !== rows.length || timings.some(ms => !Number.isFinite(ms)) ||
+          !Number.isFinite(first) || Math.abs(first - median) > 10 ||
+          !Number.isFinite(answer) || (receipt ? !timingUi.receipt.includes(receipt) : timingUi.receipt.includes('contact-'))) {
+        throw new Error('Timing frontend diverged from RTC events: ' + JSON.stringify({ timings, timingUi }));
+      }
     }
     await page.screenshot({ path: join(output, `closure-${call.id}.png`) });
-    await page.locator('#btnHangup').click();
+    await page.locator(timingDemo ? '#stop' : '#btnHangup').click();
     const wire = await page.evaluate(() => window.contestWire);
     const counts = await page.evaluate(() => window.contestUploads);
-    closureChecks.push({id: call.id, doc: call.doc, session_id: session.session_id, rows, uploads: counts});
+    closureChecks.push({id: call.id, doc: call.doc, session_id: session.session_id, rows, uploads: counts, timingUi});
     client.push(wire);
     uploads.push(counts);
+  }
+}
+
+async function checkNoisyEndpoint() {
+  for (const file of ['identity-noisy-tail.wav', 'identity-pause-noise.wav']) {
+    const start = server.length;
+    const session = await connect();
+    await finishOpening(session, start);
+    const afterOpening = server.length;
+    const wireStart = await page.evaluate(() => window.contestWire.length);
+    await page.locator('#audioFile').setInputFiles(resolve(output, 'input_audio', 'room-tone.wav'));
+    await page.waitForFunction(offset => window.contestWire.slice(offset).some(
+      row => row.type === 'speech_ended' && row.end_of_input), wireStart);
+    const row = await speak(session, file);
+    measurements.push(row);
+    const input = server.slice(afterOpening).filter(event => event.type === 'transcript' && event.final);
+    if (input.length !== 1 || row.outcome !== 'pending_need' || !row.endpoint_before_file_end) {
+      throw new Error('Background noise prevented clean speech-only endpointing: ' + JSON.stringify({row, input}));
+    }
+    await page.waitForFunction(() => window.contestWire.filter(
+      event => event.type === 'speech_ended' && event.end_of_input).length === 2);
+    await page.locator(timingDemo ? '#stop' : '#btnHangup').click();
+    client.push(await page.evaluate(() => window.contestWire));
+  }
+}
+
+async function checkBargeResume() {
+  for (const input of [null, 'room-tone.wav', 'identity.wav']) {
+    const start = server.length;
+    const session = await connect();
+    const opening = await waitForServer('tts_started', start);
+    const reply = opening.reply_id;
+    await page.waitForFunction(id => window.contestWire.some(
+      row => row.type === 'playback_first_frame' && row.reply_id === id && performance.now() - row.at >= 250), reply);
+    await page.locator(timingDemo ? '#interrupt' : '#btnBarge').click();
+    await page.waitForFunction(id => window.contestWire.some(
+      row => row.type === 'local_muted' && row.reply_id === id && row.resume_on_silence), reply);
+    const paused = await page.evaluate(id => window.contestWire.find(
+      row => row.type === 'local_muted' && row.reply_id === id), reply);
+    if (input) {
+      const delay = input === 'identity.wav' ? 3900 : 2500;
+      await page.waitForFunction(at => performance.now() >= at, paused.at + delay);
+      await page.locator('#audioFile').setInputFiles(resolve(output, 'input_audio', input));
+    }
+    if (input === 'identity.wav') {
+      const cancel = await waitForServer('cancel', start);
+      if (cancel.turn_id !== opening.turn_id || cancel.reason !== 'BARGE_IN') throw new Error('Wrong reply cancelled');
+      await waitForServer('transcript', start);
+      await page.waitForFunction(at => performance.now() >= at, paused.at + 5600);
+      const final = server.slice(start).filter(row => row.type === 'transcript' && row.final);
+      if (final.length !== 1 || !final[0].text.includes('负责人') || server.slice(start).some(
+        row => row.type === 'barge_resume' && row.reply_id === reply)) throw new Error('Speech must prevent resumption');
+      bargeResumeChecks.push({ session_id: session.session_id, input, resumed: false, transcript: final[0].text });
+    } else {
+      await page.waitForFunction(id => window.contestWire.some(
+        row => row.type === 'playback_ended' && row.reply_id === id), reply, { timeout: 14000 });
+      const wire = await page.evaluate(() => window.contestWire);
+      const resumed = wire.filter(row => row.type === 'barge_resume' && row.reply_id === reply);
+      const ended = wire.find(row => row.type === 'playback_ended' && row.reply_id === reply);
+      const firstFrames = wire.filter(row => row.type === 'playback_first_frame' && row.reply_id === reply);
+      const elapsed = Math.round(resumed[0]?.at - paused.at);
+      if (resumed.length !== 1 || firstFrames.length !== 1 || elapsed < 4900 || elapsed > 5600 ||
+          ended.at <= resumed[0].at || server.slice(start).some(row => row.type === 'transcript' || row.type === 'cancel')) {
+        throw new Error('Expected exactly one continuation of the original reply after five seconds: ' + JSON.stringify({ elapsed, wire }));
+      }
+      bargeResumeChecks.push({ session_id: session.session_id, input, resumed: true, elapsed_ms: elapsed });
+    }
+    console.log(bargeResumeChecks.at(-1));
+    await page.locator(timingDemo ? '#stop' : '#btnHangup').click();
+    client.push(await page.evaluate(() => window.contestWire));
   }
 }
 
@@ -458,6 +558,8 @@ try {
   else if (followup === 'scenarios') await checkScenarios();
   else if (followup === 'scene-rsi') await checkSceneRsi();
   else if (followup === 'closure') await checkClosure();
+  else if (followup === 'endpoint-noise') await checkNoisyEndpoint();
+  else if (followup === 'barge-resume') await checkBargeResume();
   else await checkCall();
 } catch (error) {
   failure = String(error);
@@ -471,6 +573,7 @@ try {
     endpoint_override_ms: endpointMs,
     text_checks: textChecks, scenario_checks: scenarioChecks,
     closure_checks: closureChecks,
+    barge_resume_checks: bargeResumeChecks,
     no_match_retry: noMatch, client, uploads, server,
   }, null, 2));
   await browser.close();

@@ -12,6 +12,11 @@ button circle { fill: #080808; }
 button.primary { color: #ddd; }
 .controls { flex-shrink: 0; width: min(904px, calc(100% - 96px)); margin: 0 auto; padding: 8px 0 max(18px, env(safe-area-inset-bottom)); }
 .call-notice { margin: 0 0 6px; color: #8f9297; font-size: 12px; line-height: 1.5; text-align: center; }
+.timing-panel { width: min(100%, 440px); margin: 0 auto 8px; padding: 8px 12px; background: #242629; border: 1px solid #484b50; border-radius: 8px; color: #f0f2f5; font-size: 13px; font-variant-numeric: tabular-nums; max-height: 34vh; overflow: auto; }
+.timing-panel summary { cursor: pointer; }
+.timing-panel p { margin: 8px 0 5px; color: #c5c8cc; }
+.timing-panel table { width: 100%; border-collapse: collapse; text-align: left; }
+.timing-panel th, .timing-panel td { padding: 4px 3px; border-top: 1px solid #484b50; }
 .toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 46px; }
 .button-group { display: flex; gap: 14px; align-items: center; justify-content: center; }
 .toolbar-end { display: flex; justify-content: flex-end; }

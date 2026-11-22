@@ -48,6 +48,38 @@ PHONE_CASES = {
 CONTEST_SILENCE_MS = 900
 
 
+def mount_timing_frontend(app):
+    from fastapi.responses import HTMLResponse
+    from starlette.routing import Mount, Route
+    from starlette.staticfiles import StaticFiles
+
+    web = ROOT / "new/web"
+    page = (web / "index.html").read_text(encoding="utf-8").replace("/static/", "/g2-ui/")
+    before, _, settings = page.partition('      <div class="task-shortcuts">')
+    old_settings, _, after = settings.partition("    </form>")
+    if not old_settings or not after:
+        raise ValueError("G2 task dialog markup changed")
+    controls = (ROOT / "web/rtc/timing-settings.html").read_text(encoding="utf-8")
+    page = before + controls + "    </form>" + after
+    page = (page.replace("<body>", '<body data-call-ui="g2-timing">')
+            .replace('<p id="callNotice"', '<p id="result" class="call-notice" role="status" hidden></p>\n'
+                      '    <input id="audioFile" class="call-notice" type="file" accept=".wav,audio/wav" '
+                      'aria-label="回放本地 WAV" hidden disabled>\n    <p id="callNotice"')
+            .replace('<script type="module" src="/g2-ui/call.js"></script>',
+                     '<script src="/rtc/config.js"></script>\n'
+                     '  <script type="module" src="/rtc/src/main.js"></script>'))
+
+    async def timing_page(_request):
+        return HTMLResponse(page)
+
+    # The existing root static mount handles every remaining web path.
+    index = next(i for i, route in enumerate(app.routes) if isinstance(route, Mount) and route.name == "web")
+    app.routes[index:index] = [
+        Route("/", timing_page, methods=["GET"]),
+        Mount("/g2-ui", StaticFiles(directory=web), name="g2-timing-assets"),
+    ]
+
+
 def build_app(args):
     policy = {"legacy": BASELINE, "repair": REPAIRED, "guided": GUIDED,
               "contextual": CONTEXTUAL, "fast": FAST, "resilient": RESILIENT}[args.dialogue_version]
@@ -73,7 +105,8 @@ def build_app(args):
               "app/agent/pop_competition.py", "app/agent/pop_repair.py", "app/agent/pop_guidance.py",
               "app/tools/pop_writeback.py",
               "app/main.py", "app/orchestrator.py", "web/rtc/src/session.js", "web/rtc/src/main.js",
-              "web/rtc/src/protocol.js", "web/rtc/src/ui.js", "web/rtc/src/vad-local.js", "web/rtc/index.html",
+              "web/rtc/src/protocol.js", "web/rtc/src/ui.js", "web/rtc/src/vad-local.js", "web/rtc/src/playback.js",
+              "web/rtc/index.html",
               "app/voice/factory.py", "app/voice/sherpa_asr.py", "app/voice/melo.py")
     artifacts = b"".join((ROOT / path).read_bytes() for path in inputs)
     artifacts += f"{policy.version}|{args.tts_speed}|{semantic_config and semantic_config.model}".encode()
@@ -109,6 +142,9 @@ def build_app(args):
         artifacts += b"".join((ROOT / path).read_bytes() for path in
                               ("app/voice/g2.py", "new/app/providers.py", "new/app/local_asr.py"))
         artifacts += f"|g2-voice:{g2_settings.voice}".encode()
+    speech_endpointing = bool(getattr(args, "speech_endpoint", False))
+    if speech_endpointing:
+        artifacts += (ROOT / "app/voice/speech_endpoint.py").read_bytes()
     digest = hashlib.sha256(artifacts).hexdigest()[:12]
     release = f"pop-contest-resilient-{digest}" if policy.resilient_dialogue else f"pop-contest-{digest}"
     runtime_path = args.output / "contest-runtime.json"
@@ -117,6 +153,8 @@ def build_app(args):
         "asr": "initializing" if g2_settings else "sherpa", "tts": "deepseek" if g2_settings else "melo",
         "tts_speed": None if g2_settings else args.tts_speed, "rtc_pcm": args.rtc_pcm,
         "voice": g2_settings.voice if g2_settings else None,
+        "speech_endpointing": speech_endpointing,
+        "resume_on_silence": speech_endpointing,
         "turn_intent": intent_mode,
         "phone_style": phone_style.version if phone_style else None,
         "language_model_enabled": bool(semantic_config or args.local_followups_port or args.local_answer_port or intent_config),
@@ -160,6 +198,8 @@ def build_app(args):
         }
     app.state.contest_catalog = {
         "default_case_id": args.doc_id, "silence_ms": CONTEST_SILENCE_MS,
+        "speech_endpointing": speech_endpointing,
+        "resume_on_silence": speech_endpointing,
         "cases": [{"id": case_id, "label": label} for case_id, label in labels.items()],
     }
 
@@ -174,6 +214,10 @@ def build_app(args):
             if g2_settings:
                 from app.voice.g2 import build_g2_voice
 
+                if speech_endpointing:
+                    from new.app.vad import model
+
+                    model()
                 cloud, runtime.asr, runtime.tts, asr_name = await build_g2_voice(
                     g2_settings, args.output / "g2-speech.sqlite3")
                 stack.push_async_callback(cloud.close)
@@ -250,6 +294,8 @@ def build_app(args):
                 store.close()
 
     app.router.lifespan_context = contest_lifespan
+    if getattr(args, "timing_frontend", False):
+        mount_timing_frontend(app)
     return app
 
 
@@ -284,7 +330,9 @@ if __name__ == "__main__":
                         help="enable optional WebRTC DataChannel (install requirements-rtc.txt first)")
     parser.add_argument("--fault-writeback", action="store_true")
     parser.add_argument("--closure-policy", type=Path, help="Pin a verified closure release JSON")
+    parser.add_argument("--timing-frontend", action="store_true", help="Use the G2 timing UI at the root URL")
     parser.add_argument("--g2-voice", action="store_true", help="Use the original G2 DeepSeek audio providers")
+    parser.add_argument("--speech-endpoint", action="store_true", help="Use G2 Silero for listening and turn end")
     parser.add_argument("--prime-followup-tts", action="store_true", help="Also prewarm three shared follow-up replies")
     parser.add_argument("--turn-intent", choices=("stance", "grounded", "plan", "plan-retry"), help="Enable the bounded POP intent candidate")
     parser.add_argument("--intent-budget-ms", type=int, default=1800)
@@ -294,10 +342,14 @@ if __name__ == "__main__":
         parser.error("Choose --g2-voice or provide both local model paths")
     if args.g2_voice and args.prepare_audio:
         parser.error("Use pre-generated 16 kHz fixtures with --g2-voice")
+    if args.speech_endpoint and (not args.g2_voice or not args.rtc_pcm):
+        parser.error("--speech-endpoint requires --g2-voice and --rtc-pcm")
     if args.prime_followup_tts and (not args.prime_tts or args.turn_intent not in {"grounded", "plan", "plan-retry"}):
         parser.error("--prime-followup-tts requires --prime-tts and a grounded candidate")
     if args.turn_intent and (not args.closure_policy or not 250 <= args.intent_budget_ms <= 2500):
         parser.error("--turn-intent requires a closure policy and a budget of 250–2500 ms")
+    if args.timing_frontend and not args.rtc_pcm:
+        parser.error("--timing-frontend requires --rtc-pcm")
     if args.local_followups_port is not None and (
         args.dialogue_version not in {"guided", "contextual"} or not 1 <= args.local_followups_port <= 65535
     ):

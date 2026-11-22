@@ -672,6 +672,8 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     tasks: set[asyncio.Task] = set()
     asr = None
     asr_task = None
+    server_silence_ms = None
+    barge_resume_task = None
     last_seq = None
     rtc = None
     inbox = None
@@ -688,10 +690,24 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
 
         ws_reader = asyncio.create_task(forward_ws())
 
-    def spawn(coro) -> None:
+    def spawn(coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+        return task
+
+    def cancel_barge_resume() -> bool:
+        nonlocal barge_resume_task
+        pending = barge_resume_task is not None and not barge_resume_task.done()
+        if pending:
+            barge_resume_task.cancel()
+        barge_resume_task = None
+        return pending
+
+    async def resume_after_silence(turn):
+        await asyncio.sleep(5)
+        if session.playing_turn is turn and not turn.cancel.cancelled():
+            await conn.send_json({"type": "barge_resume", "reply_id": turn.reply_id, "turn_id": turn.turn_id})
 
     async def consume_asr(stream):
         handled = False
@@ -713,6 +729,25 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                                       "final": False, **metadata})
         return handled
 
+    async def finish_asr(voiced):
+        nonlocal asr, asr_task
+        if asr is None:
+            return
+        if server_silence_ms is not None:
+            voiced = asr.endpoint.last_voiced_ms
+            if voiced is not None:
+                await conn.send_json({"type": "speech_endpoint", "last_voiced_mono_ms": voiced})
+        await asr.finish()
+        handled = await asr_task
+        asr, asr_task = None, None
+        if (not handled and getattr(orc.agent, "opens_outbound", False)
+                and isinstance(voiced, (int, float)) and voiced > 0):
+            await request_bus_emit(websocket, session_id, "AsrNoMatch", "voice.asr", {})
+            await conn.send_json({"type": "error", "error": {
+                "code": "ASR_NO_MATCH", "message": "No speech was recognized",
+                "user_message": "没有听清，请再说一遍", "retryable": True,
+            }})
+
     try:
         while True:
             event = await inbox.get() if inbox is not None else await websocket.receive()
@@ -732,12 +767,22 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                                                    {"reason": "audio_gap", "missing_frames": delta - 1})
                     last_seq = frame.seq
                     if asr is None:
-                        asr = await websocket.app.state.voice.start_asr(
-                            session_id, client_endpointing=session.case_id is not None,
-                        )
+                        voice = websocket.app.state.voice
+                        if server_silence_ms is not None:
+                            asr = await voice.asr.start(session_id, server_silence_ms=server_silence_ms)
+                        else:
+                            asr = await voice.start_asr(session_id, client_endpointing=session.case_id is not None)
                         asr_task = asyncio.create_task(consume_asr(asr))
                     await asr.push(frame)
                     session.audio_frames += 1
+                    if (server_silence_ms is not None and asr.endpoint.started
+                            and cancel_barge_resume()):
+                        await orc.on_client_event(session_id, {
+                            "type": "speech_started", "source": "silero",
+                            "client_mono_ms": asr.endpoint.last_voiced_ms,
+                        })
+                    if server_silence_ms is not None and (asr.endpoint.ready or asr.overflow):
+                        await finish_asr(None)
                 except Exception as exc:
                     error = exc if isinstance(exc, VoiceError) else VoiceError("ASR_FAILED", str(exc), True)
                     await conn.send_json({"type": "error", "error": error.to_dict()})
@@ -783,6 +828,10 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                     "transport": session.transport,
                 })
             elif kind == "call_ready":
+                catalog = getattr(websocket.app.state, "contest_catalog", {})
+                if (asr is None and catalog.get("speech_endpointing") and session.case_id
+                        and msg.get("speech_endpointing") is True):
+                    server_silence_ms = catalog["silence_ms"]
                 spawn(orc.open_outbound(session_id, conn))
             elif kind == "text":
                 text = msg.get("text")
@@ -790,21 +839,20 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
                     await conn.send_json({"type": "error", "error": {
                         "code": "INVALID_TEXT", "message": "text must be 1..2000 chars", "retryable": False}})
                 else:
+                    cancel_barge_resume()
                     spawn(orc.handle_text(session_id, text, conn))
             elif kind == "speech_ended":
-                if asr is not None:
-                    await asr.finish()
-                    handled = await asr_task
-                    asr, asr_task = None, None
-                    voiced = msg.get("last_voiced_mono_ms")
-                    if (not handled and getattr(orc.agent, "opens_outbound", False)
-                            and isinstance(voiced, (int, float)) and voiced > 0):
-                        await request_bus_emit(websocket, session_id, "AsrNoMatch", "voice.asr", {})
-                        await conn.send_json({"type": "error", "error": {
-                            "code": "ASR_NO_MATCH", "message": "No speech was recognized",
-                            "user_message": "没有听清，请再说一遍", "retryable": True,
-                        }})
-            elif kind in {"speech_started", "local_muted", "playback_first_frame",
+                if server_silence_ms is None or msg.get("end_of_input") is True:
+                    await finish_asr(msg.get("last_voiced_mono_ms"))
+            elif kind == "local_muted":
+                turn = session.playing_turn
+                if (server_silence_ms is not None and msg.get("resume_on_silence") is True
+                        and turn and not turn.cancel.cancelled()
+                        and msg.get("reply_id") == turn.reply_id and msg.get("turn_id") == turn.turn_id):
+                    cancel_barge_resume()
+                    barge_resume_task = spawn(resume_after_silence(turn))
+                await orc.on_client_event(session_id, msg)
+            elif kind in {"speech_started", "playback_first_frame",
                           "playback_ended", "ping"}:
                 await orc.on_client_event(session_id, msg)
             elif kind == "hangup":
