@@ -221,3 +221,20 @@ async def test_selecting_a_text_only_candidate_falls_back_to_tts(monkeypatch):
                    for e in events)
     finally:
         await session.close()
+
+
+async def test_forecast_promise_is_dropped_before_playout(monkeypatch):
+    monkeypatch.delenv(PREDICTION_AUDIO_LIMIT_ENV, raising=False)
+    bad = candidate(0)
+    bad.reply.text = "您放心，保证通过。"
+    good = candidate(1)
+    cloud = FakeCloud()
+    session, _ = build_session(ScriptedBrain([bad, good]), cloud)
+    try:
+        await session._predict(0, session.brain.snapshot(session.memory))
+        await session.settle_audio()
+        assert [item.id for item in session.candidates] == ["p1"]
+        assert session.events_named("prediction_compliance_drop")[0]["candidate_id"] == "p0"
+        assert list(session.prediction_audio) == [good.reply.text]
+    finally:
+        await session.close()

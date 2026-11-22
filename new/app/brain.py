@@ -20,6 +20,7 @@ from .ticket_forecast import generate_ticket_candidates
 from .voice_preview import first_clause as pending_speech_clause
 from .providers import Cloud, ProviderError
 from .context_aware_decision import ContextAwareDecisionEngine
+from .decision_model import DecisionModel
 
 
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
@@ -120,11 +121,12 @@ FORECAST_BRANCHES = (
 class Brain:
     def __init__(self, cloud: Cloud, opening_forecasts: OpeningForecastCache | None = None,
                  *, forecast_branches: int = 3, ticket_forecasts: bool | None = None,
-                 candidate_limit: int | None = None):
+                 candidate_limit: int | None = None, decision_model: DecisionModel | None = None):
         self.cloud = cloud
         self.opening_forecasts = opening_forecasts
         self.forecast_branches = max(1, min(int(forecast_branches), len(FORECAST_BRANCHES)))
         self.decision_engine = ContextAwareDecisionEngine()
+        self.decision_model = decision_model or DecisionModel.from_env(cloud)
         self.ticket_forecasts = ticket_forecasts
         self.candidate_limit = candidate_limit
         # Set before each emitted reply so Session can count the decision path
@@ -217,15 +219,19 @@ class Brain:
             last_user_input = memory.history[-1].get("text", "")
             assistant_last_text = self._last_completed_assistant(memory)
 
+            eligible = [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))]
             decision, selected_candidate = self.decision_engine.should_reuse(
-                last_user_input, [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))], assistant_last_text, memory.card
-            )
-            
-            if decision == "reuse":
+                last_user_input, eligible, assistant_last_text, memory.card)
+            path = "rule"
+            if decision == "llm" and self.decision_model and eligible:
+                selected_candidate = await self.decision_model.decide(last_user_input, assistant_last_text, eligible)
+                path = "decision_model"
+
+            if selected_candidate is not None:
                 # The cached audio is already prepared. Return it before asking
                 # for the state update so playback and the next forecast can
                 # start while the update request is still in flight.
-                self.last_decision = {"kind": "reuse", "path": "rule",
+                self.last_decision = {"kind": "reuse", "path": path,
                                       "candidate_id": selected_candidate.id}
                 yield "reuse", selected_candidate.reply
                 yield "update_async", selected_candidate

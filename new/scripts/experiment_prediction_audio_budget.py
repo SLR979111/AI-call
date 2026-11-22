@@ -390,7 +390,7 @@ def bytes_label(value: int) -> str:
 
 
 def status_letter(status: str) -> str:
-    return {"prefetched": "P", "limit_skipped": "s", "not_published": "-"}.get(status, "?")
+    return {"prefetched": "P", "preparing": "p", "warming": "p", "limit_skipped": "s", "not_published": "-"}.get(status, "?")
 
 
 def path_letter(answer: dict) -> str:
@@ -471,8 +471,7 @@ def build_markdown(arms: list[dict]) -> str:
         "",
         "状态字母：`P` = 已预合成音频；`s` = 超出预算、仅文本；`-` = 未发布。",
         "时间列取自 all 档的 fake Brain/Cloud 时钟与 `prediction_ready.ready_ms`；"
-        "all 档没有音频就不发布，所以“默认档发布”等于音频完成。"
-        "仅文本档的发布更早，体现在下面脚本化短答表的早期列和 JSON 的 `published_ms`。",
+        "现在所有档位都先发布候选文字，音频在后台准备；默认档的“发布”不再等于音频完成。",
         "",
         "## 脚本化短答可用性",
         "",
@@ -556,9 +555,8 @@ def build_markdown(arms: list[dict]) -> str:
         f"- 音频字节从默认档 all 的 {bytes_label(all_arm['audio_bytes_total'])} {n1_text}"
         "预算越小，节省的预合成字节和 TTS 调用越多，代价是更多候选命中后要临时合成。",
         f"- 早期发布覆盖最高的是 {early_best['label']}（{early_best['coverage']['early_published']}/10）。"
-        "默认档 all 在早期为 0：语音模式下所有候选都要等音频完成才发布；"
-        "N>=1 时预算外候选会先以文本出现，但最早的那条候选仍在等音频。"
-        "N=0 是例外：全部候选先出文本，所以最早发布覆盖最高。",
+        "所有档位的文本都先发布，因此早期文本覆盖相同；差异在音频是否已就绪。"
+        "音频预算只影响命中时是否有预合成音频，不影响文字候选的可见时间。",
         f"- 仅文本候选的回退检查：{len(fallback_ok)}/{len(fallback_arms)} 个适用档位通过，"
         "均只调用 1 次普通 TTS，`audio_source=tts`、`prediction_audio_hit=false`、回复正常完成。",
         "",

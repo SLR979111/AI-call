@@ -79,6 +79,19 @@ class Unit:
                           delivery="partial" if self.played else "unplayed")
 
 
+PREDICTION_FORBIDDEN = (
+    "保证通过", "包过", "百分百", "一定通过", "必过",
+    "今天一定", "明天一定", "加急一定", "加急保证",
+    "已帮您提交", "已转人工", "已为您登记",
+    "京东商家资质审核客服", "京东官方审核人员",
+)
+
+
+def prediction_text_allowed(text: str) -> bool:
+    """Fail closed for promises or an official identity in forecast speech."""
+    return not any(term in text for term in PREDICTION_FORBIDDEN)
+
+
 class Session:
     def __init__(self, card: TaskCard, cloud: Cloud, brain: Brain,
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
@@ -837,6 +850,8 @@ class Session:
                 
                 self.reply_completed = False
                 self.candidates = []
+                self.prediction_audio.clear()
+                self.prediction_epoch = -1
                 if self.forecast and not self.forecast.done():
                     self.forecast.cancel()
                 self.phase = "listening"
@@ -960,6 +975,9 @@ class Session:
             async def prepare(item, *, audio_allowed: bool, index: int):
                 text_ready_ms = round((time.perf_counter() - started) * 1000)
                 text = item.reply.text
+                if not prediction_text_allowed(text):
+                    self.log("prediction_compliance_drop", candidate_id=item.id)
+                    return
                 audio_status = "not_requested"
                 if self.voice:
                     if not audio_allowed:

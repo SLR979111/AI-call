@@ -554,3 +554,14 @@ async def test_exclude_switch_is_part_of_the_opening_cache_arm(monkeypatch):
     assert cloud.calls > calls
     assert "router" not in intents(first)
     assert "router" in intents(second)
+
+
+def test_generated_replies_pass_the_prediction_compliance_filter():
+    from app.session import prediction_text_allowed
+
+    for task in (card("jd-qualification.json"), official_card(),
+                 card("home-broadband-support.json"),
+                 card("network-consultation.json"), cargo_card(),
+                 invoice_card(), DEFAULT_CARD):
+        for item in generate_ticket_candidates(task):
+            assert prediction_text_allowed(item.reply.text), item.reply.text
