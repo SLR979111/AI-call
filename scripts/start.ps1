@@ -28,8 +28,10 @@ Invoke-WithServerLock $projectRoot {
     if ($LASTEXITCODE -ne 0) { Write-Warning 'First-pass ASR model unavailable. Continuing with cloud ASR.' }
     $env:PYTHONUTF8 = '1'
     $env:PYTHONIOENCODING = 'utf-8'
-    $arguments = @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port',"$Port")
-    $server = Start-Process -FilePath $pythonPath -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimePath 'server.stdout.log') -RedirectStandardError (Join-Path $runtimePath 'server.stderr.log') -PassThru
+    $serverId = & $pythonPath (Join-Path $PSScriptRoot 'launch_server.py') $Port
+    if ($LASTEXITCODE -ne 0) { throw 'Could not launch the server. See runtime\server.stderr.log.' }
+    $server = Get-Process -Id ([int]$serverId) -ErrorAction SilentlyContinue
+    if (-not $server) { throw 'Server exited. See runtime\server.stderr.log.' }
     $record = @{process_id=$server.Id; port=$Port; executable=$pythonPath}
     $pendingPath = Join-Path $runtimePath "server-$($server.Id).tmp"
     try {
