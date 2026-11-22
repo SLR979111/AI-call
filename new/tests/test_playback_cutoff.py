@@ -105,5 +105,69 @@ def test_new_question_blocks_proactive_goodbye():
     memory = Memory(DEFAULT_CARD, status="complete")
     assert not memory.ready_to_say_goodbye("明白了，我还想问一件事", Say(text="您说。"))
     assert not memory.ready_to_say_goodbye("明白了", Say(text="您还有什么疑问？"))
+    assert memory.ready_to_say_goodbye("我明白该怎么做了。", Say(text="好的。"))
+    assert not memory.ready_to_say_goodbye("怎么补交", Say(text="好，再见。"))
     memory.questions = ["审核多久"]
     assert not memory.ready_to_say_goodbye("明白了", Say(text="好的。"))
+
+
+def test_explicit_goodbye_after_confirmation_leaves_room_for_real_followup_questions():
+    from app.models import wants_to_end
+    assert wants_to_end("明白了，先这样，再见。")
+    assert wants_to_end("我马上进会了，先挂了，谢谢。")
+    assert not wants_to_end("你先挂了电话，我怎么联系你？")
+    assert not wants_to_end("明白了，先这样，再见之前再问一句，周六几点关门？")
+
+
+@pytest.mark.parametrize(("user", "reply"), [
+    ("好再见", "好的，再见！"),
+    ("好。", "好，那就先这样，再见。"),
+])
+@pytest.mark.parametrize("interrupt", [False, True])
+async def test_spoken_goodbye_closes_after_audio_even_with_active_update(user, reply, interrupt):
+    class SpokenGoodbye(TestBrain):
+        async def respond(self, memory, candidates):
+            yield "say", Say(text=reply)
+            yield "update", Update()
+
+    events = []
+    async def send(event):
+        events.append(event)
+    session = Session(DEFAULT_CARD, Cloud(), SpokenGoodbye(), send, voice=True, predictions=False)
+    try:
+        await session.user_text(user)
+        await until(lambda: any(isinstance(e, dict) and e["type"] == "utterance_end" for e in events))
+        epoch = session.epoch
+        response = session.response
+        assert not session.ended
+        if interrupt:
+            await session.interrupt("manual", expected_epoch=epoch)
+        await session.playback_progress(epoch, 1, 1920, done=True)
+        if not interrupt:
+            await response
+        ends = [e for e in events if isinstance(e, dict) and e["type"] == "hangup"]
+        assert [e["reason"] for e in ends] == ([] if interrupt else ["paused"])
+        assert session.ended == (not interrupt)
+        assert not session.memory.delivered
+    finally:
+        await session.close()
+
+
+def test_final_acknowledgement_only_closes_after_complete_instructions():
+    user = "好的。"
+    last = {"role": "assistant", "text": "结果请等页面通知。", "delivery": "complete"}
+    memory = Memory(DEFAULT_CARD, history=[last, {"role": "user", "text": user}])
+    assert not memory.closing_reason(user)
+    memory.delivered = {p.id for p in DEFAULT_CARD.checkpoints}
+    for acknowledgement in (user, "行。", "嗯，好的。", "好再见"):
+        assert memory.closing_reason(acknowledgement)
+    for other in ("好？", "好的，然后呢", "好，我还要问", "好，先别挂"):
+        assert not memory.closing_reason(other)
+    memory.last_question = "您已经上传了吗？"
+    assert not memory.closing_reason(user)
+    memory.last_question = ""
+    memory.questions = ["怎么补交"]
+    assert not memory.closing_reason(user)
+    memory.questions.clear()
+    last["delivery"] = "partial"
+    assert not memory.closing_reason(user)

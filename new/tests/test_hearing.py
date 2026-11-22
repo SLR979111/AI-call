@@ -236,3 +236,31 @@ async def test_playback_residue_does_not_raise_the_noise_floor():
     assert hearing.floor == before
     assert not cloud.requests
     await hearing.close()
+
+
+async def test_final_frames_start_local_voice_preview_when_partial_text_is_unchanged():
+    cloud = ASR()
+    cloud.is_local = True
+    cloud.release.set()
+    drafts, partials = [], []
+
+    async def noop(*args):
+        pass
+
+    async def on_partial(text):
+        partials.append(text)
+
+    hearing = Hearing(cloud, on_start=noop, on_text=noop, on_partial=on_partial, on_error=noop,
+                      on_draft=lambda text, origin: drafts.append((text, origin)))
+    try:
+        hearing.active = True
+        hearing.voiced_end = 1280
+        hearing.buffer = bytearray(1280)
+        hearing.partial_at = 640
+        hearing.partial_text = "我想说明两个事情"
+        hearing.request_decode()
+        await hearing.decode
+        assert drafts == [("我想说明两个事情", "local")]
+        assert partials == []
+    finally:
+        await hearing.close()

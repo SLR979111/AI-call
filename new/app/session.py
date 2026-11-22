@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
 from .brain import Brain
-from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye, farewell_only
+from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
 from .silent_logger import silent_log
 
@@ -114,6 +115,8 @@ class Session:
         self.bridge_text = "嗯。"
         self.bridge_audio: bytes | None = None
         self.bridge_delay = 0.35
+        self.preview = None
+        self.leads = []
         self.prediction_epoch = -1
         self.reply_completed = False
         self.starting = False
@@ -215,10 +218,58 @@ class Session:
             self._begin_turn("opening")
             if self.voice:
                 self.spawn(self._warm_bridge())
+                self.spawn(self.cloud.prefetch("好，再见。"))
             self.response = self.spawn(self._run(epoch, opening=True))
 
     def is_current(self, epoch: int):
         return not self.closed and not self.ended and epoch == self.epoch
+
+    def prepare_lead(self, partial):
+        key = transcript_key(partial)
+        if self.closed or self.ended or not self.predictions or len(self.leads) >= 2:
+            return True
+        if len(key) >= 5 and (not self.leads or len(key) >= len(self.leads[-1].prefix) + 5):
+            lead = PredictedLead(partial, len(self.leads))
+            self.leads.append(lead)
+            snapshot = copy.deepcopy(self.brain.snapshot(self.memory))
+            lead.task = self.spawn(lead.prepare(self.cloud, snapshot, partial))
+        return len(self.leads) >= 2
+
+    def voice_candidates(self, text):
+        candidates = list(self.candidates) if self.reply_completed and self.prediction_epoch == self.epoch else []
+        candidates.extend(lead.candidate for lead in self.leads if lead.matches(text))
+        return candidates
+
+    def discard_voice(self):
+        self.take_preview()
+        for lead in self.leads:
+            lead.task.cancel()
+        self.leads = []
+
+    def prepare_voice(self, text, origin="local"):
+        if not text or self.closed or self.ended or not self.voice:
+            return
+        state = self.brain.snapshot(self.memory)
+        if self.preview and same_transcript(self.preview.text, text) and self.preview.state == state:
+            return
+        self.take_preview()
+        memory = copy.deepcopy(self.memory)
+        memory.history.append({"role": "user", "text": text})
+        if memory.closing_reason(text):
+            return
+        candidates = self.voice_candidates(text)
+        preview = VoicePreview(text, copy.deepcopy(state), origin=origin)
+        preview.task = self.spawn(preview.prepare(self.brain, self.cloud, memory, candidates, list(self.leads)))
+        self.preview = preview
+
+    def take_preview(self, text=""):
+        preview, self.preview = self.preview, None
+        if preview:
+            if (text and same_transcript(preview.text, text)
+                    and preview.state == self.brain.snapshot(self.memory)):
+                return preview
+            preview.task.cancel()
+        return None
 
     def _clear_staged(self):
         self.staged_candidates = []
@@ -278,9 +329,10 @@ class Session:
         if not text or self.closed or self.ended:
             return
         text = text[:2000]
+        preview = self.take_preview(text if source == "voice" else "")
 
         usable = (self.reply_completed and self.prediction_epoch == self.epoch)
-        candidates = list(self.candidates) if usable else []
+        candidates = self.voice_candidates(text) if source == "voice" else (list(self.candidates) if usable else [])
         audio = dict(self.prediction_audio) if usable else {}
         staged = None
         if usable:
@@ -290,6 +342,8 @@ class Session:
             # may still answer this next user turn.
             staged = self._take_staged()
         self.prediction_audio.clear()
+        leads = [lead for lead in self.leads if source == "voice" and lead.matches(text)]
+        self.leads = [lead for lead in self.leads if lead not in leads]
         await self.interrupt("new_input")
         if self.forecast and not self.forecast.done():
             self.forecast.cancel()
@@ -310,24 +364,28 @@ class Session:
                                      if c.reply.text in staged_audio]
             confirmed = self._confirmed_staged(staged_candidates)
             if confirmed is not None:
+                if preview:
+                    preview.task.cancel()
+                    preview = None
                 candidates = [confirmed]
                 audio = ({confirmed.reply.text: staged_audio[confirmed.reply.text]}
                          if self.voice else {})
                 staged_reuse = True
                 self.log("predictions_reused_after_interrupt", candidate_id=confirmed.id)
             else:
-                candidates, audio = [], {}
                 self.log("predictions_dropped_after_interrupt",
                          candidates=len(staged_candidates))
         self._begin_turn(source)
         self.turn_metrics.update(last_voice_client_ms=end_ms,
                                  candidates_available=len(candidates),
-                                 staged_reuse=staged_reuse)
+                                 staged_reuse=staged_reuse,
+                                 draft_source=preview.origin if preview else None,
+                                 draft_lead_ms=round((time.monotonic() - preview.started) * 1000) if preview else 0)
         self.log("user", text=text, source=source, staged_reuse=staged_reuse)
         await self.send({"type": "transcript", "text": text, "final": True, "epoch": self.epoch})
         if self.is_current(epoch):
             self.starting = False
-            self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio))
+            self.response = self.spawn(self._run(epoch, user=text, candidates=candidates, audio=audio, preview=preview, leads=leads))
 
     async def interrupt(self, reason: str, *, expected_epoch: int | None = None,
                         evidence: dict | None = None):
@@ -335,6 +393,9 @@ class Session:
             return
         if expected_epoch is not None and expected_epoch != self.epoch:
             return
+        self.discard_voice()
+        if reason == "speech" and getattr(self.cloud, "is_local", False) and self.forecast:
+            self.forecast.cancel()  # Reserve the local GPU for this caller's turn.
         if (not self.response or self.response.done()) and not self.starting:
             return
         
@@ -404,6 +465,7 @@ class Session:
         unit.delivered = True
         unit.entry["delivery"] = "complete"
         unit.entry.pop("played_ms", None)
+        unit.say.covers = self.memory.delivered_covers(unit.say)
         self.memory.delivered.update(unit.say.covers)
         self.memory.last_question = unit.say.question
         unit.finished.set()
@@ -433,7 +495,7 @@ class Session:
                          "input_source": self.turn_metrics.get("input_source", "opening")})
 
     async def _synthesize(self, unit: Unit, pcm: bytes | None = None, *,
-                          turn=None):
+                          preview=None, turn=None):
         turn = turn if turn is not None else self.turn
         started = time.perf_counter()
         cached = pcm if pcm is not None else getattr(self.cloud, "cached", lambda _: None)(unit.say.text)
@@ -451,7 +513,8 @@ class Session:
                 for offset in range(0, len(cached), 1920):
                     yield cached[offset:offset + 1920]
             else:
-                async for chunk in self.cloud.speech(unit.say.text):
+                source = preview.audio(lambda: self.cloud.speech(unit.say.text)) if preview else self.cloud.speech(unit.say.text)
+                async for chunk in source:
                     yield chunk
 
         first = True
@@ -535,9 +598,10 @@ class Session:
 
     async def _run(self, epoch: int, *, opening: bool = False, user: str = "",
                    candidates: list[Candidate] | None = None,
-                   audio: dict[str, bytes] | None = None):
+                   audio: dict[str, bytes] | None = None, preview=None, leads=()):
         queue: asyncio.Queue = asyncio.Queue(maxsize=5)
-        children: list[asyncio.Task] = []
+        children: list[asyncio.Task] = [preview.task] if preview else []
+        children.extend(lead.task for lead in leads)
         output = self.spawn(self._output(epoch, queue))
         children.append(output)
         before = set(self.memory.delivered)
@@ -560,7 +624,10 @@ class Session:
                 self.turn_metrics["bridge_used"] = True
                 await say(Say(text=self.bridge_text), bridge_pcm=self.bridge_audio)
 
+        preview_audio_claimed = False
+
         async def say(line: Say, *, bridge_pcm: bytes | None = None, candidate_id: str | None = None):
+            nonlocal preview_audio_claimed
             if not self.is_current(epoch):
                 raise asyncio.CancelledError()
             entry = {"role": "assistant", "text": line.text, "delivery": "unplayed"}
@@ -583,7 +650,10 @@ class Session:
                             used_bytes=len(pcm))
                 self.log("audio_source", unit=unit.number, source=source,
                          audio_bytes=len(pcm) if pcm else 0)
-                children.append(self.spawn(self._synthesize(unit, pcm, turn=turn)))
+                prepared = preview if preview and not preview_audio_claimed and preview.first_text == line.text else None
+                if prepared:
+                    preview_audio_claimed = True
+                children.append(self.spawn(self._synthesize(unit, pcm, preview=prepared, turn=turn)))
             await self.send({"type": "utterance", "epoch": epoch, "unit": unit.number,
                              "text": line.text, "rate": 24000, "candidate_id": candidate_id,
                              "filler": bridge_pcm is not None})
@@ -609,12 +679,18 @@ class Session:
                     self.performance_monitor.mark_llm_start(turn)
                     llm_started = True
                 try:
-                    async for kind, value in self.brain.respond(self.memory, candidates or []):
+                    def respond():
+                        nonlocal preview
+                        preview = None
+                        return self.brain.respond(self.memory, candidates or [])
+
+                    events = preview.events(respond) if preview else respond()
+                    async for kind, value in events:
                         if not self.is_current(epoch):
                             return
                         if output.done() and output.exception():
                             raise output.exception()
-                        decision = getattr(self.brain, "last_decision", None) or {}
+                        decision = getattr(preview or self.brain, "last_decision", None) or {}
                         if not llm_first and decision:
                             if decision.get("path") == "rule":
                                 # Lexical reuse never called the model; clear
@@ -684,6 +760,8 @@ class Session:
                                     self.brain.update_for_reuse(self.memory, value))
                                 self.pending_update = pending_update
                         else:
+                            if preview and preview.text != user:
+                                value = restore_quotes(value, preview.text, user)
                             self.memory.apply(value, user, epoch, before)
                             await self.state()
                 finally:
@@ -695,10 +773,6 @@ class Session:
                 last_reply = current_units[-1].say
                 hangup = (self.memory.ready_to_say_goodbye(user, last_reply)
                           or self.memory.status in {"paused", "declined"})
-                if ends_with_goodbye(user) and not farewell_only(user) and ends_with_goodbye(last_reply.text):
-                    if self.memory.status == "active":
-                        self.memory.status = "paused"
-                    hangup = True
                 if hangup and not ends_with_goodbye(last_reply.text):
                     await say(Say(text="再见。"))
             await queue.put(None)
@@ -707,7 +781,7 @@ class Session:
             # gets a private copy and merges that update before snapshotting;
             # playback is never blocked. Eligibility still requires complete
             # playback (see user_text).
-            if self.predictions and self.memory.status == "active":
+            if self.predictions and not hangup and self.memory.status == "active":
                 base = copy.deepcopy(self.memory)
                 self.forecast = self.spawn(self._forecast(
                     epoch, opening, pending_update, base, user, before,
@@ -741,8 +815,13 @@ class Session:
                         if self.pending_update is pending_update:
                             self.pending_update = None
                 if hangup and self.reply_completed and self.is_current(epoch):
+                    if self.memory.status == "active":
+                        self.memory.status = "paused"
                     self.ended = True
                     self.phase = "ended"
+                    self.candidates = []
+                    self.prediction_epoch = -1
+                    await self.state()
                     await self.send({"type": "hangup", "epoch": epoch, "reason": self.memory.status})
                     if self.on_hangup:
                         await self.on_hangup()

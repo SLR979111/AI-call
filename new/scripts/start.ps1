@@ -3,13 +3,6 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 $pythonPath = Join-Path $projectRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $pythonPath)) {
-    & uv sync --group dev
-    if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
-}
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.env'))) {
-    throw 'Create .env from .env.example and supply your API credential first.'
-}
 $runtimePath = Join-Path $projectRoot 'runtime'
 New-Item -ItemType Directory -Force -Path $runtimePath | Out-Null
 $serverUrl = "http://127.0.0.1:$Port"
@@ -24,6 +17,10 @@ try {
 } catch {
     if ($_.Exception.Message -like '*belongs to another application*') { throw }
 }
+& uv sync --locked --group dev
+if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
+& $pythonPath -m app.local_asr
+if ($LASTEXITCODE -ne 0) { Write-Warning 'First-pass ASR model unavailable. Continuing with cloud ASR.' }
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 $serverProcess = Start-Process -FilePath $pythonPath -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port',"$Port") -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimePath 'server.stdout.log') -RedirectStandardError (Join-Path $runtimePath 'server.stderr.log') -PassThru

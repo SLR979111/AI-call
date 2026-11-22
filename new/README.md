@@ -4,7 +4,7 @@
 
 一个从零编写的、有目标的语音对话最小实现。给它任务目标和已知信息，它负责听取、解释、追问、确认和结束。可随时打断，也可用文字试聊。
 
-当前默认演示是“JD 商家资质客服（模拟）”：授权链缺一段、授权公司名不一致、商标状态截图模糊；可改成品牌方直接授权，也能处理已补交、催审核、抱怨、要求人工和忙碌暂停。任务卡位于 `tasks/jd-qualification.json`，公司和问题组合是虚构案例，不代表现行京东政策。之前的网络方案任务保留在 `tasks/network-consultation.json`，简单资质任务仍用于核心回归；已保存的自定义任务会保留在浏览器中。
+默认工单围绕京东商家的品牌资料补正展开。商家可以追问缺哪段授权、公司名称为何对不上、商标截图要显示哪些信息，也可以在通话中说明已补交，改问审核进度。默认工单位于 `tasks/jd-qualification.json`，编辑过的自定义任务保存在当前浏览器。
 
 现场回复和预测回复都使用相同的口语要求：直接答问题、说明原因或问缺少的信息，不播报“先记录/下一步判断”等工作过程。模型接口只读取正文，不读取独立思考字段；明显的思考标签、分析标题和内部旁白会在进入真实历史、页面及语音合成之前被拒绝。这个检查用于拦截明确标记，不是对任意措辞的语义保证。
 
@@ -14,9 +14,11 @@
 
 双击 `start.cmd`，浏览器打开 <http://127.0.0.1:8088>。停止服务用 `stop.cmd`。
 
-1. 打开底部的“任务设置”，可编辑目标、已知信息、要点和开场白，或打开六个电话例子。旧版界面仍可通过 `/static/classic.html` 访问。
+1. 打开底部的“任务设置”，在“互动工单”中选择场景，点击“保存任务”应用选择。可编辑工单目标、已知信息、要点和开场白。旧版界面仍可通过 `/static/classic.html` 访问。
 2. 点击“开始通话”使用麦克风，或点击“文字试聊”。语音模式也可以输入文字。扬声器播放时，收音端使用实际播放的音频做消回声。
 3. 说话或点“打断”会停止当前回复。下一轮按浏览器已播放的采样数估算句中的文字位置，完整播放的要点才会打勾。要点说完、对方确认理解且没有新问题时，客服可以先道别，等最后一句播完再挂断。
+
+工单库内置 11 张京东商家资质工单，覆盖品牌资料补正、补交进度、授权主体、主体资质到期、商标截图、企业更名、质检报告型号、许可附页、授权商品范围、商标续展和双品牌附件错放。每张工单有自己的记录、处理条件和完成要点。选择后可以直接用语音或文字追问、改口、确认或结束。通过 `/?pack=jd-brand-mixup` 可以直接接听双品牌工单，回放库中的六个例子也各有“进入互动通话”入口。工单数据为虚构案例；对话不会改动京东后台。
 
 页面上的接话耗时从用户最后一帧语音算到正文开始播放。要复测同一段输入，在已启动服务时运行 `node scripts/check-first-response.mjs <24kHz单声道PCM16文件> current`。每轮分别报告最终识别、正文文字到达和正文音频开始的时间。可用 `CALL_URL` 指定服务。运行 `node scripts/check-interrupted-call.mjs` 可在冻结文字动画时验证真实播放、打断续谈和主动道别。
 
@@ -69,9 +71,7 @@ Copy-Item .env.example .env
 | `web/` | 无构建步骤的页面、采集和播放器 |
 | `web/acoustics.js`、`web/vendor/` | 播放参考比对、AEC3、降噪及其许可证 |
 
-没有业务查询、登记、工单、转接、操作系统工具、RAG、数据库、长期记忆或多 Agent 编排。
-
-场景事实由任务卡提供。预测、LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。
+互动工单的场景事实由任务卡提供，实际业务查询、登记、派单和转接仍需在外部系统办理。预测、LLM、ASR 和 TTS 缓存保存在 `runtime/cache.sqlite3`（可用 `CACHE_PATH` 改位置），日志写入 `runtime/sessions/`。
 
 如需在缓存丢失后重建，可设置 `CACHE_AUDIT_PATH=./runtime/cache-audit.jsonl`，在 provider 边界记录完整模型请求/回复和原始 PCM；再用 `scripts/backfill_cache.py` 回灌。审计日志含对话内容，不要提交到仓库。详见 `docs/31-cache-audit-backfill.md`。
 
@@ -105,6 +105,31 @@ npm run test:browser
 运行 `node scripts/check-forecast-hits.mjs current` 可测六种固定输入。加 `--short-openings` 可测另外四种短开场。脚本在开场播完后立即提交文字，记录当时已就绪的候选数、真实复用结果，以及从发送到收到正文首播回执的时间。使用合成静音麦克风、真实模型及语音播放。
 
 浏览器检查使用本机 Edge 和 Playwright，合成测试语音经过真实 AudioWorklet、PCM 上行、ASR、对话模型和 TTS。检查桌面/移动布局、暂停、实际播放中的打断、续说及预测/直接回应路径。截图与可读事件保存在 `runtime/validation/`。实际测试结果见 [验证记录](VALIDATION.md)。
+
+### 切换云端或纯本地通话
+
+打开页面底部的「任务设置」，在「通话模式」选择云端或纯本地。选择立即保存到当前浏览器，从下一通电话生效。云端继续使用配置的音色。纯本地使用 Paraformer 识别语音、本机 Ollama 的 Qwen2.5 7B Instruct 生成回复、MeloTTS 的普通话女声朗读。两种模式各自保存预测与音频缓存。
+
+首次使用纯本地或从旧版华妍音色升级时，先启动已安装的 Ollama，在项目目录运行下面的安装脚本，然后重启通话服务。安装时联网下载模型，本地通话只连接本机的 11434 端口，可以留空云端 API 密钥。缺少本地模型时，页面会显示安装提示。[Ollama](https://ollama.com/download) · [对话模型](https://ollama.com/library/qwen2.5:7b-instruct) · [MeloTTS 中文音色](https://huggingface.co/myshell-ai/MeloTTS-Chinese)
+
+```powershell
+.\scripts\setup-local.ps1
+```
+
+### 正文首字延迟
+
+Windows 启动脚本会一次性下载校验过的 Paraformer 小模型，供本机在短暂停顿时提前准备回复。手动启动 Uvicorn 时可先运行 `uv run python -m app.local_asr`。下载失败时继续使用云识别。最终转写和对话状态均匹配后，才允许发送准备好的回复与音频。云识别在停声约 1.05 秒后仍未返回时，可采用同一段完整录音的本机识别结果。已经选定的云端正文若再等 650 毫秒仍无音频，可向同一音色发起一次补充合成，只播放先到的一路。[模型说明](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/paraformer-models.html)
+
+在运行中的服务上执行以下命令。首次生成八条合成麦克风录音，之后可用同一批文件比较版本。每条录音各开一通电话，从输入末尾的有声窗口量到浏览器开始播放正文的首个有声窗口。接话音与音频开头的静音均排除。脚本保存逐条记录，P50 达到 2 秒或任一轮超过 3 秒时以失败退出。
+
+```powershell
+uv run python scripts/make-latency-fixtures.py
+node scripts/check-first-response.mjs runtime/validation/latency-inputs current
+uv run python scripts/make-latency-fixtures.py --dialogues
+node scripts/check-first-response.mjs runtime/validation/latency-dialogues followups
+$env:CALL_MODE = 'local'
+node scripts/check-first-response.mjs runtime/validation/latency-dialogues offline
+```
 
 ## 当前边界
 

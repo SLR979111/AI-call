@@ -5,18 +5,53 @@ const $ = id => document.getElementById(id);
 const view = new LiveConversation($('transcript'), $('viewport'));
 let task, defaultTask, socket, context, player, mic, voice = false, connected = false, epoch = 0;
 let timer, turns = 0, hits = 0, records = [], uiUnits = new Map(), inputInFlight = false, replyActive = false;
-let composing = false, editorTask;
+let composing = false, editorTask, savedCustom;
+const packs = new Map();
+let mode = localStorage.getItem('g2-call-mode') === 'local' ? 'local' : 'cloud';
+let cloudConfigured = true;
+$('callMode').value = mode;
+$('callMode').onchange = () => {
+  if (connected || inputInFlight) { $('callMode').value = mode; return; }
+  mode = $('callMode').value;
+  localStorage.setItem('g2-call-mode', mode);
+  if (task) warmTask(task);
+  clearError();
+};
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
 function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
 function warmTask(card) {
+  if (mode !== 'cloud') return;
   fetch('/api/warm', {method: 'POST', headers: {'content-type': 'application/json'},
     body: JSON.stringify({task: card})}).catch(() => {});
 }
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 function notice(text = '') { $('callNotice').textContent = text; $('callNotice').hidden = !text; }
+function sameTask(a, b) {
+  return a && b && ['title', 'goal', 'facts', 'opening'].every(key => a[key] === b[key])
+    && JSON.stringify(a.checkpoints) === JSON.stringify(b.checkpoints);
+}
+function packId(card) {
+  for (const [id, pack] of packs) if (sameTask(card, pack)) return id;
+  return '';
+}
+function rememberTask(card) {
+  task = card;
+  const id = packId(card);
+  localStorage.setItem('g2-task', JSON.stringify(card));
+  if (id) {
+    localStorage.setItem('g2-task-pack', JSON.stringify({id, card}));
+  } else {
+    localStorage.removeItem('g2-task-pack');
+    savedCustom = card;
+    localStorage.setItem('g2-custom-task', JSON.stringify(card));
+  }
+}
 function fillTaskEditor(card) {
+  $('taskPack').value = packId(card);
+  $('taskPack').options[0].disabled = !savedCustom;
+  $('editPoints').setCustomValidity('');
   editorTask = card;
   $('editTitle').value = card.title; $('editGoal').value = card.goal; $('editFacts').value = card.facts;
   $('editPoints').value = card.checkpoints.map(p => p.description).join('\n'); $('editOpening').value = card.opening;
@@ -56,6 +91,9 @@ function showText(value) {
 }
 async function start(useVoice) {
   if (connected || inputInFlight || !task) return;
+  if (mode === 'cloud' && !cloudConfigured) {
+    showError('云端模式需要 API 凭据。可在任务设置中切换到纯本地。'); return;
+  }
   inputInFlight = true; clearError();
   notice(useVoice ? '正在连接，首次使用请允许麦克风' : '正在连接');
   $('startVoice').disabled = $('startText').disabled = true;
@@ -87,7 +125,7 @@ async function start(useVoice) {
     $('startControls').hidden = true; $('callControls').hidden = false;
     $('mute').hidden = !voice;
     $('mute').setAttribute('aria-label', '暂停麦克风'); $('mute').title = '暂停麦克风'; $('mute').setAttribute('aria-pressed', 'false');
-    $('prediction').disabled = true; $('saveTask').disabled = true; $('restoreTask').disabled = true;
+    $('callMode').disabled = true; $('prediction').disabled = true; $('saveTask').disabled = true; $('restoreTask').disabled = $('taskPack').disabled = true;
     for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = true;
     $('connection').textContent = '已连接';
     const startedAt = performance.now();
@@ -95,8 +133,8 @@ async function start(useVoice) {
       const seconds = Math.floor((performance.now() - startedAt) / 1000);
       $('duration').textContent = Math.floor(seconds / 60).toString().padStart(2, '0') + ':' + (seconds % 60).toString().padStart(2, '0');
     }, 1000);
-    send({type: 'start', task, voice, audio_protocol: 2, predictions: $('prediction').checked});
-    notice();
+    send({type: 'start', task, voice, mode, audio_protocol: 2, predictions: $('prediction').checked});
+    notice(mode === 'local' ? '正在准备本地模型…' : '');
     showText(!voice);
   } catch (error) {
     await cleanup();
@@ -110,6 +148,7 @@ function onMessage({data}) {
   if (data instanceof ArrayBuffer) { player?.packet(data); return; }
   let event; try { event = JSON.parse(data); } catch { return; }
   switch (event.type) {
+    case 'ready': notice(); break;
     case 'reply_start':
       if (!view.handle(event)) break;
       epoch = event.epoch; replyActive = true; player?.begin(epoch); $('latency').textContent = ''; clearError(); break;
@@ -160,7 +199,7 @@ async function cleanup(label = '对话已结束，可以重新开始') {
   const oldSocket = socket; socket = null;
   if (oldSocket && oldSocket.readyState < WebSocket.CLOSING) { oldSocket.onclose = null; oldSocket.close(); }
   $('startControls').hidden = false; $('callControls').hidden = true; $('textForm').hidden = true;
-  $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = false;
+  $('callMode').disabled = false; $('prediction').disabled = false; $('saveTask').disabled = false; $('restoreTask').disabled = $('taskPack').disabled = false;
   for (const id of ['editTitle', 'editGoal', 'editFacts', 'editPoints', 'editOpening']) $(id).disabled = false;
   $('connection').textContent = '未连接'; $('phase').textContent = label;
   notice(label);
@@ -195,20 +234,28 @@ $('editTask').onclick = () => {
   fillTaskEditor(task);
   $('taskDialog').showModal();
 };
+$('taskPack').onchange = () => {
+  if (connected || inputInFlight) return;
+  const card = packs.get($('taskPack').value) || savedCustom;
+  if (card) fillTaskEditor(card);
+};
+$('taskForm').addEventListener('input', event => {
+  if (event.target.matches('textarea, input:not([type="checkbox"])')) $('taskPack').value = '';
+});
 $('restoreTask').onclick = () => { if (!connected && defaultTask) fillTaskEditor(defaultTask); };
 $('closeDialog').onclick = () => $('taskDialog').close();
 $('taskForm').onsubmit = event => {
-  event.preventDefault(); if (connected) return;
+  event.preventDefault(); if (connected || inputInFlight) return;
   const descriptions = $('editPoints').value.split('\n').map(s => s.trim()).filter(Boolean);
   if (!descriptions.length || descriptions.length > 8 || descriptions.some(s => s.length > 300)) {
     $('editPoints').setCustomValidity('请输入 1 至 8 个要点，每项不超过 300 字。'); $('editPoints').reportValidity(); return;
   }
   const samePoints = descriptions.length === editorTask.checkpoints.length
     && descriptions.every((description, i) => description === editorTask.checkpoints[i].description);
-  task = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
+  const card = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
     opening: $('editOpening').value.trim(), checkpoints: samePoints ? editorTask.checkpoints
       : descriptions.map((description, i) => ({id: 'point_' + (i + 1), description}))};
-  localStorage.setItem('g2-task', JSON.stringify(task)); renderTask(); warmTask(task); $('taskDialog').close();
+  rememberTask(card); renderTask(); warmTask(task); $('taskDialog').close(); notice('当前工单：' + task.title);
 };
 $('editPoints').oninput = () => $('editPoints').setCustomValidity('');
 $('export').onclick = () => {
@@ -222,14 +269,39 @@ window.addEventListener('beforeunload', () => { mic?.close(); player?.close(); s
 try {
   const config = await (await fetch('/api/config')).json();
   defaultTask = config.default_task;
-  try { task = JSON.parse(localStorage.getItem('g2-task')); } catch {}
-  const sameTask = (a, b) => a && b && ['title', 'goal', 'facts', 'opening'].every(key => a[key] === b[key])
-    && JSON.stringify(a.checkpoints) === JSON.stringify(b.checkpoints);
-  if ((config.legacy_default_tasks || [config.legacy_default_task]).some(legacy => sameTask(task, legacy))) {
-    task = config.default_task; localStorage.setItem('g2-task', JSON.stringify(task));
+  for (const [id, card] of Object.entries(config.task_packs || {})) {
+    packs.set(id, card);
+    $('taskPack').add(new Option(card.title, id));
   }
-  if (!task?.checkpoints?.length || !task.goal || !task.opening) task = config.default_task;
+  try { task = JSON.parse(localStorage.getItem('g2-task')); } catch {}
+  try { savedCustom = JSON.parse(localStorage.getItem('g2-custom-task')); } catch {}
+  const legacyDefaults = config.legacy_default_tasks || [config.legacy_default_task];
+  let savedPack;
+  try { savedPack = JSON.parse(localStorage.getItem('g2-task-pack')); } catch {}
+  // The classic UI writes the shared task directly. Preserve its edits when
+  // checking whether a previously selected preset can follow a catalog update.
+  if (packs.size && savedPack?.id && sameTask(savedPack.card, task)) {
+    const latest = packs.get(savedPack.id) || defaultTask;
+    if (!sameTask(latest, task)) rememberTask(latest);
+  } else if (legacyDefaults.some(legacy => sameTask(task, legacy))) {
+    rememberTask(defaultTask);
+  }
+  if (!task?.checkpoints?.length || !task.goal || !task.opening) task = defaultTask;
+  if (!packId(task) && packs.size) rememberTask(task);
+  const url = new URL(location.href);
+  const requested = url.searchParams.get('pack');
+  if (requested !== null) {
+    const card = packs.get(requested);
+    if (card) {
+      rememberTask(card);
+    } else {
+      showError('找不到这张工单，可在任务设置中重新选择。');
+    }
+    url.searchParams.delete('pack');
+    history.replaceState(null, '', url);
+  }
+  if (packs.size) notice('当前工单：' + task.title);
   $('prediction').checked = config.predictions; renderTask(); warmTask(task);
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
-  if (!config.configured) showError('服务尚未配置 API 凭据，请在本地 .env 中填写后重启。');
+  cloudConfigured = config.configured;
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }

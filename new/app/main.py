@@ -15,9 +15,10 @@ from pydantic import ValidationError
 from .brain import Brain
 from .forecast import OpeningForecastCache
 from .hearing import Hearing
-from .local_asr import load_from_env, make_transcriber
+from .local_asr import FirstPassASR, load_from_env, make_transcriber
+from .local_provider import LocalProvider
 from .models import TaskCard
-from .providers import Cloud, Settings
+from .providers import Cloud, ProviderError, Settings
 from .session import Session
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
@@ -26,14 +27,23 @@ from .task_prewarm import cancel_task_prewarm, start_task_prewarm
 from .prediction_stats import build_prediction_stats
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PACK = "jd-qualification"
+TASK_PACKS = (DEFAULT_PACK, "jd-submitted", "jd-authorization", "jd-busy", "jd-goodbye", "jd-long-call",
+              "jd-category-report", "jd-license-appendix", "jd-license-scope",
+              "jd-trademark-renewal", "jd-brand-mixup")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.settings = Settings.load()
-    app.state.default_card = TaskCard.model_validate_json(
-        (ROOT / "tasks" / "jd-qualification.json").read_text(encoding="utf-8")
-    )
+    app.state.task_packs = {
+        name: TaskCard.model_validate_json((ROOT / "tasks" / f"{name}.json").read_text(encoding="utf-8"))
+        for name in TASK_PACKS
+    }
+    app.state.default_card = app.state.task_packs[DEFAULT_PACK]
+    app.state.first_pass = FirstPassASR.load()
+    app.state.local = LocalProvider(app.state.first_pass)
+    app.state.local_forecasts = OpeningForecastCache()
     cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
     if not cache_path.is_absolute():
         cache_path = ROOT / cache_path
@@ -56,12 +66,13 @@ async def lifespan(app: FastAPI):
     voice_detector_model()
     app.state.sessions = set()
     app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
-    # Warm the provider connection pool in the background so the first turn
-    # does not pay TLS setup on top of its own latency.
-    app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
+    app.state.prewarm = None
     yield
     for session in list(app.state.sessions):
         await session.close()
+    await app.state.local.close()
+    if app.state.first_pass:
+        app.state.first_pass.close()
     prewarm = getattr(app.state, "prewarm", None)
     if prewarm is not None and not prewarm.done():
         prewarm.cancel()
@@ -79,6 +90,7 @@ async def config():
               for name in ("home-broadband-support.json", "legacy/jd-qualification-v1.json", "legacy/jd-qualification-v2.json")]
     return {"configured": bool(settings.api_key), "model": settings.model,
             "legacy_default_tasks": legacy, "legacy_default_task": legacy[0],
+            "task_packs": {name: card.model_dump() for name, card in app.state.task_packs.items()},
             "predictions": settings.predictions, "default_task": app.state.default_card.model_dump()}
 
 
@@ -98,6 +110,12 @@ async def performance_metrics():
     }
 
 
+def warm_cloud_connection():
+    # Open the connection when the browser selects cloud mode.
+    if app.state.prewarm is None:
+        app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
+
+
 @app.post("/api/warm")
 async def warm(payload: dict):
     """Start background synthetic conversations for a loaded task card."""
@@ -105,6 +123,7 @@ async def warm(payload: dict):
         card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
     except (ValidationError, TypeError, ValueError):
         return {"started": False, "error": "invalid_task"}
+    warm_cloud_connection()
     task = start_task_prewarm(card, app.state.cloud,
                               app.state.opening_forecasts, ROOT / "runtime")
     return {"started": task is not None}
@@ -176,12 +195,26 @@ async def websocket(ws: WebSocket):
                         await ws.close(code=1003)
                         break
                     card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
-                    cloud = app.state.cloud
+                    mode = event.get("mode", "cloud")
+                    if mode not in ("local", "cloud"):
+                        raise ValueError("Invalid call mode")
+                    local = mode == "local"
+                    cloud = app.state.local if local else app.state.cloud
+                    if local:
+                        try:
+                            await cloud.ready(voice=bool(event.get("voice", True)))
+                        except (ProviderError, RuntimeError) as exc:
+                            await error(str(exc) if isinstance(exc, ProviderError) else "本地语音模型加载失败，请重新安装。")
+                            await ws.close(code=1011)
+                            break
+                    else:
+                        warm_cloud_connection()
+                    forecasts = app.state.local_forecasts if local else app.state.opening_forecasts
                     # A real call wins immediately; prewarm cache entries already
                     # written before this point remain valid.
                     cancel_task_prewarm(card, "foreground")
                     session = Session(card, cloud, Brain(
-                        cloud, app.state.opening_forecasts,
+                        cloud, forecasts,
                         forecast_branches=app.state.settings.forecast_branches), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
@@ -195,9 +228,13 @@ async def websocket(ws: WebSocket):
                             on_start=lambda: session.interrupt("speech", evidence=hearing.last_onset),
                             on_text=lambda text, end: session.user_text(text, source="voice", end_ms=end),
                             on_partial=lambda text: session.send({"type": "transcript", "text": text, "final": False}),
+                            first_pass=None if local else app.state.first_pass, on_draft=session.prepare_voice,
+                            min_silence_ms=680 if local else 0,
+                            discard_draft=session.discard_voice,
+                            on_lead=session.prepare_lead if session.predictions and not local else None,
                             on_error=error,
                             is_playing=lambda: session.phase == "speaking",
-                            transcriber=app.state.transcriber,
+                            transcriber=cloud.transcribe if local else app.state.transcriber,
                             performance_monitor=app.state.performance_monitor)
                     await session.start()
                 elif session:
