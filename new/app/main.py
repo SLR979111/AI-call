@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from pydantic import ValidationError
 from .brain import Brain
 from .forecast import OpeningForecastCache
 from .hearing import Hearing
-from .local_asr import FirstPassASR
+from .local_asr import FirstPassASR, load_from_env, make_transcriber
 from .local_provider import LocalProvider
 from .models import TaskCard
 from .providers import Cloud, ProviderError, Settings
@@ -21,6 +23,8 @@ from .session import Session
 from .vad import model as voice_detector_model
 from .decision_tracker import DecisionTracker
 from .monitoring import PerformanceMonitor
+from .task_prewarm import cancel_task_prewarm, start_task_prewarm
+from .prediction_stats import build_prediction_stats
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PACK = "jd-qualification"
@@ -37,21 +41,42 @@ async def lifespan(app: FastAPI):
         for name in TASK_PACKS
     }
     app.state.default_card = app.state.task_packs[DEFAULT_PACK]
-    app.state.cloud = Cloud(app.state.settings)
-    voice_detector_model()
     app.state.first_pass = FirstPassASR.load()
     app.state.local = LocalProvider(app.state.first_pass)
     app.state.local_forecasts = OpeningForecastCache()
-    app.state.sessions = set()
-    app.state.opening_forecasts = OpeningForecastCache()
+    cache_path = Path(os.getenv("CACHE_PATH", "runtime/cache.sqlite3"))
+    if not cache_path.is_absolute():
+        cache_path = ROOT / cache_path
+    # Trackers are created first so provider cache events can be recorded at
+    # the single point where each cache/network request actually happens.
     app.state.decision_tracker = DecisionTracker()
     app.state.performance_monitor = PerformanceMonitor()
+    app.state.cloud = Cloud(
+        app.state.settings, cache_path=cache_path,
+        on_cache_event=app.state.decision_tracker.record_cache_event,
+    )
+    app.state.local_asr = load_from_env()
+    app.state.transcriber = make_transcriber(app.state.local_asr, app.state.cloud)
+    if app.state.local_asr is not None:
+        try:
+            await asyncio.to_thread(app.state.local_asr.load)
+        except Exception:  # noqa: BLE001 - the cloud path still works without the model
+            app.state.local_asr = None
+            app.state.transcriber = app.state.cloud.transcribe
+    voice_detector_model()
+    app.state.sessions = set()
+    app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
+    app.state.prewarm = None
     yield
     for session in list(app.state.sessions):
         await session.close()
     await app.state.local.close()
     if app.state.first_pass:
         app.state.first_pass.close()
+    prewarm = getattr(app.state, "prewarm", None)
+    if prewarm is not None and not prewarm.done():
+        prewarm.cancel()
+        await asyncio.gather(prewarm, return_exceptions=True)
     await app.state.cloud.close()
 
 
@@ -72,17 +97,43 @@ async def config():
 @app.get("/api/cache/stats")
 async def cache_stats():
     """Return cache performance metrics."""
-    return app.state.cloud.cache_manager.report()
+    return app.state.cloud.cache_report()
 
 
 @app.get("/api/metrics")
 async def performance_metrics():
     """Return comprehensive performance and decision metrics."""
     return {
-        "cache": app.state.cloud.cache_manager.report(),
+        "cache": app.state.cloud.cache_report(),
         "decisions": app.state.decision_tracker.report(),
         "performance": app.state.performance_monitor.report(),
     }
+
+
+def warm_cloud_connection():
+    # Open the connection when the browser selects cloud mode.
+    if app.state.prewarm is None:
+        app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
+
+
+@app.post("/api/warm")
+async def warm(payload: dict):
+    """Start background synthetic conversations for a loaded task card."""
+    try:
+        card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
+    except (ValidationError, TypeError, ValueError):
+        return {"started": False, "error": "invalid_task"}
+    warm_cloud_connection()
+    task = start_task_prewarm(card, app.state.cloud,
+                              app.state.opening_forecasts, ROOT / "runtime")
+    return {"started": task is not None}
+
+
+@app.get("/api/prediction/stats")
+async def prediction_stats():
+    """Read-only prediction reuse, latency and cache counters."""
+    return build_prediction_stats(app.state.decision_tracker,
+                                  app.state.performance_monitor)
 
 
 @app.get("/healthz")
@@ -156,8 +207,15 @@ async def websocket(ws: WebSocket):
                             await error(str(exc) if isinstance(exc, ProviderError) else "本地语音模型加载失败，请重新安装。")
                             await ws.close(code=1011)
                             break
+                    else:
+                        warm_cloud_connection()
                     forecasts = app.state.local_forecasts if local else app.state.opening_forecasts
-                    session = Session(card, cloud, Brain(cloud, forecasts), send,
+                    # A real call wins immediately; prewarm cache entries already
+                    # written before this point remain valid.
+                    cancel_task_prewarm(card, "foreground")
+                    session = Session(card, cloud, Brain(
+                        cloud, forecasts,
+                        forecast_branches=app.state.settings.forecast_branches), send,
                                       voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
@@ -175,7 +233,9 @@ async def websocket(ws: WebSocket):
                             discard_draft=session.discard_voice,
                             on_lead=session.prepare_lead if session.predictions and not local else None,
                             on_error=error,
-                            is_playing=lambda: session.phase == "speaking")
+                            is_playing=lambda: session.phase == "speaking",
+                            transcriber=cloud.transcribe if local else app.state.transcriber,
+                            performance_monitor=app.state.performance_monitor)
                     await session.start()
                 elif session:
                     if kind == "text":

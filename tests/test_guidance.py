@@ -37,6 +37,20 @@ class FakeLLM:
         return SimpleNamespace(ok=self.ok, text=self.text)
 
 
+def test_template_opening_is_not_an_official_identity():
+    doc = template_document(ticket())
+    assert "第三方客服" in doc.script.opening
+    assert "不是京东审核人员" in doc.script.opening
+    assert "这里是京东商家资质审核客服" not in doc.script.opening
+
+
+def test_template_forbidden_does_not_reject_legitimate_non_promise():
+    doc = template_document(ticket())
+    assert "加急" not in doc.forbidden
+    assert "保证通过" in doc.forbidden
+    assert any("京东" in term for term in doc.forbidden)
+
+
 def test_template_contains_reason_and_steps():
     doc = template_document(ticket())
     assert doc.reason == "入驻 / 公司主体 / 主体资质到期"

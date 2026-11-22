@@ -14,11 +14,17 @@ $('callMode').onchange = () => {
   if (connected || inputInFlight) { $('callMode').value = mode; return; }
   mode = $('callMode').value;
   localStorage.setItem('g2-call-mode', mode);
+  if (task) warmTask(task);
   clearError();
 };
 const phaseNames = {ready: '准备好了，开始聊吧', thinking: '正在组织回答', speaking: '正在说话，可以随时打断', listening: '在听，请说', ended: '对话已结束'};
 
 function send(event) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); }
+function warmTask(card) {
+  if (mode !== 'cloud') return;
+  fetch('/api/warm', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({task: card})}).catch(() => {});
+}
 function showError(text) { $('error').textContent = text; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 function notice(text = '') { $('callNotice').textContent = text; $('callNotice').hidden = !text; }
@@ -249,7 +255,7 @@ $('taskForm').onsubmit = event => {
   const card = {title: $('editTitle').value.trim(), goal: $('editGoal').value.trim(), facts: $('editFacts').value.trim(),
     opening: $('editOpening').value.trim(), checkpoints: samePoints ? editorTask.checkpoints
       : descriptions.map((description, i) => ({id: 'point_' + (i + 1), description}))};
-  rememberTask(card); renderTask(); $('taskDialog').close(); notice('当前工单：' + task.title);
+  rememberTask(card); renderTask(); warmTask(task); $('taskDialog').close(); notice('当前工单：' + task.title);
 };
 $('editPoints').oninput = () => $('editPoints').setCustomValidity('');
 $('export').onclick = () => {
@@ -295,7 +301,7 @@ try {
     history.replaceState(null, '', url);
   }
   if (packs.size) notice('当前工单：' + task.title);
-  $('prediction').checked = config.predictions; renderTask();
+  $('prediction').checked = config.predictions; renderTask(); warmTask(task);
   $('connection').textContent = '服务就绪'; $('startVoice').disabled = $('startText').disabled = false;
   cloudConfigured = config.configured;
 } catch { showError('无法载入任务配置，请确认本地服务已启动。'); }

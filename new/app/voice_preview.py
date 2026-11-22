@@ -1,6 +1,7 @@
 """Overlap an ordinary response and its first TTS with final ASR verification."""
 
 import asyncio
+from copy import copy
 import json
 import re
 import time
@@ -102,12 +103,15 @@ class VoicePreview:
         self.text = text
         self.state = state
         self.first_text = None
+        self.last_decision = None
         self.events_queue = asyncio.Queue()
         self.audio_queue = asyncio.Queue()
         self.suffix_queue = None
         self.task = None
 
     async def prepare(self, brain, cloud, memory, candidates, leads=()):
+        # A speculative reply has its own decision metrics until accepted.
+        brain = copy(brain)
         self.local = getattr(cloud, "is_local", False)
         async def synthesize(text, target):
             try:
@@ -158,7 +162,7 @@ class VoicePreview:
                             if suffix:
                                 self.suffix_queue = asyncio.Queue()
                                 tasks.append(asyncio.create_task(synthesize(suffix, self.suffix_queue)))
-                    self.events_queue.put_nowait((kind, value))
+                    self.events_queue.put_nowait((kind, value, getattr(brain, "last_decision", None)))
         except Exception as exc:
             self.events_queue.put_nowait(exc)
         finally:
@@ -178,7 +182,8 @@ class VoicePreview:
                     yield item
                 return
             emitted = True
-            yield event
+            kind, value, self.last_decision = event
+            yield kind, value
 
     async def prepared_audio(self):
         for queue in (self.audio_queue, self.suffix_queue):

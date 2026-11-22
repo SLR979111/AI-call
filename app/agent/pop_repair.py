@@ -40,6 +40,10 @@ class RepairPolicy:
     contextual_followups: bool = False
     fast_followups: bool = False
     resilient_dialogue: bool = False
+    explicit_identity: bool = False
+    natural_availability: bool = False
+    grounded_confirmation: bool = False
+    explicit_stop: bool = False
 
     @property
     def version(self) -> str:
@@ -52,6 +56,9 @@ class RepairPolicy:
             del settings["fast_followups"]
         if not self.resilient_dialogue:
             del settings["resilient_dialogue"]
+        for flag in ("explicit_identity", "natural_availability", "grounded_confirmation", "explicit_stop"):
+            if not settings[flag]:
+                del settings[flag]
         return "pop-dialogue-" + sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12]
 
 

@@ -6,7 +6,17 @@ import re
 from typing import Literal
 
 from .forecast import compatible_short_answer, match_example, spoken_form
-from .models import Candidate
+from .models import Candidate, TaskCard
+from .ticket_phrases import (
+    SHORT_NO,
+    SHORT_YES,
+    canonical,
+    evidence_allowed,
+    out_of_scope,
+    rule_candidate,
+    terms,
+    uncovered_topic,
+)
 
 
 # Each intent has separate surface forms in speech and in forecast conditions.
@@ -31,7 +41,7 @@ REQUIREMENTS = {
     "ack": r"明白|理解|懂了|了解", "owner": r"负责|负责人",
 }
 
-EXTRA = re.compile(r"[?？]|为什么|怎么|如何|哪里|哪儿|多少|能不能|可不可以|但是|不过|可是|然而|另外|还有|顺便|其实|改口|不方便|忙|拒绝|算了|不用|不要|不需要|催|加急")
+EXTRA = re.compile(r"[?？]|为什么|怎么|如何|哪里|哪儿|在哪|从哪|哪边|多少|能不能|可不可以|但是|不过|可是|然而|另外|还有|顺便|其实|改口|不方便|忙|拒绝|算了|不用|不要|不需要|催|加急|投诉|保证|换人|换个人|上门|维修|退款|开发票|发票|转人工|回电|转接|登记|说错|刚才说")
 NEGATION = re.compile(r"不是|不对|没有|没|不行|不可以|不清楚|不一致|对不上|看不清")
 
 
@@ -119,8 +129,62 @@ class ContextAwareDecisionEngine:
             return scored[0][1]
         return None
 
+    def _broad_match(self, user_input: str, candidates: list[Candidate],
+                     card: TaskCard | None) -> Candidate | None:
+        """Ticket-derived broad match for short answers after exact rules fail."""
+        if card is None:
+            return None
+        normalized = canonical(user_input)
+        if not normalized or len(normalized) > 24:
+            return None
+        if EXTRA.search(user_input) or NEGATION.search(user_input):
+            return None
+        # Location/method/time/price aspects and out-of-scope requests must
+        # survive the same evidence gate as the primary ticket matcher.
+        if out_of_scope(normalized):
+            return None
+        if re.fullmatch(r"[a-z]+", normalized) and normalized not in SHORT_YES and normalized not in SHORT_NO:
+            return None
+        if uncovered_topic(normalized, (canonical(c.when + " " + c.reply.text + " "
+                                                  + " ".join(c.examples)) for c in candidates)):
+            return None
+        if normalized not in SHORT_YES and normalized not in SHORT_NO:
+            # Do not broad-match a bare "好的/是的"; those are handled by the
+            # precise short-answer rules above.
+            if len(normalized) < 3:
+                return None
+        broad_terms = set(terms(card))
+        broad_words = tuple(broad_terms)
+        # Also score substrings of the actual caller sentence. This picks up
+        # "已经提交显示审核中" against a candidate that names both facts,
+        # without requiring an exact business-word list.
+        stop = {"用户", "商家", "对方", "什么", "怎么", "这个", "那个", "已经",
+                "没有", "不是", "可以", "需要", "一个", "我们", "你们"}
+        user_grams = {
+            normalized[i:i + n]
+            for n in (2, 3, 4, 5)
+            for i in range(max(0, len(normalized) - n + 1))
+        }
+        user_grams = {gram for gram in user_grams if gram not in stop}
+        scored: list[tuple[int, Candidate]] = []
+        for candidate in candidates:
+            source = canonical(candidate.when + " " + candidate.reply.text + " " + " ".join(candidate.examples))
+            if not evidence_allowed(normalized, source, broad_words):
+                continue
+            phrase_score = sum(len(term) for term in broad_terms
+                               if term in normalized and term in source)
+            ngram_score = sum(len(term) for term in user_grams if term in source)
+            score = phrase_score + ngram_score
+            if score:
+                scored.append((score, candidate))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+            return scored[0][1]
+        return None
+
     def should_reuse(
-        self, user_input: str, candidates: list[Candidate], assistant_last_text: str = ""
+        self, user_input: str, candidates: list[Candidate], assistant_last_text: str = "",
+        card: TaskCard | None = None,
     ) -> tuple[Literal["reuse", "say", "llm"], Candidate | None]:
         if not candidates or not user_input.strip():
             return "llm", None
@@ -131,6 +195,9 @@ class ContextAwareDecisionEngine:
         if example is not None:
             return "reuse", example
         # Keep an unpredicted question or correction out of the lexical rules.
+        ticket_match = rule_candidate(user_input, candidates, card)
+        if ticket_match is not None:
+            return "reuse", ticket_match
         if EXTRA.search(user_input):
             return "llm", None
         utterance = self._normalize(key)
@@ -180,6 +247,10 @@ class ContextAwareDecisionEngine:
         # dialogue context. Keep forecasts available to the LLM for evaluation.
         if EXTRA.search(user_input) or len(utterance) > 24:
             return "llm", None
+
+        broad = self._broad_match(user_input, candidates, card)
+        if broad is not None:
+            return "reuse", broad
 
         affirmation = bool(re.fullmatch(r"(?:是的?|对的?|没错|嗯+)+", utterance))
         acknowledgement = bool(re.fullmatch(r"(?:明白了?|懂了|了解了?|清楚了?)+", utterance))

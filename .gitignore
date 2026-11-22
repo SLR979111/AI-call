@@ -69,3 +69,9 @@ Thumbs.db
 
 # Provided competition source files (extracted into knowledge/pop_audit.json)
 智语外呼-赛题说明/
+data/cache/
+.pip-cache/
+.pytest_cache/
+reports/conversations/root/
+reports/conversations/g2/
+reports/conversations/index.json

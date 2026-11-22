@@ -18,6 +18,8 @@ os.environ.setdefault("HF_HOME", str(hf_cache_dir))
 import pytest
 import shutil
 import tempfile
+import threading
+import time
 
 
 @pytest.fixture(scope="function")
@@ -148,6 +150,39 @@ class TestEmbedder:
 
 class TestKnowledgeBase:
     """Test the KnowledgeBase with vector search."""
+
+    def test_construction_does_not_block_on_embedder(self, monkeypatch):
+        """The constructor must return before the embedding model is loaded.
+
+        Loading the BGE model downloads from the HuggingFace Hub on a cold
+        cache, which took long enough that `scripts/ci_e2e.sh` timed out its
+        30 s health check and CI failed before the app ever served. Vector
+        search is optional (TF-IDF is always indexed), so it has to warm up in
+        the background rather than inside `__init__`.
+        """
+        from app.rag import knowledge as knowledge_module
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_init(self):
+            started.set()
+            release.wait(timeout=10)
+
+        monkeypatch.setattr(knowledge_module.KnowledgeBase, "_init_vector_search",
+                            blocking_init)
+        try:
+            begin = time.monotonic()
+            kb = knowledge_module.KnowledgeBase(vector_enabled=True)
+            elapsed = time.monotonic() - begin
+            # The stubbed init would block for up to 10 s if it ran inline.
+            assert elapsed < 5.0, f"constructor blocked for {elapsed:.1f}s"
+            assert started.wait(timeout=5), "background warm-up never started"
+            # TF-IDF is usable immediately, before the vector index exists.
+            assert kb._embedder_available is False
+            assert kb.search("配送需要多久", top_k=2)
+        finally:
+            release.set()
     
     def test_knowledge_base_vector_search(self):
         """Test that KnowledgeBase uses vector search when available."""

@@ -114,14 +114,18 @@ async def test_duplicate_forecasts_share_audio_preparation():
     session = Session(DEFAULT_CARD, Cloud(), Forecast(), send, voice=True)
     try:
         await session._predict(0, {})
-        assert len(calls) == 1
+        # Both candidates are published as text immediately; the warm-up is
+        # shared because it is keyed by sentence.
         assert len(session.candidates) == 2
+        await session.settle_audio()
+        assert len(calls) == 1
+        # Both candidates share the same reply sentence, so they share one PCM.
         assert len(session.prediction_audio) == 1
     finally:
         await session.close()
 
 
-async def test_cancel_forecast_cancels_shared_audio_preparation():
+async def test_cancel_forecast_lets_shared_audio_preparation_finish():
     from app.models import DEFAULT_CARD
     from app.session import Session
 
@@ -148,16 +152,19 @@ async def test_cancel_forecast_cancels_shared_audio_preparation():
         await asyncio.wait_for(started.wait(), 1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        assert cancelled.is_set()
-        assert not session.candidates
+        # The forecast is gone, but its synthesis keeps running: the PCM still
+        # lands in the persistent cache for whichever turn reuses the sentence.
+        assert not cancelled.is_set()
+        assert session.audio_warm
         assert not session.prediction_audio
     finally:
         await session.close()
+    assert cancelled.is_set()
 
 
 async def test_provider_prefetch_survives_shared_cache_eviction():
     import httpx
-    from app.providers import Cloud, Settings
+    from app.providers import TTS_MEMORY_ENTRIES, Cloud, Settings
     from app.models import DEFAULT_CARD
     from app.session import Session, Unit
 
@@ -181,9 +188,10 @@ async def test_provider_prefetch_survives_shared_cache_eviction():
         session = Session(DEFAULT_CARD, cloud, Forecast(), send, voice=True)
         try:
             await session._predict(0, {})
+            await session.settle_audio()
             reply = session.candidates[0].reply
             assert cloud.cached(reply.text) == pcm
-            for index in range(49):
+            for index in range(TTS_MEMORY_ENTRIES + 1):
                 cloud.remember(f'other-{index}', pcm)
             assert cloud.cached(reply.text) is None
             unit = Unit(1, reply, {})
@@ -317,6 +325,29 @@ async def test_long_bridge_is_not_used_to_delay_answer():
     await session.close()
 
 
+async def test_real_filler_length_is_usable_as_a_bridge():
+    """A synthesized "嗯。" is ~0.76 s; the bridge ceiling must allow it.
+
+    The previous 0.5 s ceiling rejected every real clip, which silently
+    disabled the bridge in production.
+    """
+    from app.models import DEFAULT_CARD
+    from app.session import BRIDGE_MAX_BYTES, Session
+
+    class Cloud:
+        async def prefetch(self, text):
+            return b'\x00\x00' * 18240  # 0.76 s, measured from the live TTS
+
+    async def send(event):
+        pass
+
+    session = Session(DEFAULT_CARD, Cloud(), None, send, voice=True)
+    await session._warm_bridge()
+    assert session.bridge_audio is not None
+    assert len(session.bridge_audio) <= BRIDGE_MAX_BYTES
+    await session.close()
+
+
 async def test_playback_metrics_separate_bridge_from_answer():
     from app.models import DEFAULT_CARD
     from app.session import Session, Unit
@@ -350,19 +381,23 @@ async def test_forecast_branches_run_concurrently():
 
         async def chat(self, messages, **kwargs):
             self.calls += 1
+            number = self.calls
             payload = json.loads(messages[-1]['content'])
-            if self.calls == 1:
+            if number == 1:
                 assert payload['forecast_user_inputs'] == ['好的。', '是的。']
                 assert '不能推断填错字' in messages[0]['content']
             else:
                 assert 'forecast_user_inputs' not in payload
-            if self.calls == 3:
+            if number == 3:
                 self.all_started.set()
             await asyncio.wait_for(self.all_started.wait(), 1)
-            yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
+            yield json.dumps({'candidates': [{
+                'id': 'c1', 'when': '用户确认',
+                'reply': {'text': f'请按页面提示操作第{number}步。', 'covers': []}}]})
 
     cloud = Cloud()
-    result = await Brain(cloud).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
+    result = await Brain(cloud, forecast_branches=3,
+                         ticket_forecasts=False).predict(Brain.snapshot(Memory(DEFAULT_CARD)))
     assert cloud.calls == 3
     assert len(result) == 3
     assert len({c.id for c in result}) == 3
@@ -387,7 +422,8 @@ async def test_fast_forecast_is_available_before_slow_branches():
             yield json.dumps({'candidates': [candidate('c1', '用户确认').model_dump()]})
 
     cloud = Cloud()
-    batches = Brain(cloud).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
+    batches = Brain(cloud, forecast_branches=3,
+                    ticket_forecasts=False).predict_batches(Brain.snapshot(Memory(DEFAULT_CARD)))
     first = await asyncio.wait_for(anext(batches), 1)
     assert len(first) == 1
     await batches.aclose()
@@ -410,3 +446,44 @@ def test_replay_never_uses_future_predictions(tmp_path):
     rows = replay(tmp_path)['rows']
     assert [r['available'] for r in rows] == [0, 1, 0]
     assert [r['hit'] for r in rows] == [False, True, False]
+
+
+@pytest.mark.parametrize("answer", ["是的", "好的", "是我", "对的", "是的，我就是负责人"])
+def test_ticket_forecast_reuses_the_answer_to_the_opening(answer):
+    """The opening asks a yes/no question, so a yes must be reusable.
+
+    Every deterministic family used to be a *question* the caller might ask,
+    while ``opening`` asks whether the caller handles the case. No candidate
+    could match "是的", so ``should_reuse`` declined on every greeting reply
+    and the turn waited for a full LLM round trip plus TTS before any audio.
+    """
+    from pathlib import Path
+
+    from app.forecast import ticket_quota
+    from app.models import TaskCard
+    from app.ticket_forecast import generate_ticket_candidates
+
+    card = TaskCard.model_validate_json(
+        (Path(__file__).resolve().parents[1] / "tasks" / "jd-qualification.json").read_text())
+    pool = generate_ticket_candidates(card)[:ticket_quota(10)]
+    decision, selected = ContextAwareDecisionEngine().should_reuse(
+        answer, pool, card.opening, card)
+    assert decision == "reuse"
+    assert selected is not None and selected.intent == "owner_confirmed"
+
+
+@pytest.mark.parametrize("answer", ["不是", "不是我", "我不是负责人"])
+def test_ticket_forecast_does_not_reuse_a_denial(answer):
+    """Declining the opening question is not the statement branch."""
+    from pathlib import Path
+
+    from app.forecast import ticket_quota
+    from app.models import TaskCard
+    from app.ticket_forecast import generate_ticket_candidates
+
+    card = TaskCard.model_validate_json(
+        (Path(__file__).resolve().parents[1] / "tasks" / "jd-qualification.json").read_text())
+    pool = generate_ticket_candidates(card)[:ticket_quota(10)]
+    decision, selected = ContextAwareDecisionEngine().should_reuse(
+        answer, pool, card.opening, card)
+    assert decision == "llm" and selected is None

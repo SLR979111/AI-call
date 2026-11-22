@@ -209,6 +209,7 @@ class LocalProvider(Cloud):
             yield pcm[offset:offset + 1920]
 
     async def close(self):
+        await super().close()
         await self.client.aclose()
         self.worker.shutdown(wait=True, cancel_futures=True)
 

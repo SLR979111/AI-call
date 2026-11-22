@@ -1,20 +1,125 @@
 """Read complete candidate objects as they arrive and match whole spoken replies."""
 
 import json
+import os
 import re
 from collections import OrderedDict
 from contextlib import aclosing
+from typing import Iterable
 
 from .models import Candidate
+from .persistent_cache import PersistentCache
+
+CANDIDATE_LIMIT_ENV = "PREDICTION_CANDIDATE_LIMIT"
+DEFAULT_CANDIDATE_LIMIT = 10
+MODEL_RESERVE_MAX = 4
+
+
+def candidate_limit_from_env() -> int:
+    """Hard cap for the merged forecast pool; malformed values use the default."""
+    raw = os.getenv(CANDIDATE_LIMIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_CANDIDATE_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CANDIDATE_LIMIT
+    return value if value > 0 else DEFAULT_CANDIDATE_LIMIT
+
+
+def model_reserve(limit: int) -> int:
+    """Slots kept for cached/model candidates so tickets cannot fill the pool.
+
+    A third of the pool, at least one and at most four slots.  This is what
+    keeps deterministic ticket templates additive instead of replacing the
+    model forecast.
+    """
+    limit = max(1, int(limit))
+    return min(MODEL_RESERVE_MAX, max(1, limit // 3))
+
+
+def ticket_quota(limit: int) -> int:
+    """Maximum number of ticket candidates admitted ahead of model output."""
+    limit = max(1, int(limit))
+    return max(0, limit - model_reserve(limit))
+
+
+def candidate_text_key(text: str) -> str:
+    """Compare spoken text without punctuation and whitespace differences."""
+    return re.sub(r"[\s，。；：？！,.!?、‘’“”'\"（）()【】]", "", text).lower()
+
+
+def _label_key(candidate: Candidate) -> tuple[str | None, str | None, str | None] | None:
+    # Untagged model candidates must not all collapse into one (None, None, None).
+    labels = (candidate.checkpoint, candidate.intent, candidate.polarity)
+    return labels if any(labels) else None
+
+
+def merge_candidates(existing: list[Candidate], incoming: Iterable[Candidate],
+                     limit: int) -> list[Candidate]:
+    """Append new candidates in order, dropping duplicate id/text/labels.
+
+    The caller keeps the returned list as the merged pool; ``limit`` is the hard
+    candidate cap and is applied before anything is appended.
+    """
+    merged = list(existing)
+    ids = {candidate.id for candidate in merged}
+    texts = {candidate_text_key(candidate.reply.text) for candidate in merged}
+    labels = {key for candidate in merged if (key := _label_key(candidate)) is not None}
+    cap = max(1, int(limit))
+    for candidate in incoming:
+        if len(merged) >= cap:
+            break
+        if candidate.id in ids:
+            continue
+        text_key = candidate_text_key(candidate.reply.text)
+        if text_key in texts:
+            continue
+        label_key = _label_key(candidate)
+        if label_key is not None and label_key in labels:
+            continue
+        merged.append(candidate)
+        ids.add(candidate.id)
+        texts.add(text_key)
+        if label_key is not None:
+            labels.add(label_key)
+    return merged
 
 
 class OpeningForecastCache:
-    """Share only the first-turn forecasts for identical task cards."""
+    """Share first-turn forecasts for identical task cards, across restarts."""
 
-    def __init__(self):
+    namespace = "opening"
+
+    def __init__(self, disk: PersistentCache | None = None):
+        self.disk = disk
         self.entries = OrderedDict()
+        if self.disk is not None:
+            for record in reversed(self.disk.load(
+                self.namespace, max_entries=16, max_bytes=2_000_000,
+            )):
+                parsed = self._decode(record.key, record.value)
+                if parsed is not None:
+                    self.entries[record.key] = parsed
+
+    @staticmethod
+    def _decode(key, value):
+        try:
+            payload = json.loads(value)
+            items = [Candidate.model_validate(item) for item in payload["items"]]
+            return items, bool(payload["complete"])
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def get(self, key):
+        if key not in self.entries and self.disk is not None:
+            record = self.disk.get(self.namespace, key)
+            if record is not None:
+                parsed = self._decode(key, record.value)
+                if parsed is not None:
+                    self.entries[key] = parsed
+        if len(self.entries) > 16:
+            self.entries.popitem(last=False)
         if key not in self.entries:
             return [], False
         items, complete = self.entries[key]
@@ -29,8 +134,19 @@ class OpeningForecastCache:
             return
         self.entries[key] = [item.model_copy(deep=True) for item in items], complete
         self.entries.move_to_end(key)
+        if self.disk is not None:
+            payload = json.dumps({
+                "complete": complete,
+                "items": [item.model_dump() for item in items],
+            }, ensure_ascii=False).encode("utf-8")
+            self.disk.put(
+                self.namespace, key, payload,
+                max_entries=16, max_bytes=2_000_000,
+            )
         if len(self.entries) > 16:
-            self.entries.popitem(last=False)
+            evicted, _ = self.entries.popitem(last=False)
+            if self.disk is not None:
+                self.disk.delete(self.namespace, evicted)
 
 
 async def stream_candidates(chunks, limit):

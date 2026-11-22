@@ -117,3 +117,41 @@ async def test_melo_speech_preserves_duration_and_filters_frequencies_above_call
         assert provider.cached("您好。") == pcm
     finally:
         await provider.close()
+
+
+@pytest.mark.parametrize("mode", ["local", "cloud"])
+def test_voice_websocket_uses_transcriber_for_selected_mode(mode, tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+    from app import main
+
+    monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
+    monkeypatch.setattr(main, "load_from_env", lambda: None)
+    monkeypatch.setattr(main.LocalProvider, "ready", AsyncMock())
+    local_asr = AsyncMock(return_value="local")
+    cloud_asr = AsyncMock(return_value="cloud")
+    prewarm = AsyncMock()
+    monkeypatch.setattr(main.LocalProvider, "transcribe", local_asr)
+    monkeypatch.setattr(main.Cloud, "transcribe", cloud_asr)
+    monkeypatch.setattr(main.Cloud, "prewarm", prewarm)
+    monkeypatch.setattr(main.Session, "start", AsyncMock())
+
+    async def decode(hearing, pcm):
+        await hearing.on_partial(await hearing.transcriber(pcm))
+
+    monkeypatch.setattr(main.Hearing, "feed", decode)
+    with TestClient(main.app) as client:
+        assert len(client.get("/api/config").json()["task_packs"]) == 11
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "start", "voice": True, "audio_protocol": 2, "mode": mode})
+            ws.send_bytes(bytes(640))
+            assert ws.receive_json()["text"] == mode
+            ws.send_json({"type": "stop"})
+    if mode == "local":
+        cloud_asr.assert_not_called()
+        prewarm.assert_not_called()
+    else:
+        local_asr.assert_not_called()
+        prewarm.assert_awaited_once()

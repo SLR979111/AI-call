@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 import struct
 from array import array
@@ -24,7 +25,8 @@ class Hearing:
                  on_partial: Callable[[str], Awaitable],
                  on_error: Callable[[str], Awaitable],
                  is_playing: Callable[[], bool] = lambda: False,
-                 detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None, min_silence_ms=0):
+                 detector=None, first_pass=None, on_draft=None, discard_draft=None, on_lead=None,
+                 min_silence_ms=0, transcriber=None, performance_monitor=None):
         self.cloud = cloud
         self.first_pass, self.on_draft = first_pass, on_draft
         self.min_silence_ms = min_silence_ms
@@ -34,9 +36,14 @@ class Hearing:
         self.local_final = None
         self.draft_job = None
         self.draft_at = -1
+        self.performance_monitor = performance_monitor
         self.on_start, self.on_text = on_start, on_text
         self.on_partial, self.on_error = on_partial, on_error
         self.is_playing = is_playing
+        self.transcriber = transcriber
+        self.defer_base = int(os.getenv("HEARING_DEFER_MS", "480"))
+        self.defer_short = int(os.getenv("HEARING_DEFER_SHORT_MS", "260"))
+        self.defer_question = int(os.getenv("HEARING_DEFER_QUESTION_MS", "340"))
         self.detector = detector or SpeechDetector()
         self.raw_detector = detector or SpeechDetector()
         self.last_onset: dict = {}
@@ -59,7 +66,7 @@ class Hearing:
         self.decode_at = -1
         self.finalizer: asyncio.Task | None = None
         self.jobs: set[asyncio.Task] = set()
-        self.defer_to = 680
+        self.defer_to = self.defer_base
         self.blocked = False
         self.closed = False
 
@@ -156,7 +163,7 @@ class Hearing:
             return
         if voiced:
             self.quiet = 0
-            self.defer_to = 680
+            self.defer_to = self.defer_base
             self.voiced_end = len(self.buffer)
             self.voice_tick += 1
             self.last_client_ms = client_ms
@@ -213,16 +220,25 @@ class Hearing:
         decoded_at = self.decode_at
 
         async def decode():
-            text = await self.cloud.transcribe(audio)
+            asr_started = (self.performance_monitor.mark_asr_start()
+                           if self.performance_monitor else None)
+            try:
+                transcribe = self.transcriber or self.cloud.transcribe
+                text = await transcribe(audio)
+            finally:
+                if self.performance_monitor:
+                    self.performance_monitor.mark_asr_end(
+                        bool(getattr(self.cloud, "last_asr_cache_hit", False)),
+                        started_at=asr_started)
             if (self.active and not self.closed and utterance_id == self.utterance_id
                     and decoded_at > self.partial_at):
                 self.partial_at = decoded_at
                 if decoded_at == self.voiced_end:
                     normalized = re.sub(r"[\s，。！？,.!?]", "", text)
                     if re.fullmatch(r"(?:是的|对的|好的|没错|明白了|知道了|可以|没有了|谢谢|再见)+", normalized):
-                        self.defer_to = 360
+                        self.defer_to = self.defer_short
                     elif text.strip().endswith(("？", "?")):
-                        self.defer_to = 480
+                        self.defer_to = self.defer_question
                 # An earlier partial may already contain the complete wording.
                 # The decode covering the final voiced frame can still start synthesis.
                 local = getattr(self.cloud, "is_local", False)
@@ -284,7 +300,7 @@ class Hearing:
         self.preroll.clear()
         self.onset_window.clear()
         self.attack = self.quiet = self.voiced_end = 0
-        self.defer_to = 680
+        self.defer_to = self.defer_base
         self.voice_tick += 1
         self.utterance_id += 1
         self.partial_at = -1
