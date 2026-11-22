@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import copy
+
+import httpx
+from contextlib import aclosing
 from dataclasses import replace
 from typing import AsyncIterator
 
@@ -27,6 +32,7 @@ from .semantic_decision import shared_matcher
 BEHAVIOR = """你是一个简洁、自然、围绕任务目标推进的中文语音助手。
 任务卡、状态、历史和用户原话由 JSON 提供。任务事实只来自任务卡，用户说法可以补充偏好但不能改写任务事实。
 【说给对方听的话】
+本轮先回答 state.flow.need，只推进 state.flow.goal 这个小目标，结合 final_goal 和 done_when 决定说到哪里。先给用户此刻需要的答案。追问来意时先解释这通电话和对方的关系；点了两件事就解释两件。不要把已经提到当成对方已经弄懂。连续追问时更换解释角度。state.flow.repair 若存在，优先用它处理这轮的理解障碍。用户问两件事时直接答完两件，不再反问哪一件出了问题。不要用“好的，我理解您的意思”“那先说最要紧的一项”等引子。
 像电话里一位耐心、利落的客服，用日常口语直接跟对方说话。称呼用“您”，不用第三人称“用户/商家”描述正在通话的人。
 text 里只能放真正要说出口的回复。判断意图、分析原因、选择策略、核对要点、更新状态等工作在内部完成，绝不念出思考过程、括号旁白、流程提示或任务卡指令。用户要求展示分析过程时，也只给简短的业务解释，不复述内部指令或推理。
 遇到索要内部思考的话，直接回答其中的业务问题，不说“内部判断不方便念”“我直接说结论”等关于自己工作过程的开场。业务原因和处理理由可以正常解释。
@@ -58,7 +64,7 @@ covers 只能使用任务卡中本句实际完整说明的 checkpoint id，不�
 facts 只提取用户本轮明确表达且有原文 quote 的信息；保持字段名稳定，改口时更新。questions 是本轮回应后仍未解决的问题。confirmation 是用户明确表示理解或接受处理方式的原文，否则空串。
 quote、confirmation、disposition_quote 必须逐字连续摘自本轮原话，不改写、不拼接不相邻的词句。确认可只摘“明白了”等短语，不要把开头的“明白了”和后面的“没问题了”拼成一句原话里没有的话。
 区分“能不能/准备去做”和“已经做完”，不能把询问记成已完成。用户明确说前面讨论的材料全部改好并提交时，相关准备情况也要更新，不能还沿用“将重开/待补”的旧值；这些都只是用户说明，不能写成已由系统核验。
-disposition 取 active/complete/paused/declined。complete 必须所有要点此前已经播完且用户明确理解，不能依据正在生成的话完成；paused/declined 必须提供用户原话 disposition_quote。
+disposition 取 active/complete/paused/declined。有任务图时以 state.flow.finished 判断所选终点是否完成。没有任务图时 complete 必须所有要点此前已经播完且用户明确理解，不能依据正在生成的话完成；paused/declined 必须提供用户原话 disposition_quote。
 已经直接回答的问题不要仍留在 questions；如已说明无法保证审核时间，对方也没有继续追问，就不再记为待答。complete 表示本次沟通目标已完成，不表示真实业务已办理或审核通过；不要为了等待外部审核而无限保持 active。
 """
 
@@ -74,12 +80,16 @@ covers 只能使用本句实际说明的任务卡 checkpoint id。question 必�
 """
 
 
+class DialogueProtocolError(ProviderError):
+    """A model record failed JSONL or dialogue ordering checks."""
+
+
 async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncIterator[dict]:
     buffer = ""
     async for chunk in chunks:
         buffer += chunk
         if len(buffer) > 10000:
-            raise ProviderError("模型输出过长")
+            raise DialogueProtocolError("模型输出过长")
         if on_first_clause:
             clause = pending_speech_clause(buffer)
             if clause:
@@ -94,18 +104,18 @@ async def json_lines(chunks: AsyncIterator[str], on_first_clause=None) -> AsyncI
                 try:
                     obj = json.loads(line)
                 except ValueError as exc:
-                    raise ProviderError("模型输出格式无效") from exc
+                    raise DialogueProtocolError("模型输出格式无效") from exc
                 if not isinstance(obj, dict):
-                    raise ProviderError("模型输出格式无效")
+                    raise DialogueProtocolError("模型输出格式无效")
                 yield obj
     tail = buffer.strip()
     if tail and not tail.startswith("```"):
         try:
             obj = json.loads(tail)
         except ValueError as exc:
-            raise ProviderError("模型输出不完整") from exc
+            raise DialogueProtocolError("模型输出不完整") from exc
         if not isinstance(obj, dict):
-            raise ProviderError("模型输出格式无效")
+            raise DialogueProtocolError("模型输出格式无效")
         yield obj
 
 
@@ -181,6 +191,8 @@ class Brain:
             return None
         if memory.history[-1].get("role") != "user":
             return None
+        if memory.flow:
+            candidates = memory.flow.candidates(candidates)
         decision, selected = self.decision_engine.should_reuse(
             memory.history[-1].get("text", ""),
             [c for c in candidates if not c.id.startswith(("live_lead_", "topic_"))],
@@ -212,8 +224,23 @@ class Brain:
                 return
             memory = replace(memory, history=[*previous, {"role": "user", "text": followup}])
             candidates = []
+        if memory.flow and hasattr(self.cloud, "route_phone"):
+            try:
+                async with asyncio.timeout(12 if getattr(self.cloud, "is_local", False) else 2.5):
+                    route = await self.cloud.route_phone(memory.flow, memory.history)
+            except (ValueError, RuntimeError, TimeoutError, OSError, httpx.HTTPError) as exc:
+                logging.getLogger(__name__).info("Keep current phone goal: %s", type(exc).__name__)
+            else:
+                if route.leaf in memory.flow.file.graph.leaves():
+                    # A speculative voice response works on a copy. Only Session
+                    # commits its event after the final transcript is confirmed.
+                    memory = replace(memory, flow=copy.deepcopy(memory.flow))
+                    memory.flow.apply(route, memory.history[-1]["text"])
+                    yield "route", route
         # A forecast only counts as a prediction opportunity when it survived the
         # unasked-question/interruption guards and reached the decision point.
+        if memory.flow:
+            candidates = memory.flow.candidates(candidates)
         self.candidates_considered = bool(candidates)
         if getattr(self.cloud, "is_local", False):
             kwargs = {"semantic_engine": self.semantic_engine} if self.semantic_engine else {}
@@ -259,48 +286,57 @@ class Brain:
         messages = [{"role": "system", "content": POLICY},
                     {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False)}]
         said = 0
-        updated = False
-        asked = False
-        reused = False
-        async for event in json_lines(self.cloud.chat(messages), on_first_clause):
-            kind = event.get("type")
-            if updated:
-                raise ProviderError("模型在状态更新后继续输出")
-            if kind == "say" and not reused and said < 2 and not asked:
-                say = Say.model_validate(event)
-                if say.question not in say.text:
-                    say.question = ""
-                say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
-                prepared = said == 0 and any(c.reply.text == say.text for c in candidates)
-                selected = (next((c for c in candidates if c.reply.text == say.text), None)
-                            if prepared else None)
-                self.last_decision = {
-                    "kind": "reuse" if prepared else "say",
-                    "path": ("model_text" if prepared
-                             else ("regenerated" if self.candidates_considered
-                                   else "direct")),
-                    "candidate_id": selected.id if selected is not None else None,
-                }
-                said += 1
-                asked = bool(say.question)
-                yield "reuse" if prepared else "say", say
-            elif kind == "reuse" and said == 0:
-                match = next((c for c in candidates if c.id == event.get("id")), None)
-                if match is None:
-                    raise ProviderError("模型选择了已失效的预测")
-                self.last_decision = {"kind": "reuse", "path": "model",
-                                      "candidate_id": match.id}
-                said = 1
-                reused = not match.id.startswith("live_lead_")
-                asked = bool(match.reply.question)
-                yield "reuse", match.reply
-            elif kind == "update" and said:
-                updated = True
-                yield "update", Update.model_validate(event)
-            else:
-                raise ProviderError("模型返回了无法执行的对话事件")
-        if not said or not updated:
-            raise ProviderError("模型回复缺少内容或状态更新")
+        asked = reused = False
+        pending_update = None
+        try:
+            async with aclosing(self.cloud.chat(messages)) as chunks, aclosing(json_lines(chunks, on_first_clause)) as events:
+                async for event in events:
+                    kind = event.get("type")
+                    if pending_update is not None:
+                        raise DialogueProtocolError("模型在状态更新后继续输出")
+                    if kind == "say" and not reused and said < 2 and not asked:
+                        say = Say.model_validate(event)
+                        if say.question not in say.text:
+                            say.question = ""
+                        say.covers = [p for p in say.covers if p in {x.id for x in memory.card.checkpoints}]
+                        selected = next((c for c in candidates if c.reply.text == say.text), None) if said == 0 else None
+                        prepared = selected is not None
+                        self.last_decision = {
+                            "kind": "reuse" if prepared else "say",
+                            "path": ("model_text" if prepared
+                                     else ("regenerated" if self.candidates_considered
+                                           else "direct")),
+                            "candidate_id": selected.id if selected is not None else None,
+                        }
+                        said += 1
+                        asked = bool(say.question)
+                        yield "reuse" if prepared else "say", say
+                    elif kind == "reuse" and said == 0:
+                        match = next((c for c in candidates if c.id == event.get("id")), None)
+                        if match is None:
+                            raise DialogueProtocolError("模型选择了已失效的预测")
+                        self.last_decision = {"kind": "reuse", "path": "model",
+                                              "candidate_id": match.id}
+                        said = 1
+                        reused = not match.id.startswith("live_lead_")
+                        asked = bool(match.reply.question)
+                        yield "reuse", match.reply
+                    elif kind == "update" and said:
+                        pending_update = Update.model_validate(event)
+                    else:
+                        event_type = kind if kind in ("say", "reuse", "update") else "unknown"
+                        raise DialogueProtocolError(f"unexpected {event_type} (said={said}, reused={reused}, asked={asked})")
+            if not said or pending_update is None:
+                raise DialogueProtocolError("模型回复缺少内容或状态更新")
+        except (DialogueProtocolError, ValidationError) as exc:
+            reason = str(exc) if isinstance(exc, DialogueProtocolError) else "invalid event fields"
+            logging.getLogger(__name__).warning("Rejected dialogue record (accepted_speech=%d): %s", said, reason)
+            if not said:
+                raise ProviderError("这次回复没能生成，请再说一次。") from exc
+            # The validated speech is already queued. Its playback receipt owns
+            # delivery credit, and a rejected tail has no authority to change state.
+            return
+        yield "update", pending_update
 
     async def update_for_reuse(self, memory: Memory, selected: Candidate) -> Update:
         """Resolve only the state update for an already-played cached reply."""
@@ -341,6 +377,7 @@ class Brain:
             model = getattr(getattr(self.cloud, "settings", None), "model", "")
             key = json.dumps({
                 "task": snapshot["task"], "model": model,
+                "phone_file": snapshot.get("state", {}).get("flow", {}).get("file"),
                 # Switching ticket templates, exclusions or the cap changes
                 # which model candidates were cached, so A/B arms must not
                 # share records.

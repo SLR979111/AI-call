@@ -106,7 +106,7 @@ class LocalProvider(Cloud):
             # model must distinguish actual statements from conditional examples.
             task = context["task"]
             facts = task["facts"]
-            sections = [instruction, "任务：" + task["goal"],
+            sections = [instruction, "围绕会话进度中 flow.need 的诉求和 flow.goal 的小目标，直接回答对方最后问的事情。若有 flow.repair 则先按该提示解释。连续追问时换个角度，省去客套开头。", "任务：" + task["goal"],
                         "检查项：" + json.dumps(task["checkpoints"], ensure_ascii=False),
                         "会话进度：" + json.dumps(context["state"], ensure_ascii=False),
                         "任务原文：\n" + facts,

@@ -4,10 +4,13 @@ import asyncio
 import json
 import math
 import os
+import logging
+import httpx
+from collections import OrderedDict
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -19,6 +22,7 @@ from .local_asr import FirstPassASR, load_from_env, make_transcriber
 from .local_provider import LocalProvider
 from .semantic_decision import warmup_shared
 from .models import TaskCard
+from .phone_file import PhoneFile, compile_phone
 from .providers import Cloud, ProviderError, Settings
 from .session import Session
 from .vad import model as voice_detector_model
@@ -77,6 +81,15 @@ async def lifespan(app: FastAPI):
         app.state.sessions = set()
         app.state.opening_forecasts = OpeningForecastCache(app.state.cloud.persistent)
         app.state.prewarm = None
+        app.state.phone_files = OrderedDict()
+        app.state.phone_jobs = {}
+
+        async def close_phone_jobs():
+            jobs = list(app.state.phone_jobs.values())
+            for job in jobs:
+                job.cancel()
+            await asyncio.gather(*jobs, return_exceptions=True)
+        cleanup.push_async_callback(close_phone_jobs)
 
         async def close_connection_warmup():
             task = app.state.prewarm
@@ -131,22 +144,72 @@ def warm_cloud_connection():
         app.state.prewarm = asyncio.create_task(app.state.cloud.prewarm())
 
 
-async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False) -> dict:
+@app.post("/api/phone-file")
+async def generate_phone_file(card: TaskCard, mode: str = "cloud"):
+    if mode not in {"cloud", "local"}:
+        raise HTTPException(422, "未知通话模式")
+    if mode == "cloud" and not app.state.settings.api_key:
+        return compile_phone(card)
+    provider = app.state.local if mode == "local" else app.state.cloud
+    key = (mode, card.model_dump_json())
+    cache = app.state.phone_files
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
+
+    async def build():
+        try:
+            async with asyncio.timeout(35):
+                result = await provider.plan_phone(card)
+        except (ValueError, RuntimeError, TimeoutError, OSError, httpx.HTTPError) as exc:
+            logging.getLogger(__name__).warning("Phone graph fallback: %s", type(exc).__name__)
+            result = compile_phone(card)
+        cache[key] = result
+        if len(cache) > 48:
+            cache.popitem(last=False)
+        return result
+
+    jobs = app.state.phone_jobs
+    if key not in jobs:
+        job = asyncio.create_task(build())
+        jobs[key] = job
+        job.add_done_callback(lambda _: jobs.pop(key, None))
+    return await asyncio.shield(jobs[key])
+
+
+@app.post("/api/phone-file/validate")
+async def validate_phone_file(file: PhoneFile):
+    return file
+
+
+def read_order(payload):
+    if payload.get("phone_file") is not None:
+        file = PhoneFile.model_validate(payload["phone_file"])
+        if "task" in payload and TaskCard.model_validate(payload["task"]) != file.task:
+            raise ValueError("电话文件与工单不一致")
+        return file.task, {"phone_file": file}
+    return TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump())), {}
+
+
+async def prepare_cloud_task(card: TaskCard, *, wait: bool, retry: bool = False, phone_file=None) -> dict:
     if not app.state.settings.api_key:
         return {"started": False, "status": "unconfigured"}
+    if phone_file is None:
+        phone_file = await generate_phone_file(card)
     return await app.state.task_prewarmer.prepare(
-        card, app.state.cloud, app.state.opening_forecasts, ROOT / "runtime", wait=wait, retry=retry)
+        card, app.state.cloud, app.state.opening_forecasts, ROOT / "runtime", wait=wait, retry=retry,
+        **({"phone_file": phone_file} if phone_file else {}))
 
 
 @app.post("/api/warm")
 async def warm(payload: dict):
     """Start background synthetic conversations for a loaded task card."""
     try:
-        card = TaskCard.model_validate(payload.get("task", app.state.default_card.model_dump()))
+        card, options = read_order(payload)
     except (ValidationError, TypeError, ValueError):
         return {"started": False, "error": "invalid_task"}
     return await prepare_cloud_task(card, wait=payload.get("wait") is True,
-                                    retry=payload.get("retry") is True)
+                                    retry=payload.get("retry") is True, **options)
 
 
 @app.get("/api/prediction/stats")
@@ -206,7 +269,7 @@ async def websocket(ws: WebSocket):
                     await hearing.feed(incoming["bytes"])
                 continue
             raw = incoming.get("text", "")
-            if len(raw) > 20000:
+            if len(raw) > 100_000:
                 await error("消息过长")
                 continue
             try:
@@ -219,7 +282,7 @@ async def websocket(ws: WebSocket):
                         await error("语音组件已更新，请刷新页面后重新开始通话。")
                         await ws.close(code=1003)
                         break
-                    card = TaskCard.model_validate(event.get("task", app.state.default_card.model_dump()))
+                    card, options = read_order(event)
                     mode = event.get("mode", "cloud")
                     if mode not in ("local", "cloud"):
                         raise ValueError("Invalid call mode")
@@ -233,17 +296,19 @@ async def websocket(ws: WebSocket):
                             await ws.close(code=1011)
                             break
                     else:
-                        result = await prepare_cloud_task(card, wait=True, retry=True)
+                        result = await prepare_cloud_task(card, wait=True, retry=True, **options)
                         if result["status"] == "failed":
                             await error("工单模拟未完成，请重新开始以重试。")
                             await ws.close(code=1011)
                             break
                         warm_cloud_connection()
+                    if not options:
+                        options = {"phone_file": await generate_phone_file(card, mode)}
                     forecasts = app.state.local_forecasts if local else app.state.opening_forecasts
                     session = Session(card, cloud, Brain(
                         cloud, forecasts,
                         forecast_branches=app.state.settings.forecast_branches), send,
-                                      voice=bool(event.get("voice", True)),
+                                      **options, voice=bool(event.get("voice", True)),
                                       predictions=bool(event.get("predictions", app.state.settings.predictions)),
                                       log_dir=ROOT / "runtime" / "sessions",
                                       decision_tracker=app.state.decision_tracker,

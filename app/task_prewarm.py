@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .brain import Brain
 from .forecast import OpeningForecastCache
+from .phone_file import PhoneFile, compile_phone
 from .models import TaskCard
 from .providers import Cloud
 from .playback import PCM_HEADER
@@ -140,6 +141,7 @@ class PrewarmGroup:
     card: TaskCard
     path: Path | None
     round: int = 1
+    phone_file: PhoneFile | None = None
 
     @classmethod
     def create(cls, card: TaskCard, root: Path, key: str):
@@ -210,7 +212,7 @@ async def _run_one(group: PrewarmGroup, cloud: Cloud,
     sink = _Sink()
     brain = Brain(cloud, opening_forecasts, forecast_branches=cloud.settings.forecast_branches)
     session = Session(
-        group.card, cloud, brain, sink,
+        group.card, cloud, brain, sink, phone_file=group.phone_file,
         voice=True,
         predictions=True,
         log_dir=group.path.parent / "sessions" if group.path else None,
@@ -292,10 +294,12 @@ class TaskPrewarmer:
         self.outcomes: dict[str, str] = {}
 
     async def prepare(self, card: TaskCard, cloud: Cloud, forecasts: OpeningForecastCache | None,
-                      log_root: Path, *, wait: bool = False, retry: bool = False) -> dict:
+                      log_root: Path, *, wait: bool = False, retry: bool = False, phone_file=None) -> dict:
         if not enabled():
             return {"started": False, "status": "disabled"}
         key = task_key(card)
+        if phone_file and phone_file != compile_phone(card):
+            key += "-" + phone_file.fingerprint()
         outcome = self.outcomes.get(key)
         if outcome is not None and not (outcome == "failed" and retry):
             return {"started": False, "status": outcome}
@@ -303,14 +307,15 @@ class TaskPrewarmer:
         task = self.active.get(key)
         if task is None:
             self.outcomes.pop(key, None)
-            task = asyncio.create_task(self._prepare(key, card, cloud, forecasts, log_root))
+            task = asyncio.create_task(self._prepare(key, card, cloud, forecasts, log_root, phone_file))
             self.active[key] = task
         status = await asyncio.shield(task) if wait else "preparing"
         return {"started": True, "status": status}
 
-    async def _prepare(self, key, card, cloud, forecasts, log_root) -> str:
+    async def _prepare(self, key, card, cloud, forecasts, log_root, phone_file=None) -> str:
         try:
             group = PrewarmGroup.create(card, log_root, key)
+            group.phone_file = phone_file
             group.log({"event": "prewarm_start", "task": card.title, "task_key": key,
                        "ts": datetime.now(timezone.utc).isoformat()})
             complete = await _run_round(group, cloud, forecasts)

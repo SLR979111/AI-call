@@ -27,6 +27,8 @@ class Unit:
     delivered: bool = False
     finished: asyncio.Event = field(default_factory=asyncio.Event)
 
+    prepared_clause: tuple[str, bytes] | None = None
+
     def record_cutoff(self):
         """Keep the estimated spoken prefix and the intended continuation apart."""
         if self.delivered:
@@ -47,6 +49,8 @@ class Unit:
     async def synthesize(self, cloud, pcm: bytes | None, preview, monitor, turn):
         started = time.perf_counter()
         cached = pcm if pcm is not None else getattr(cloud, "cached", lambda _: None)(self.say.text)
+        if self.prepared_clause and pcm is None:
+            cached = None
         if cached:
             self.duration_samples = len(cached) // 2
         if cached is not None and pcm is None:
@@ -60,6 +64,14 @@ class Unit:
             if cached is not None:
                 for offset in range(0, len(cached), 1920):
                     yield cached[offset:offset + 1920]
+            elif self.prepared_clause:
+                prefix, clip = self.prepared_clause
+                for offset in range(0, len(clip), 1920):
+                    yield clip[offset:offset + 1920]
+                suffix = self.say.text[len(prefix):]
+                if suffix:
+                    async for chunk in cloud.speech(suffix):
+                        yield chunk
             else:
                 source = preview.audio(lambda: cloud.speech(self.say.text)) if preview else cloud.speech(self.say.text)
                 async for chunk in source:

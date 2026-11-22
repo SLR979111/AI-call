@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .phone_file import Flow
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -123,6 +126,25 @@ class Memory:
     status: str = "active"
     history: list[dict] = field(default_factory=list)
 
+    flow: Flow | None = None
+
+    def hear(self, text: str):
+        if self.flow:
+            combined = ""
+            if re.fullmatch(r"(?:的?意思|那个问题|这一项)[。！？\s]*", text):
+                for previous in reversed(self.history):
+                    if previous["role"] == "user":
+                        if re.search(r"(?:没有理解|没听懂|不明白|想问).{0,6}[的个是][。！？\s]*$", previous["text"]):
+                            combined = previous["text"].rstrip("。！？ ") + text
+                        break
+                    if previous.get("delivery") != "unplayed" and not previous.get("bridge"):
+                        break
+            self.flow.heard_together = combined
+            previous = self.history[-1] if self.history else {}
+            last = previous.get("text", "") if previous.get("role") == "assistant" and previous.get("delivery") == "complete" else ""
+            self.flow.accept(combined or text, last if re.search(r"[？?]", last) else "")
+        self.history.append({"role": "user", "text": text})
+
     def delivered_covers(self, line: Say):
         covers = list(line.covers)
         if line.question or re.search(r"[？?]", line.text):
@@ -192,6 +214,8 @@ class Memory:
         goodbye = ends_with_goodbye(last_reply.text)
         if goodbye and ends_with_goodbye(user):
             return True
+        if self.flow and self.flow.judged and self.flow.leaf not in self.flow.done:
+            return False
         if self.questions or (self.status != "complete" and not goodbye):
             return False
         # Without punctuation a question can still look like a statement to ASR.
@@ -213,6 +237,7 @@ class Memory:
             if ends_with_goodbye(assistant["text"]):
                 return "goodbye_acknowledged"
             if (not self.questions and not self.last_question and not re.search(r"[？?]", assistant["text"])
+                    and (not self.flow or not self.flow.judged or self.flow.leaf in self.flow.done)
                     and all(point.id in self.delivered for point in self.card.checkpoints)
                     and (ends_with_goodbye(user) or
                          re.fullmatch(r"[嗯哦啊，,。！!\s]*(?:好(?:的|了)?|谢谢您?|行)[，,。！!\s]*", user))):
@@ -235,6 +260,7 @@ class Memory:
             "remaining": [p.id for p in self.card.checkpoints if p.id not in self.delivered],
             "last_question": self.last_question,
             "status": self.status,
+            **({"flow": self.flow.context()} if self.flow else {}),
         }
 
     def apply(self, update: Update, user: str, turn: int, delivered_before: set[str]) -> None:
@@ -250,6 +276,9 @@ class Memory:
             if (update.disposition_quote and update.disposition_quote in user
                     and not farewell_only(update.disposition_quote)):
                 self.status = update.disposition
+        elif self.flow and self.flow.judged:
+            if self.flow.leaf in self.flow.done and not self.questions:
+                self.status = "complete"
         elif update.disposition == "complete":
             required = {p.id for p in self.card.checkpoints}
             quote = update.confirmation.strip()

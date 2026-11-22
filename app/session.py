@@ -16,6 +16,8 @@ from typing import Awaitable, Callable
 from .voice_preview import PredictedLead, VoicePreview, restore_quotes, same_transcript, transcript_key
 from .continuation import heard_question, hesitation, pickup
 from .brain import Brain
+from .phone_file import Flow, PhoneFile, compile_phone
+from .speech_start import reusable_clause
 from .models import Candidate, Memory, Say, TaskCard, ends_with_goodbye
 from .providers import Cloud, ProviderError
 from .playback import Playback, Unit, enqueue_for_playback
@@ -72,11 +74,11 @@ class AudioWarmup:
 class Session:
     def __init__(self, card: TaskCard, cloud: Cloud, brain: Brain,
                  send: Callable[[dict | bytes], Awaitable[None]], *, voice: bool,
-                 predictions: bool = True, log_dir: Path | None = None,
+                 phone_file: PhoneFile | None = None, predictions: bool = True, log_dir: Path | None = None,
                  decision_tracker=None, performance_monitor=None, on_hangup=None,
                  wait_for_input_end: Callable[[], Awaitable] | None = None):
         self.id = uuid.uuid4().hex[:12]
-        self.memory = Memory(card)
+        self.memory = Memory(card, flow=Flow(phone_file or compile_phone(card)))
         self.cloud, self.brain, self.transport = cloud, brain, send
         self.voice, self.predictions = voice, predictions
         self.epoch = 0
@@ -104,7 +106,8 @@ class Session:
         self.staged_epoch = -1
         self.bridge_text = "嗯。"
         self.bridge_audio: bytes | None = None
-        self.bridge_delay = 0.35
+        self.bridge_delay = 1.6
+        self.last_bridge_at = -float("inf")
         self.filter_prediction_promises = os.getenv("PREDICTION_FILTER_PROMISES", "0") == "1"
         self.preview = None
         self.leads = []
@@ -208,7 +211,8 @@ class Session:
         epoch = self.epoch
         self.starting = True
         await self.send({"type": "ready", "session_id": self.id, "voice": self.voice,
-                         "predictions": self.predictions, "task": self.memory.card.model_dump()})
+                         "predictions": self.predictions, "task": self.memory.card.model_dump(),
+                         "phone_file": self.memory.flow.file.model_dump()})
         if self.is_current(epoch):
             self.starting = False
             self._begin_turn("opening")
@@ -256,7 +260,7 @@ class Session:
             return
         self.take_preview()
         memory = copy.deepcopy(self.memory)
-        memory.history.append({"role": "user", "text": text})
+        memory.hear(text)
         if memory.closing_reason(text):
             return
         candidates = self.voice_candidates(text)
@@ -290,8 +294,10 @@ class Session:
         if self.voice:
             candidates = [c for c in self.candidates
                           if c.reply.text in self.prediction_audio]
-            audio = {c.reply.text: self.prediction_audio[c.reply.text]
-                     for c in candidates}
+            # A validated new reply can also consume a prepared clause on its own.
+            audio = dict(self.prediction_audio)
+            if audio and not candidates:
+                candidates = list(self.candidates)
         else:
             candidates = list(self.candidates)
             audio = {}
@@ -361,10 +367,15 @@ class Session:
         self.starting = True
         self.playback = Playback()
         self.reply_completed = False
-        self.memory.history.append({"role": "user", "text": text})
+        self.memory.hear(text)
         staged_reuse = False
         if not usable and staged is not None:
             staged_candidates, staged_audio = staged
+            if self.voice:
+                for candidate in staged_candidates:
+                    prefix = reusable_clause(candidate.reply.text)
+                    if prefix in staged_audio:
+                        audio[prefix] = staged_audio[prefix]
             if self.voice:
                 staged_candidates = [c for c in staged_candidates
                                      if c.reply.text in staged_audio]
@@ -374,8 +385,8 @@ class Session:
                     preview.task.cancel()
                     preview = None
                 candidates = [confirmed]
-                audio = ({confirmed.reply.text: staged_audio[confirmed.reply.text]}
-                         if self.voice else {})
+                if self.voice:
+                    audio[confirmed.reply.text] = staged_audio[confirmed.reply.text]
                 staged_reuse = True
                 self.log("predictions_reused_after_interrupt", candidate_id=confirmed.id)
             else:
@@ -626,6 +637,7 @@ class Session:
                 pass
             if self.bridge_audio and self.is_current(epoch) and not first_answer.is_set():
                 self.turn_metrics["bridge_used"] = True
+                self.last_bridge_at = time.monotonic()
                 await say(Say(text=self.bridge_text), bridge_pcm=self.bridge_audio)
 
         preview_audio_claimed = False
@@ -645,17 +657,26 @@ class Session:
             self.units[unit.number] = unit
             if self.voice and not use_prepared:
                 pcm = bridge_pcm if bridge_pcm is not None else (audio or {}).get(line.text)
-                source = "bridge_pcm" if bridge_pcm is not None else "prediction_pcm" if pcm else "tts"
+                prefix = reusable_clause(line.text) if bridge_pcm is None and not pcm else None
+                clip = (audio or {}).get(prefix) if prefix else None
+                if clip and prefix != line.text:
+                    unit.prepared_clause = (prefix, clip)
+                source = "bridge_pcm" if bridge_pcm is not None else "prediction_pcm" if pcm else "prediction_prefix_pcm" if clip else "tts"
+                used_audio = pcm or clip
+                if clip or (pcm and bridge_pcm is None and candidate_id is None
+                            and line.text == reusable_clause(line.text)
+                            and all(c.reply.text != line.text for c in (candidates or []))):
+                    self.turn_metrics["prefix_audio_hit"] = True
                 if bridge_pcm is None and "prediction_audio_hit" not in self.turn_metrics:
-                    self.turn_metrics["prediction_audio_hit"] = bool(pcm)
-                    self.turn_metrics["prediction_audio_bytes"] = len(pcm) if pcm else 0
-                    if pcm and self.decision_tracker:
+                    self.turn_metrics["prediction_audio_hit"] = bool(used_audio)
+                    self.turn_metrics["prediction_audio_bytes"] = len(used_audio or b"")
+                    if used_audio and self.decision_tracker:
                         # Match the single prediction_audio_bytes field logged
                         # for the turn, so stats and logs share one definition.
                         self.decision_tracker.record_prediction_audio(
-                            used_bytes=len(pcm))
+                            used_bytes=len(used_audio))
                 self.log("audio_source", unit=unit.number, source=source,
-                         audio_bytes=len(pcm) if pcm else 0)
+                         audio_bytes=len(used_audio or b""))
                 prepared_preview = preview if preview and not preview_audio_claimed and preview.first_text == line.text else None
                 if prepared_preview:
                     preview_audio_claimed = True
@@ -683,7 +704,9 @@ class Session:
                 hangup = True
                 await say(Say(text="好，再见。"))
             else:
-                if self.voice and self.bridge_audio and not (preview and preview.origin == "continuation"):
+                if (self.voice and self.bridge_audio and time.monotonic() - self.last_bridge_at > 45
+                        and self.memory.flow.event not in {"需要全貌", "没听懂"}
+                        and not (preview and preview.origin == "continuation")):
                     children.append(self.spawn(bridge()))
                 if self.performance_monitor and turn:
                     self.performance_monitor.mark_llm_start(turn)
@@ -716,6 +739,12 @@ class Session:
                                         bool(getattr(self.cloud, "last_llm_cache_hit", False)),
                                         turn)
                                 llm_first = True
+                        if kind == "route":
+                            self.memory.flow.apply(value, user)
+                            goal = self.memory.flow.context()
+                            self.log("phone_route", leaf=goal["leaf"], current=goal["current"], completed=goal["completed"])
+                            await self.state()
+                            continue
                         if kind in {"say", "reuse"}:
                             first_answer.set()
                             path = decision.get("path")
@@ -810,7 +839,8 @@ class Session:
                     self.performance_monitor.record_task_completion(success=True)
                 
                 await self.send({"type": "reply_done", "epoch": epoch,
-                                 "reused": self.turn_metrics.get("reused", False)}, epoch=epoch)
+                                 "reused": self.turn_metrics.get("reused", False),
+                                 "prefix_audio_hit": self.turn_metrics.get("prefix_audio_hit", False)}, epoch=epoch)
                 await self.state()
                 if pending_update is not None:
                     try:
@@ -940,7 +970,16 @@ class Session:
         request = self.audio_warm[text]
         try:
             warm = getattr(self.cloud, "warm", None)
-            pcm = await (warm(text) if warm is not None else self.cloud.prefetch(text))
+            clips = getattr(self.cloud, "forecast_clips", None)
+            pcm = None
+            if clips:
+                async for phrase, clip in clips(text):
+                    if self.is_current(request.epoch):
+                        self.prediction_audio[phrase] = clip
+                    if phrase == text:
+                        pcm = clip
+            else:
+                pcm = await (warm(text) if warm is not None else self.cloud.prefetch(text))
             warm_ms = round((time.perf_counter() - started) * 1000)
             if not pcm:
                 self.log("prediction_audio_miss", candidate_id=request.candidate_id,

@@ -19,3 +19,13 @@ def spoken_prefix(text):
     # keeps a reusable boundary without guessing where a word ends in PCM.
     match = re.match(r".{4,}?[，。！？；：]", text)
     return match[0] if match else None
+
+
+def reusable_clause(text):
+    """A complete, meaningful opening phrase with a natural synthesis boundary."""
+    for match in re.finditer(r"[，,。！？?!；;：:]", text):
+        clause = text[:match.end()]
+        content = re.sub(r"^(?:嗯+|好的?|明白了?|是这样的|您[好看])(?:[，,。\s]*)", "", clause)
+        if len(re.sub(r"[\W_]", "", content)) >= 5:
+            return clause
+    return None

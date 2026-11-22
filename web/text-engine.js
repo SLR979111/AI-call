@@ -106,12 +106,26 @@ class TextLayoutEngine extends EventTarget {
       this.motion.write(copy, record.text);
     }
     if (this.candidateData.length && !this.candidates) {
-      this.candidates = document.createElement('div'); this.candidates.className = 'candidates';
+      this.candidates = document.createElement(this.interactiveCandidates ? 'div' : 'details');
+      this.candidates.className = 'candidates';
+      this.candidateList = this.candidates;
+      if (!this.interactiveCandidates) {
+        const summary = document.createElement('summary');
+        this.candidateList = document.createElement('div');
+        this.candidateList.className = 'candidate-list';
+        this.candidates.append(summary, this.candidateList);
+        this.candidates.addEventListener('toggle', () => this.invalidate());
+      }
       this.root.insertBefore(this.candidates, this.micDock);
     }
-    const wanted = new Set(this.candidateData.map(item => item.id));
+    const visible = this.interactiveCandidates || this.candidates?.open;
+    if (!this.interactiveCandidates && this.candidates) {
+      this.candidates.firstElementChild.textContent = '备选回复 · ' + this.candidateData.length;
+    }
+    const rows = visible ? this.candidateData : [];
+    const wanted = new Set(rows.map(item => item.id));
     for (const [id, node] of this.candidateNodes) if (!wanted.has(id)) { node.remove(); this.candidateNodes.delete(id); }
-    for (const candidate of this.candidateData) {
+    for (const candidate of rows) {
       let button = this.candidateNodes.get(candidate.id);
       if (!button) {
         button = document.createElement(this.interactiveCandidates ? 'button' : 'div');
@@ -124,7 +138,7 @@ class TextLayoutEngine extends EventTarget {
       const copy = button.querySelector('.copy'); copy.dataset.alpha = .44; this.motion.write(copy, candidate.text);
       this.motion.marker(copy, true);
       const index = this.candidateData.indexOf(candidate);
-      if (this.candidates.children[index] !== button) this.candidates.insertBefore(button, this.candidates.children[index] || null);
+      if (this.candidateList.children[index] !== button) this.candidateList.insertBefore(button, this.candidateList.children[index] || null);
     }
     if (!this.candidateData.length) { this.candidates?.remove(); this.candidates = null; }
   }

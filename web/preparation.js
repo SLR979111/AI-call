@@ -1,8 +1,8 @@
 // The server owns the single round, including when several pages request it.
-export async function prepareTask(task, {wait = true, retry = false} = {}) {
+export async function prepareTask(task, {wait = true, retry = false, phoneFile} = {}) {
   try {
     const response = await fetch('/api/warm', {method: 'POST',
-      headers: {'content-type': 'application/json'}, body: JSON.stringify({task, wait, retry})});
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({task, wait, retry, phone_file: phoneFile})});
     if (response.ok) {
       const {status} = await response.json();
       if (['preparing', 'ready', 'disabled', 'unconfigured'].includes(status)) return status;

@@ -53,7 +53,15 @@ dialog .prediction-option { display: flex; gap: 9px; align-items: center; }
 @media (max-width: 600px) { .controls { width: calc(100% - 40px); padding-top: 4px; } .button-group { gap: 7px; } dialog { padding: 18px 20px; } }
 @media (max-height: 500px) { .controls { padding-bottom: 6px; } }
 
-#taskPack, #callMode {
+.phone-panel { margin-top: 12px; border-block: 1px solid #333; padding: 10px 0; font-size: 13px; }
+.phone-panel > summary, .phone-panel details > summary { cursor: pointer; }
+.phone-path { position: relative; display: grid; gap: 24px; margin: 14px 0 8px; }
+.phone-edges { position: absolute; width: 100%; height: 100%; inset: 0; pointer-events: none; fill: none; stroke: #858585; stroke-width: 1; }
+.phone-rank { position: relative; display: flex; justify-content: center; align-items: start; flex-wrap: wrap; gap: 6px; }
+.phone-rank > div { background: #191919; border: 1px solid #424242; border-radius: 6px; flex: 1 1 96px; max-width: 100%; padding: 6px 8px; overflow-wrap: anywhere; }
+.phone-rank > div[aria-current="step"] { border-color: #bed9ff; color: #bed9ff; }
+.phone-path p { font-size: 12px; line-height: 1.5; color: #aaa; margin: 5px 0; }
+#taskPack, #callMode, #phoneGraph select {
   width: 100%; padding: .55rem .7rem; border: 1px solid currentColor;
   border-radius: .5rem; background: Canvas; color: CanvasText; font: inherit;
 }

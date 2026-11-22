@@ -89,7 +89,12 @@ try {
   emit({type: 'reply_start', epoch: 3});
   emit({type: 'utterance', epoch: 3, unit: 1, text: '好，您先说。'});
   emit({type: 'reply_done', epoch: 3});
-  emit({type: 'candidates', epoch: 3, items: [{id: 'c1', text: '请打开新的名称变更证明。'}]});
+  emit({type: 'candidates', epoch: 3, items: [{id: 'c1', text: '请打开新的名称变更证明。'},
+    ...Array.from({length: 9}, (_, i) => ({id: 'alt-' + i, text: '请核对材料里的不同事项。'.repeat(4)}))]});
+  await page.getByText('备选回复 · 10', {exact: true}).waitFor();
+  assert.equal(await page.locator('.candidate').count(), 0);
+  assert.ok((await page.locator('details.candidates').boundingBox()).height < 52);
+  await page.locator('details.candidates summary').click();
   await page.locator('.candidate .glyph:not(.candidate-marker)').first().waitFor();
   assert.equal(await page.locator('button.candidate').count(), 0);
   await page.evaluate(() => window.candidateGlyph = document.querySelector('.candidate .glyph:not(.candidate-marker)'));
@@ -106,6 +111,7 @@ try {
   emit({type: 'candidates', epoch: 3, items: [{id: 'stale', text: '过时候选'}]});
   emit({type: 'utterance', epoch: 4, unit: 2, text: '完成后的迟到内容'});
   await page.waitForTimeout(700);
+  if (!await page.locator('details.candidates').evaluate(el => el.open)) await page.locator('details.candidates summary').click();
   assert.equal(await page.locator('.candidate .copy').textContent(), '再看一下授权书上的公司名称。');
   assert.ok(!(await page.locator('#transcript').textContent()).includes('完成后的迟到内容'));
   assert.ok(sent.some(event => event.type === 'text' && event.text === '有的，我打开给您看。'));
@@ -148,14 +154,32 @@ try {
   assert.equal(await page.getByRole('link', {name: '观看对话回放'}).getAttribute('href'), '/demo/?library=1');
   await page.getByRole('button', {name: '恢复默认任务', exact: true}).click();
   await page.getByRole('button', {name: '保存任务', exact: true}).click();
+  await page.locator('#taskDialog').waitFor({state: 'hidden'});
   assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('g2-task'))), config.default_task);
   report.restore_default_and_library_entry = true;
+  await page.locator('#editTask').click();
+  await page.locator('#phonePanel > summary').click();
+  await page.locator('#phoneGraph select').waitFor();
+  const download = page.waitForEvent('download');
+  await page.locator('#downloadPhone').click();
+  const artifact = await download;
+  const file = JSON.parse(await fs.readFile(await artifact.path(), 'utf8'));
+  assert.equal(file.format, 'ai-call.phone.dag.v1');
+  assert.ok(file.graph.nodes.some(n => n.requires.length));
+  assert.ok(await page.locator('#phoneGraph select option').count() > 1);
+  file.graph.nodes[0].goal = '按导入的来意说明开场';
+  await page.locator('#phoneInput').setInputFiles({name: 'task.phone.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(file))});
+  await page.getByText(file.graph.nodes[0].goal, {exact:true}).waitFor();
+  await page.locator('#saveTask').click(); await page.locator('#taskDialog').waitFor({state: 'hidden'});
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('g2-phone'))), file);
+  report.phone_file_round_trip_and_collapsed_candidates = true;
   await page.getByRole('button', {name: '任务设置', exact: true}).click();
   assert.deepEqual(await page.locator('#taskPack option').evaluateAll(options => options.slice(1).map(o => o.value)),
     Object.keys(config.task_packs));
   assert.ok(Object.keys(config.task_packs).every(id => id.startsWith('jd-')));
   await page.locator('#taskPack').selectOption('jd-category-report');
   await page.locator('#saveTask').click();
+  await page.locator('#taskDialog').waitFor({state: 'hidden'});
   // Simulate a revision to the saved preset between visits.
   await page.evaluate(() => {
     const selected = JSON.parse(localStorage.getItem('g2-task-pack'));

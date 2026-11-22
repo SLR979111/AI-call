@@ -188,6 +188,7 @@ def test_cloud_socket_waits_for_round_started_by_http(monkeypatch, tmp_path):
     monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite"))
     monkeypatch.setattr(task_prewarm, "_run_round", simulate)
     monkeypatch.setattr(main, "prepare_cloud_task", observed)
+    monkeypatch.setattr(main, "generate_phone_file", AsyncMock(side_effect=lambda card, mode="cloud": main.compile_phone(card)))
     monkeypatch.setattr(main.Cloud, "prewarm", AsyncMock())
     monkeypatch.setattr(main.Session, "start", start)
     monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)

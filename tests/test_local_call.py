@@ -128,6 +128,7 @@ def test_voice_websocket_uses_transcriber_for_selected_mode(mode, tmp_path, monk
 
     monkeypatch.setenv("TASK_PREWARM_ON_LOAD", "0")
     monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setattr(main, "generate_phone_file", AsyncMock(side_effect=lambda card, mode="cloud": main.compile_phone(card)))
     monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
     monkeypatch.setattr(main, "load_from_env", lambda: None)
     monkeypatch.setattr(main.LocalProvider, "ready", AsyncMock())
@@ -162,6 +163,7 @@ def test_invalid_interrupt_applies_no_receipts_and_socket_recovers(tmp_path, mon
     from fastapi.testclient import TestClient
     from app import main
 
+    monkeypatch.setattr(main, "generate_phone_file", AsyncMock(side_effect=lambda card, mode="cloud": main.compile_phone(card)))
     monkeypatch.setenv("CACHE_PATH", str(tmp_path / "cache.sqlite"))
     monkeypatch.setattr(main.FirstPassASR, "load", lambda: None)
     monkeypatch.setattr(main, "load_from_env", lambda: None)

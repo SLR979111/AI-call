@@ -27,6 +27,10 @@
 .microphone { width: 124px; height: 36px; flex-shrink: 0; align-self: flex-end; display: grid; place-items: center; margin-top: 8px; }
 .candidates { display: flex; flex-direction: column; gap: 4px; color: var(--silver); width: 100%; padding-top: 8px; }
 .candidate { display: flex; align-items: baseline; gap: 14px; text-align: left; padding: 0; color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
+details.candidates { display: block; }
+details.candidates > summary { cursor: pointer; width: fit-content; max-width: 100%; color: #a2a2a2; font: 13px/1.6 system-ui, sans-serif; padding: 5px 3px; }
+details.candidates > summary:focus-visible { outline: 1px solid currentColor; }
+.candidate-list { display: grid; gap: 6px; max-height: min(25dvh, 180px); overflow: auto; overscroll-behavior: contain; padding: 2px 8px; scrollbar-width: thin; }
 .candidate:focus-visible { outline: 1px solid #aaa; outline-offset: 5px; }
 div.candidate { cursor: default; }
 .candidate .copy { flex: 1; margin-left: 14px; font-size: 16px; line-height: 1.45; letter-spacing: .02em; }

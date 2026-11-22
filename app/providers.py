@@ -390,6 +390,52 @@ class Cloud:
         except Exception:  # noqa: BLE001 - a warm-up is best effort
             return None
 
+    async def plan_phone(self, card):
+        from .phone_file import DependencyReview, Graph, PhoneFile, PLAN_PROMPT, REVIEW_PROMPT, model_json
+        graph = await model_json(self, PLAN_PROMPT, card.model_dump(), Graph, 2800)
+        file = PhoneFile(task=card, graph=graph, source="model")
+        try:
+            review = await model_json(self, REVIEW_PROMPT, {"goal": card.goal, "graph": graph.model_dump()},
+                                      DependencyReview, 650)
+            changes = {entry.id: entry.requires for entry in review.changes}
+            if changes and changes.keys() <= graph.dependencies().keys():
+                nodes = [node.model_copy(update={"requires": changes[node.id]}) if node.id in changes
+                         else node for node in graph.nodes]
+                revised = Graph(nodes=nodes, default_leaf=graph.default_leaf)
+                return PhoneFile(task=card, graph=revised, source="model")
+        except (ValueError, ProviderError, httpx.HTTPError, OSError):
+            pass  # The original graph already passed structural validation.
+        return file
+
+    async def route_phone(self, flow, history):
+        from .phone_file import Route, ROUTE_PROMPT, model_json
+        return await model_json(self, ROUTE_PROMPT, {
+            "graph": flow.file.graph.model_dump(), "leaves": flow.file.graph.leaves(),
+            "paths": {leaf: flow.path(leaf) for leaf in flow.file.graph.leaves()},
+            "state": flow.context(), "dialogue": history[-10:], "latest_user": history[-1]["text"],
+            "work_order_goal": flow.file.task.goal,
+        }, Route, 350)
+
+    async def forecast_clips(self, text):
+        """Publish a separately voiced clause as soon as it is available."""
+        from .speech_start import reusable_clause
+        prefix = reusable_clause(text)
+        if prefix and prefix != text:
+            first = await self.warm(prefix)
+            if first:
+                yield prefix, first
+                full = self.cached(text)
+                if full:
+                    yield text, full
+                    return
+                rest = await self.warm(text[len(prefix):])
+                if rest:
+                    yield text, first + rest
+                    return
+        full = await self.warm(text)
+        if full:
+            yield text, full
+
     async def _warm_now(self, text: str) -> bytes | None:
         cached = self.cached(text)
         if cached is not None:
