@@ -2,6 +2,22 @@
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { display: flex; flex-direction: column; }
+.product-brand {
+  flex: 0 0 auto;
+  width: min(904px, calc(100% - 96px));
+  min-height: max(54px, calc(env(safe-area-inset-top) + 42px));
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #dbe7e0;
+  font-size: 15px;
+  font-weight: 550;
+  letter-spacing: .08em;
+  line-height: 1;
+  pointer-events: none;
+}
+.product-brand img { display: block; width: 32px; height: 32px; }
 button, input, textarea { font: inherit; }
 button { display: inline-grid; place-items: center; width: 42px; height: 42px; padding: 9px; background: none; color: #999ba0; border: 0; border-radius: 50%; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button:hover { color: #fff; background: #181818; }
@@ -243,6 +259,8 @@ dialog .primary-action:not(:disabled):hover { background: #d5f4e8; color: #182c2
 .call-options .call-option > select { width: min(42%, 136px); min-height: 32px; margin: 0; padding: 4px 8px; border-radius: 8px; }
 .call-options select:disabled, .call-options .toggle-switch:disabled { opacity: .5; }
 @media (max-width: 600px) {
+  .product-brand { width: calc(100% - 24px); min-height: max(48px, calc(env(safe-area-inset-top) + 38px)); gap: 8px; font-size: 14px; }
+  .product-brand img { width: 29px; height: 29px; }
   .controls { width: calc(100% - 24px); }
   .button-group { gap: 4px; }
   .order-picker > svg:first-child { display: none; }
