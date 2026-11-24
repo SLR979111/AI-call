@@ -97,21 +97,10 @@ a {
   opacity: 0.8;
 }
 
-.brand b {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  background: linear-gradient(135deg, var(--green) 0%, var(--green-light) 100%);
-  color: white;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
 .brandmark {
-  font-size: 32px;
-  line-height: 1;
-  color: var(--green);
-  font-weight: 300;
+  display: block;
+  width: 32px;
+  height: 32px;
 }
 
 .topnote {
@@ -910,7 +899,8 @@ dialog textarea {
     font-size: 13px;
   }
   .brandmark {
-    font-size: 28px;
+    width: 28px;
+    height: 28px;
   }
   .layout {
     display: flex;
